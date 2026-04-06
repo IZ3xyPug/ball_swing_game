@@ -1,0 +1,4 @@
+Target dependency graph (2 targets)
+Target 'ios' in project 'ios'
+➜ Explicit dependency on target 'cargo_ios' in project 'ios'
+Target 'cargo_ios' in project 'ios' (no dependencies)

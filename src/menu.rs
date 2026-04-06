@@ -1,0 +1,385 @@
+use quartz::*;
+use std::sync::{Arc, Mutex};
+use crate::constants::*;
+use crate::images::*;
+use crate::objects::ui_text_spec;
+
+pub static GAME_MODES: &[(&str, &str)] = &[
+    ("FREE ROAM", "SWING FREELY   \u{2022}   SANDBOX MODE"),
+];
+
+fn menu_mode_selector_img() -> image::RgbaImage {
+    let w = 800u32;
+    let h = 140u32;
+    let mut img = image::RgbaImage::new(w, h);
+    for py in 0..h { for px in 0..w {
+        img.put_pixel(px, py, image::Rgba([18, 26, 48, 230]));
+    }}
+    draw_rect(&mut img, 0, 0, w, 3, [90, 170, 255, 255]);
+    draw_rect(&mut img, 0, h-3, w, 3, [90, 170, 255, 255]);
+    draw_rect(&mut img, 0, 0, 3, h, [90, 170, 255, 255]);
+    draw_rect(&mut img, w-3, 0, 3, h, [90, 170, 255, 255]);
+    let mid = (h / 2) as i32;
+    for i in 0..23i32 {
+        let x = (28 + i) as u32;
+        for dy in -i..=i {
+            let py = (mid + dy) as u32;
+            if py < h { img.put_pixel(x, py, image::Rgba([140, 210, 255, 200])); }
+        }
+    }
+    for i in 0..23i32 {
+        let x = (w as i32 - 29 - i) as u32;
+        for dy in -i..=i {
+            let py = (mid + dy) as u32;
+            if py < h { img.put_pixel(x, py, image::Rgba([140, 210, 255, 200])); }
+        }
+    }
+    img
+}
+
+pub fn build_menu_scene(ctx: &mut Context) -> Scene {
+    let bg = GameObject::new_rect(
+        ctx, "menu_bg".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+            image: gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT).into(),
+            color: None,
+        }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    let title = {
+        let (w, h) = (1700u32, 260u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let t = px as f32 / w as f32;
+            img.put_pixel(px, py, image::Rgba([
+                (50.0  + 140.0*t) as u8,
+                (200.0 +  55.0*t) as u8,
+                (255.0 -  80.0*t) as u8,
+                255,
+            ]));
+        }}
+        GameObject::new_rect(
+            ctx, "menu_title".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.14),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let menu_sub = {
+        let (w, h) = (600u32, 60u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            img.put_pixel(px, py, image::Rgba([40, 60, 100, 180]));
+        }}
+        draw_rect(&mut img, 0, 0, w, 2, [90, 140, 220, 255]);
+        draw_rect(&mut img, 0, h-2, w, 2, [90, 140, 220, 255]);
+        GameObject::new_rect(
+            ctx, "menu_sub".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.40),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let menu_mode_selector = GameObject::new_rect(
+        ctx, "menu_mode_selector".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (800.0, 140.0), 0.0),
+            image: menu_mode_selector_img().into(),
+            color: None,
+        }),
+        (800.0, 140.0), (VW/2.0 - 400.0, VH*0.46),
+        vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    let start_btn = {
+        let (w, h) = (540u32, 130u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px==0||px==w-1||py==0||py==h-1||px==1||px==w-2||py==1||py==h-2;
+            img.put_pixel(px, py, image::Rgba([60, if border {200} else {130}, 180, 240]));
+        }}
+        GameObject::new_rect(
+            ctx, "start_btn".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.68),
+            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let menu_title_text = GameObject::build("menu_title_text")
+        .size(1700.0, 260.0)
+        .position(VW * 0.5 - 850.0, VH * 0.14 + (260.0 - 74.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let menu_sub_text = GameObject::build("menu_sub_text")
+        .size(600.0, 60.0)
+        .position(VW * 0.5 - 300.0, VH * 0.40 + (60.0 - 22.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let menu_mode_name_text = GameObject::build("menu_mode_name_text")
+        .size(640.0, 140.0)
+        .position(VW * 0.5 - 320.0, VH * 0.46 + (140.0 - 52.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let menu_mode_desc_text = GameObject::build("menu_mode_desc_text")
+        .size(800.0, 60.0)
+        .position(VW * 0.5 - 400.0, VH * 0.46 + 152.0)
+        .tag("ui")
+        .build(ctx);
+
+    let menu_start_text = GameObject::build("menu_start_text")
+        .size(540.0, 130.0)
+        .position(VW * 0.5 - 270.0, VH * 0.68 + (130.0 - 24.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let scene = Scene::new("menu")
+        .with_object("menu_bg",             bg)
+        .with_object("menu_title",          title)
+        .with_object("menu_sub",            menu_sub)
+        .with_object("menu_mode_selector",  menu_mode_selector)
+        .with_object("start_btn",           start_btn)
+        .with_object("menu_title_text",     menu_title_text)
+        .with_object("menu_sub_text",       menu_sub_text)
+        .with_object("menu_mode_name_text", menu_mode_name_text)
+        .with_object("menu_mode_desc_text", menu_mode_desc_text)
+        .with_object("menu_start_text",     menu_start_text);
+
+    scene
+        .with_event(
+            GameEvent::KeyPress {
+                key: Key::Named(NamedKey::Space),
+                action: Action::Custom { name: "goto_game".into() },
+                target: Target::name("start_btn"),
+            },
+            Target::name("start_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "goto_game".into() },
+                target: Target::name("start_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("start_btn"),
+        )
+        .on_enter(|canvas| {
+            let cam = Camera::new((VW, VH), (VW, VH));
+            canvas.set_camera(cam);
+
+            let selected = Arc::new(Mutex::new(0usize));
+
+            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+                if let Some(obj) = canvas.get_game_object_mut("menu_title_text") {
+                    obj.set_text(ui_text_spec("KNIGHTS OF QUARTZ", &font, 74.0, Color(0, 0, 0, 255), 1700.0));
+                }
+                if let Some(obj) = canvas.get_game_object_mut("menu_sub_text") {
+                    obj.set_text(ui_text_spec("SELECT   MODE", &font, 22.0, Color(180, 220, 255, 220), 600.0));
+                }
+                let (mode_name, mode_desc) = GAME_MODES[0];
+                if let Some(obj) = canvas.get_game_object_mut("menu_mode_name_text") {
+                    obj.set_text(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0));
+                }
+                if let Some(obj) = canvas.get_game_object_mut("menu_mode_desc_text") {
+                    obj.set_text(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0));
+                }
+                if let Some(obj) = canvas.get_game_object_mut("menu_start_text") {
+                    obj.set_text(ui_text_spec("SPACE   \u{2022}   CLICK   TO   PLAY", &font, 24.0, Color(0, 0, 0, 255), 540.0));
+                }
+            }
+
+            canvas.on_key_press({
+                let sel = Arc::clone(&selected);
+                move |c, key| {
+                    let n = GAME_MODES.len();
+                    let changed = {
+                        let mut idx = sel.lock().unwrap();
+                        match key {
+                            Key::Named(NamedKey::ArrowLeft) => {
+                                *idx = (*idx + n - 1) % n;
+                                true
+                            }
+                            Key::Named(NamedKey::ArrowRight) => {
+                                *idx = (*idx + 1) % n;
+                                true
+                            }
+                            _ => false,
+                        }
+                    };
+                    if changed {
+                        let idx = *sel.lock().unwrap();
+                        let (mode_name, mode_desc) = GAME_MODES[idx];
+                        if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+                            if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
+                                obj.set_text(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0));
+                            }
+                            if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
+                                obj.set_text(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0));
+                            }
+                        }
+                    }
+                }
+            });
+
+            canvas.register_custom_event("goto_game".into(), |c| c.load_scene("game"));
+        })
+}
+
+pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
+    let bg = GameObject::new_rect(
+        ctx, "go_bg".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+            image: gradient_rect(4, VH as u32, (30,5,5), (60,10,10)).into(),
+            color: None,
+        }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    let title = {
+        let (w, h) = (1300u32, 230u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let t = py as f32 / h as f32;
+            img.put_pixel(px, py, image::Rgba([255, (90.0*(1.0-t)) as u8, 40, 255]));
+        }}
+        GameObject::new_rect(
+            ctx, "go_title".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.20),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let dist_bar = GameObject::new_rect(
+        ctx, "go_dist_bar".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (600.0, 44.0), 0.0),
+            image: bar_img(600, 44, 0.0, 80, 220, 160).into(),
+            color: None,
+        }),
+        (600.0, 44.0), (VW/2.0 - 300.0, VH*0.48),
+        vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    let make_btn = |ctx: &mut Context, id: &str, (r,g,b): (u8,u8,u8), y: f32| {
+        let (w, h) = (520u32, 130u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px==0||px==w-1||py==0||py==h-1||px==1||px==w-2||py==1||py==h-2;
+            img.put_pixel(px, py, image::Rgba([r, g, b, if border {255} else {200}]));
+        }}
+        GameObject::new_rect(
+            ctx, id.to_string().into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, y),
+            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let retry_btn   = make_btn(ctx, "retry_btn",   (50, 160, 90),  VH*0.62);
+    let go_menu_btn = make_btn(ctx, "go_menu_btn", (50,  80, 160), VH*0.77);
+
+    let go_title_text = GameObject::build("go_title_text")
+        .size(1300.0, 230.0)
+        .position(VW * 0.5 - 650.0, VH * 0.20 + (230.0 - 74.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let go_retry_text = GameObject::build("go_retry_text")
+        .size(520.0, 130.0)
+        .position(VW * 0.5 - 260.0, VH * 0.62 + (130.0 - 54.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let go_menu_text = GameObject::build("go_menu_text")
+        .size(520.0, 130.0)
+        .position(VW * 0.5 - 260.0, VH * 0.77 + (130.0 - 54.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let go_stats_text = GameObject::build("go_stats_text")
+        .size(600.0, 44.0)
+        .position(VW * 0.5 - 300.0, VH * 0.48 + (44.0 - 28.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    Scene::new("gameover")
+        .with_object("go_bg",       bg)
+        .with_object("go_title",    title)
+        .with_object("go_dist_bar", dist_bar)
+        .with_object("retry_btn",   retry_btn)
+        .with_object("go_menu_btn", go_menu_btn)
+        .with_object("go_title_text", go_title_text)
+        .with_object("go_retry_text", go_retry_text)
+        .with_object("go_menu_text", go_menu_text)
+        .with_object("go_stats_text", go_stats_text)
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "go_retry".into() },
+                target: Target::name("retry_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("retry_btn"),
+        )
+        .with_event(
+            GameEvent::KeyPress {
+                key: Key::Named(NamedKey::Space),
+                action: Action::Custom { name: "go_retry".into() },
+                target: Target::name("retry_btn"),
+            },
+            Target::name("retry_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "go_menu".into() },
+                target: Target::name("go_menu_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("go_menu_btn"),
+        )
+        .on_enter(|canvas| {
+            let cam = Camera::new((VW, VH), (VW, VH));
+            canvas.set_camera(cam);
+
+            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+                let last_distance = canvas.get_f32("last_distance");
+                let last_coins = canvas.get_i32("last_coins").max(0);
+                let dist_fill = (last_distance / 40000.0).clamp(0.0, 1.0);
+
+                if let Some(obj) = canvas.get_game_object_mut("go_dist_bar") {
+                    obj.set_image(Image {
+                        shape: ShapeType::Rectangle(0.0, (600.0, 44.0), 0.0),
+                        image: bar_img(600, 44, dist_fill, 80, 220, 160).into(),
+                        color: None,
+                    });
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("go_title_text") {
+                    obj.set_text(ui_text_spec("YOU FELL", &font, 74.0, Color(0, 0, 0, 255), 1300.0));
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("go_retry_text") {
+                    obj.set_text(ui_text_spec("RETRY", &font, 54.0, Color(255, 255, 255, 255), 520.0));
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("go_menu_text") {
+                    obj.set_text(ui_text_spec("MENU", &font, 54.0, Color(255, 255, 255, 255), 520.0));
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("go_stats_text") {
+                    let stats_line = format!("DIST {:05}   COINS {:03}", last_distance as i32, last_coins);
+                    obj.set_text(ui_text_spec(&stats_line, &font, 28.0, Color(255, 255, 255, 255), 600.0));
+                }
+            }
+
+            canvas.register_custom_event("go_retry".into(), |c| c.load_scene("game"));
+            canvas.register_custom_event("go_menu".into(),  |c| c.load_scene("menu"));
+        })
+}

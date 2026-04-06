@@ -1,0 +1,3 @@
+/target
+/src/*.sw*
+/test_dir
