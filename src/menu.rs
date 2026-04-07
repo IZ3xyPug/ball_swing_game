@@ -264,7 +264,7 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
             image: bar_img(600, 44, 0.0, 80, 220, 160).into(),
             color: None,
         }),
-        (600.0, 44.0), (VW/2.0 - 300.0, VH*0.48),
+        (600.0, 44.0), (VW/2.0 - 300.0, VH*0.37),
         vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
@@ -283,8 +283,8 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
         )
     };
 
-    let retry_btn   = make_btn(ctx, "retry_btn",   (50, 160, 90),  VH*0.62);
-    let go_menu_btn = make_btn(ctx, "go_menu_btn", (50,  80, 160), VH*0.77);
+    let retry_btn   = make_btn(ctx, "retry_btn",   (50, 160, 90),  VH*0.66);
+    let go_menu_btn = make_btn(ctx, "go_menu_btn", (50,  80, 160), VH*0.80);
 
     let go_title_text = GameObject::build("go_title_text")
         .size(1300.0, 230.0)
@@ -294,26 +294,46 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
 
     let go_retry_text = GameObject::build("go_retry_text")
         .size(520.0, 130.0)
-        .position(VW * 0.5 - 260.0, VH * 0.62 + (130.0 - 54.0) / 2.0)
+        .position(VW * 0.5 - 260.0, VH * 0.66 + (130.0 - 54.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
     let go_menu_text = GameObject::build("go_menu_text")
         .size(520.0, 130.0)
-        .position(VW * 0.5 - 260.0, VH * 0.77 + (130.0 - 54.0) / 2.0)
+        .position(VW * 0.5 - 260.0, VH * 0.80 + (130.0 - 54.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
     let go_stats_text = GameObject::build("go_stats_text")
-        .size(600.0, 44.0)
-        .position(VW * 0.5 - 300.0, VH * 0.48 + (44.0 - 28.0) / 2.0)
+        .size(1000.0, 180.0)
+        .position(VW * 0.5 - 500.0, VH * 0.44)
         .tag("ui")
         .build(ctx);
+
+    let go_stats_box = {
+        let (w, h) = (1060u32, 200u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
+            if border {
+                img.put_pixel(px, py, image::Rgba([180, 200, 220, 200]));
+            } else {
+                img.put_pixel(px, py, image::Rgba([20, 15, 30, 200]));
+            }
+        }}
+        GameObject::new_rect(
+            ctx, "go_stats_box".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW / 2.0 - w as f32 / 2.0, VH * 0.44 - 10.0),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
 
     Scene::new("gameover")
         .with_object("go_bg",       bg)
         .with_object("go_title",    title)
         .with_object("go_dist_bar", dist_bar)
+        .with_object("go_stats_box", go_stats_box)
         .with_object("retry_btn",   retry_btn)
         .with_object("go_menu_btn", go_menu_btn)
         .with_object("go_title_text", go_title_text)
@@ -374,8 +394,8 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
                 }
 
                 if let Some(obj) = canvas.get_game_object_mut("go_stats_text") {
-                    let stats_line = format!("DIST {:05}   COINS {:03}", last_distance as i32, last_coins);
-                    obj.set_text(ui_text_spec(&stats_line, &font, 28.0, Color(255, 255, 255, 255), 600.0));
+                    let stats_line = format!("DISTANCE  {:05}\nCOINS  {:03}", last_distance as i32, last_coins);
+                    obj.set_text(ui_text_spec(&stats_line, &font, 64.0, Color(255, 255, 255, 255), 1000.0));
                 }
             }
 

@@ -97,6 +97,8 @@ pub struct State {
     pub coin_live:      Vec<String>,
     pub coin_free:      Vec<String>,
     pub coin_rightmost: f32,
+    pub coin_magnet_locked: Vec<String>,
+    pub magnet_debug: bool,
 
     pub flip_live:      Vec<String>,
     pub flip_free:      Vec<String>,

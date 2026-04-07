@@ -188,10 +188,45 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             image: flip_timer_img(FLIP_DURATION, FLIP_DURATION).into(),
             color: None,
         }),
-        (360.0, 84.0), (VW * 0.5 - 180.0, 90.0),
+        (360.0, 84.0), (VW * 0.5 - 180.0, 460.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     flip_timer_hud.visible = false;
+
+    let mut coin_magnet_radius = {
+        let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;
+        let mut img = image::RgbaImage::new(d, d);
+        let r = COIN_MAGNET_RADIUS;
+        let c = r;
+        for py in 0..d {
+            for px in 0..d {
+                let dx = px as f32 + 0.5 - c;
+                let dy = py as f32 + 0.5 - c;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if (dist - r).abs() <= 2.0 {
+                    img.put_pixel(px, py, image::Rgba([255, 245, 140, 200]));
+                } else {
+                    img.put_pixel(px, py, image::Rgba([0, 0, 0, 0]));
+                }
+            }
+        }
+        GameObject::new_rect(
+            ctx,
+            "coin_magnet_radius".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (d as f32, d as f32), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (d as f32, d as f32),
+            (SPAWN_X - COIN_MAGNET_RADIUS, SPAWN_Y - COIN_MAGNET_RADIUS),
+            vec![],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        )
+    };
+    coin_magnet_radius.visible = false;
 
     // Pre-place a handful of close hooks so there's something to grab immediately.
     // The full hook pool is preallocated here (with ctx available), then recycled.
@@ -217,7 +252,8 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         .with_object("x_meter", x_meter)
         .with_object("combo_flash",  combo_flash)
         .with_object("pause_overlay", pause_overlay)
-        .with_object("flip_timer", flip_timer_hud);
+        .with_object("flip_timer", flip_timer_hud)
+        .with_object("coin_magnet_radius", coin_magnet_radius);
 
     let mut starter_names: Vec<String> = Vec::new();
     let mut pool_free: Vec<String> = Vec::new();
@@ -335,11 +371,17 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
     let scene = scene;
 
     scene.on_enter(move |canvas| {
+        use std::sync::{Arc, Mutex};
+
         // ── Background music (looped) ────────────────────────────────────
-        canvas.play_sound_with(
-            "assets/synful_reach.mp3",
-            SoundOptions::new().volume(0.5).looping(true),
-        );
+        let bgm_started = matches!(canvas.get_var("bgm_started"), Some(Value::Bool(true)));
+        if !bgm_started {
+            canvas.play_sound_with(
+                "assets/synful_reach.mp3",
+                SoundOptions::new().volume(0.5).looping(true),
+            );
+            canvas.set_var("bgm_started", true);
+        }
 
         // Camera follows the player horizontally across the huge world
         // Camera world width is large but not texture-backed — just a scroll bound.
@@ -350,26 +392,32 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         canvas.set_camera(cam);
 
         // ── Pause toggle (P key) ─────────────────────────────────────────
-        canvas.on_key_press(|c, key| {
-            let is_pause_key = *key == Key::Character("p".into());
-            if !is_pause_key { return; }
-            if c.is_paused() {
-                c.resume();
-                if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                    obj.visible = false;
-                }
-            } else {
-                // Position overlay to cover the current camera view
-                let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
-                if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                    obj.position = (cam_x, 0.0);
-                    obj.visible = true;
-                }
-                c.pause();
-            }
-        });
+        // Register once globally; callbacks persist across scene reloads.
+        let pause_key_registered = matches!(canvas.get_var("pause_key_registered"), Some(Value::Bool(true)));
+        if !pause_key_registered {
+            canvas.on_key_press(|c, key| {
+                let is_pause_key = *key == Key::Character("p".into());
+                if !is_pause_key || !c.is_scene("game") { return; }
 
-        use std::sync::{Arc, Mutex};
+                if c.is_paused() {
+                    c.resume();
+                    c.resume_audio();
+                    if let Some(obj) = c.get_game_object_mut("pause_overlay") {
+                        obj.visible = false;
+                    }
+                } else {
+                    // Position overlay to cover the current camera view
+                    let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
+                    if let Some(obj) = c.get_game_object_mut("pause_overlay") {
+                        obj.position = (cam_x, 0.0);
+                        obj.visible = true;
+                    }
+                    c.pause_audio();
+                    c.pause();
+                }
+            });
+            canvas.set_var("pause_key_registered", true);
+        }
 
         let mut seed: u64 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -432,6 +480,8 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             coin_live:      Vec::new(),
             coin_free:      coin_free.clone(),
             coin_rightmost: SPAWN_X,
+            coin_magnet_locked: Vec::new(),
+            magnet_debug: false,
             flip_live:      Vec::new(),
             flip_free:      flip_free.clone(),
             flip_rightmost: SPAWN_X + VW * 1.1,
@@ -607,6 +657,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         let mut four_was_down = false;
         let mut five_was_down = false;
         let mut six_was_down = false;
+        let mut seven_was_down = false;
         let mut prev_nearest_hook: String = String::new();
         let mut dark_mode_prev = false;
         canvas.on_update(move |c| {
@@ -631,6 +682,10 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                         .chain(s.spinner_live.iter().map(|n| (n.clone(), (SPINNER_W, SPINNER_H))))
                         .chain(s.boost_live.iter().map(|n| (n.clone(), (BOOST_W, BOOST_H))))
                         .chain(s.coin_live.iter().map(|n| (n.clone(), (COIN_R*2.0, COIN_R*2.0))))
+                        .chain(std::iter::once((
+                            "coin_magnet_radius".to_string(),
+                            (COIN_MAGNET_RADIUS * 2.0, COIN_MAGNET_RADIUS * 2.0),
+                        )))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
@@ -781,6 +836,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 s.dark_mode = !s.dark_mode;
             }
             six_was_down = k6;
+
+            let k7 = c.key("7");
+            if k7 && !seven_was_down {
+                s.magnet_debug = !s.magnet_debug;
+            }
+            seven_was_down = k7;
 
             let spinner_enabled = s.spinners_enabled;
             let spinner_spin_enabled = s.spinner_spin_enabled;
@@ -1088,25 +1149,60 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             // ── Spawn sparse coins ahead of the player ───────────────────────
             while s.coin_rightmost < s.px + GEN_AHEAD && !s.coin_free.is_empty() {
                 let gap = lcg_range(&mut s.seed, COIN_GAP_MIN, COIN_GAP_MAX);
-                let coin_x = s.coin_rightmost + gap;
-                let raw_coin_y = lcg_range(&mut s.seed, VH * 0.34, VH * 0.58);
-                let coin_y = if s.gravity_dir < 0.0 {
-                    VH - raw_coin_y
+                let start_x = s.coin_rightmost + gap;
+                let spawn_array = s.coin_free.len() >= COIN_ARRAY_COUNT && lcg(&mut s.seed) < COIN_ARRAY_CHANCE;
+                let mut spawn_batch: Vec<(String, f32, f32)> = Vec::new();
+
+                if spawn_array {
+                    // Sample center from a safe range so the arc always keeps its full shape
+                    // inside the target band without clamp flattening.
+                    let center_min = (COIN_ARRAY_Y_MIN + COIN_CURVE_RISE).min(COIN_ARRAY_Y_MAX);
+                    let center_raw_y = lcg_range(&mut s.seed, center_min, COIN_ARRAY_Y_MAX);
+                    let half = (COIN_ARRAY_COUNT as f32 - 1.0) * 0.5;
+
+                    // Curved 5-coin formation constrained to the upper band.
+                    for i in 0..COIN_ARRAY_COUNT {
+                        let x = start_x + i as f32 * COIN_ARRAY_SPACING;
+                        let t = i as f32 - half;
+                        let norm = if half > 0.0 { (t.abs() / half).clamp(0.0, 1.0) } else { 0.0 };
+                        let arch = 1.0 - norm * norm;
+                        let raw_y = center_raw_y - arch * COIN_CURVE_RISE;
+                        let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
+
+                        let Some(id) = s.coin_free.pop() else { break; };
+                        s.coin_live.push(id.clone());
+                        spawn_batch.push((id, x, y));
+                    }
                 } else {
-                    raw_coin_y
+                    // Single coins can spawn anywhere below the array band.
+                    let raw_y = lcg_range(&mut s.seed, COIN_SINGLE_Y_MIN, COIN_SINGLE_Y_MAX);
+                    let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
+                    if let Some(id) = s.coin_free.pop() {
+                        s.coin_live.push(id.clone());
+                        spawn_batch.push((id, start_x, y));
+                    }
+                }
+
+                if spawn_batch.is_empty() {
+                    break;
+                }
+
+                s.coin_rightmost = if spawn_array {
+                    start_x + (COIN_ARRAY_COUNT as f32 - 1.0) * COIN_ARRAY_SPACING
+                } else {
+                    start_x
                 };
-                s.coin_rightmost = coin_x;
-                let Some(id) = s.coin_free.pop() else { break; };
-                s.coin_live.push(id.clone());
                 drop(s);
 
-                if let Some(obj) = c.get_game_object_mut(&id) {
-                    obj.position = (coin_x - COIN_R, coin_y - COIN_R);
-                    obj.visible = true;
-                    obj.set_image(coin_spawn_image.clone());
-                    if obj.animated_sprite.is_none() {
-                        if let Some(anim) = &coin_spawn_anim {
-                            obj.set_animation(anim.clone());
+                for (id, coin_x, coin_y) in &spawn_batch {
+                    if let Some(obj) = c.get_game_object_mut(id) {
+                        obj.position = (*coin_x - COIN_R, *coin_y - COIN_R);
+                        obj.visible = true;
+                        obj.set_image(coin_spawn_image.clone());
+                        if obj.animated_sprite.is_none() {
+                            if let Some(anim) = &coin_spawn_anim {
+                                obj.set_animation(anim.clone());
+                            }
                         }
                     }
                 }
@@ -1202,6 +1298,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
             let coins_rm_set: HashSet<&str> = coins_remove.iter().map(|n| n.as_str()).collect();
             s.coin_live.retain(|n| !coins_rm_set.contains(n.as_str()));
+            s.coin_magnet_locked.retain(|n| !coins_rm_set.contains(n.as_str()));
             for name in coins_remove {
                 s.coin_free.push(name);
             }
@@ -1725,6 +1822,62 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
 
+            // ── Coin magnet pull (radius + latch) ───────────────────────────
+            // Runs AFTER physics so we use the current-frame player position.
+            {
+                let coin_live_now = s.coin_live.clone();
+                let (px_m, py_m) = (s.px, s.py);
+
+                // Latch coins when they first enter radius.
+                for name in &coin_live_now {
+                    if s.coin_magnet_locked.iter().any(|n| n == name) {
+                        continue;
+                    }
+                    if let Some(obj) = c.get_game_object(name) {
+                        let ccx = obj.position.0 + COIN_R;
+                        let ccy = obj.position.1 + COIN_R;
+                        let dx = px_m - ccx;
+                        let dy = py_m - ccy;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist <= COIN_MAGNET_RADIUS {
+                            s.coin_magnet_locked.push(name.clone());
+                        }
+                    }
+                }
+
+                let locked_now = s.coin_magnet_locked.clone();
+                let magnet_debug_now = s.magnet_debug;
+                drop(s);
+
+                // Pull latched coins toward the player using proportional approach
+                // so they always converge regardless of player speed.
+                for name in &locked_now {
+                    if let Some(obj) = c.get_game_object_mut(name) {
+                        let ccx = obj.position.0 + COIN_R;
+                        let ccy = obj.position.1 + COIN_R;
+                        let dx = px_m - ccx;
+                        let dy = py_m - ccy;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist > 0.5 {
+                            // Move coin COIN_MAGNET_PULL fraction of the remaining distance
+                            obj.position.0 += dx * COIN_MAGNET_PULL;
+                            obj.position.1 += dy * COIN_MAGNET_PULL;
+                        } else {
+                            // Snap when very close
+                            obj.position.0 = px_m - COIN_R;
+                            obj.position.1 = py_m - COIN_R;
+                        }
+                    }
+                }
+
+                if let Some(obj) = c.get_game_object_mut("coin_magnet_radius") {
+                    obj.position = (px_m - COIN_MAGNET_RADIUS, py_m - COIN_MAGNET_RADIUS);
+                    obj.visible = magnet_debug_now;
+                }
+
+                s = st.lock().unwrap();
+            }
+
             // ── Coin pickup (sparse, pink) ───────────────────────────────────
             let player_left   = s.px - PLAYER_R;
             let player_right  = s.px + PLAYER_R;
@@ -1747,6 +1900,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 s.score = s.score.saturating_add(COIN_SCORE);
                 s.coin_count = s.coin_count.saturating_add(1);
                 s.coin_live.retain(|n| n != &name);
+                s.coin_magnet_locked.retain(|n| n != &name);
                 s.coin_free.push(name.clone());
                 s.glow_flashes.push(("player".to_string(), 8));
                 drop(s);
@@ -2001,7 +2155,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             // Flip timer HUD — top-center of screen, visible only while active
             if let Some(obj) = c.get_game_object_mut("flip_timer") {
                 if flip_timer_val > 0 {
-                    obj.position = (cam_x + VW * 0.5 - 180.0, 90.0);
+                    obj.position = (cam_x + VW * 0.5 - 180.0, 460.0);
                     obj.visible = true;
                     obj.set_image(Image {
                         shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
@@ -2054,6 +2208,10 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                         .chain(s.spinner_live.iter().map(|n| (n.clone(), (SPINNER_W, SPINNER_H))))
                         .chain(s.boost_live.iter().map(|n| (n.clone(), (BOOST_W, BOOST_H))))
                         .chain(s.coin_live.iter().map(|n| (n.clone(), (COIN_R*2.0, COIN_R*2.0))))
+                        .chain(std::iter::once((
+                            "coin_magnet_radius".to_string(),
+                            (COIN_MAGNET_RADIUS * 2.0, COIN_MAGNET_RADIUS * 2.0),
+                        )))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
