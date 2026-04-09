@@ -1,6 +1,7 @@
 use quartz::*;
 use ramp::prism;
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 mod constants;
 mod images;
@@ -19,17 +20,36 @@ use state::*;
 use objects::*;
 use menu::*;
 
+fn zone_index_for_distance(distance: f32) -> usize {
+    ((distance / ZONE_DISTANCE_STEP) as usize).min(2)
+}
+
+fn spinner_speed_for_zone(zone_idx: usize) -> f32 {
+    let mult = match zone_idx {
+        0 => START_ZONE_SPINNER_MULT,
+        1 => PURPLE_ZONE_SPINNER_MULT,
+        _ => BLACK_ZONE_SPINNER_MULT,
+    };
+    SPINNER_ROT_SPEED * mult
+}
+
+const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Game scene
 // ─────────────────────────────────────────────────────────────────────────────
 fn build_game_scene(ctx: &mut Context) -> Scene {
+    let bg_zone_start = gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT);
+    let bg_zone_purple = gradient_rect(4, VH as u32, C_ZONE_PURPLE_TOP, C_ZONE_PURPLE_BOT);
+    let bg_zone_black = gradient_rect(4, VH as u32, C_ZONE_BLACK_TOP, C_ZONE_BLACK_BOT);
+
     // Background — screen-sized gradient, repositioned each tick to follow the camera.
     // Texture must be ≤8192px on any axis (GPU limit), so we never make it world-sized.
     let bg = GameObject::new_rect(
         ctx, "bg".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT).into(),
+            image: bg_zone_start.clone().into(),
             color: None,
         }),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
@@ -370,10 +390,14 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
 
     let scene = scene;
 
-    scene.on_enter(move |canvas| {
-        use std::sync::{Arc, Mutex};
+    // Persistent state arc — created on first enter, reused on respawns.
+    // on_update and mouse callbacks capture this same Arc forever.
+    let persistent_state: Arc<Mutex<Option<Arc<Mutex<State>>>>> = Arc::new(Mutex::new(None));
 
+    scene.on_enter(move |canvas| {
         // ── Background music (looped) ────────────────────────────────────
+        // Usually started from menu on first boot; keep this as a fallback
+        // in case game scene is entered directly.
         let bgm_started = matches!(canvas.get_var("bgm_started"), Some(Value::Bool(true)));
         if !bgm_started {
             canvas.play_sound_with(
@@ -402,22 +426,33 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 if c.is_paused() {
                     c.resume();
                     c.resume_audio();
+                    c.set_var("pause_animating", false);
+                    c.set_var("pause_anim_frames", 0);
                     if let Some(obj) = c.get_game_object_mut("pause_overlay") {
                         obj.visible = false;
                     }
                 } else {
-                    // Position overlay to cover the current camera view
+                    let animating = matches!(c.get_var("pause_animating"), Some(Value::Bool(true)));
+                    if animating { return; }
+
+                    // Start overlay above the screen and slide it in.
                     let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
                     if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                        obj.position = (cam_x, 0.0);
+                        obj.position = (cam_x, -VH);
                         obj.visible = true;
                     }
-                    c.pause_audio();
-                    c.pause();
+                    c.set_var("pause_cam_x", cam_x);
+                    c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
+                    c.set_var("pause_anim_frames", PAUSE_MENU_ANIM_FRAMES);
+                    c.set_var("pause_animating", true);
                 }
             });
             canvas.set_var("pause_key_registered", true);
         }
+
+        canvas.set_var("pause_anim_frames", 0);
+        canvas.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
+        canvas.set_var("pause_animating", false);
 
         let mut seed: u64 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -442,7 +477,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         let coin_spawn_anim = coin_anim_template.clone();
         let coin_spawn_image = coin_static_sprite.clone();
 
-        let state = Arc::new(Mutex::new(State {
+        let fresh_state = State {
             px: SPAWN_X, py: SPAWN_Y,
             vx: 13.0,    vy: 0.0,
             hooked: true,
@@ -453,7 +488,6 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             score:      0,
             coin_count: 0,
             boost_charge: 0.0,
-            difficulty: 0.0,
             gravity_dir: 1.0,
             seed,
             pending:     first_batch,
@@ -495,7 +529,18 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             zoom: 1.0,
             zoom_cx: SPAWN_X,
             zoom_anchor_y: VH,
-        }));
+        };
+
+        // Reuse persistent Arc across respawns so on_update keeps working.
+        {
+            let mut slot = persistent_state.lock().unwrap();
+            if let Some(existing) = slot.as_ref() {
+                *existing.lock().unwrap() = fresh_state;
+            } else {
+                *slot = Some(Arc::new(Mutex::new(fresh_state)));
+            }
+        }
+        let state = persistent_state.lock().unwrap().as_ref().unwrap().clone();
 
         // Start already attached and moving forward.
         if let Some(obj) = canvas.get_game_object_mut("hook_0") {
@@ -508,14 +553,21 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         canvas.run(Action::Show { target: Target::name("rope") });
 
         // ── Grapple on mouse press, release on mouse release ────────────────
-        canvas.on_mouse_press(move |c, btn, _pos| {
-            if btn != MouseButton::Left { return; }
-            c.run(Action::Custom { name: "do_grab".into() });
-        });
-        canvas.on_mouse_release(move |c, btn, _pos| {
-            if btn != MouseButton::Left { return; }
-            c.run(Action::Custom { name: "do_release".into() });
-        });
+        // Register only once so callbacks don't stack across respawns.
+        // They fire custom events which are replaced each on_enter, so the
+        // latest State arc is always used.
+        let mouse_registered = matches!(canvas.get_var("game_mouse_registered"), Some(Value::Bool(true)));
+        if !mouse_registered {
+            canvas.on_mouse_press(move |c, btn, _pos| {
+                if btn != MouseButton::Left || !c.is_scene("game") { return; }
+                c.run(Action::Custom { name: "do_grab".into() });
+            });
+            canvas.on_mouse_release(move |c, btn, _pos| {
+                if btn != MouseButton::Left || !c.is_scene("game") { return; }
+                c.run(Action::Custom { name: "do_release".into() });
+            });
+            canvas.set_var("game_mouse_registered", true);
+        }
 
         // ── Release logic ─────────────────────────────────────────────────────
         let st = state.clone();
@@ -648,23 +700,57 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         });
 
         // ── Main tick ─────────────────────────────────────────────────────────
+        // Register on_update only once. The persistent_state Arc ensures that
+        // the single callback always sees the latest State (replaced in-place
+        // on each respawn), so no generation counter or state shuttle needed.
+        let tick_registered = matches!(canvas.get_var("game_tick_registered"), Some(Value::Bool(true)));
+        if !tick_registered {
         let st = state.clone();
         let mut space_was_down = false;
         let mut w_was_down = false;
-        let mut one_was_down = false;
-        let mut two_was_down = false;
-        let mut three_was_down = false;
-        let mut four_was_down = false;
-        let mut five_was_down = false;
-        let mut six_was_down = false;
-        let mut seven_was_down = false;
         let mut prev_nearest_hook: String = String::new();
         let mut dark_mode_prev = false;
+        let mut prev_bg_theme: Option<(bool, usize)> = None;
+        let bg_zone_start_img = bg_zone_start.clone();
+        let bg_zone_purple_img = bg_zone_purple.clone();
+        let bg_zone_black_img = bg_zone_black.clone();
         canvas.on_update(move |c| {
             // ── Early-exit for stale callbacks from previous game sessions ───
             {
                 let s = st.lock().unwrap();
                 if s.dead { return; }
+            }
+
+            // ── Pause menu entrance animation (slide from top) ─────────────
+            if matches!(c.get_var("pause_animating"), Some(Value::Bool(true))) {
+                let mut remaining = c.get_i32("pause_anim_frames").max(0);
+                let total = c.get_i32("pause_anim_total").max(1);
+                let cam_x = c.get_f32("pause_cam_x");
+
+                if remaining > 0 {
+                    remaining -= 1;
+                    let t = 1.0 - (remaining as f32 / total as f32);
+                    let ease = 1.0 - (1.0 - t).powi(3);
+                    let y = -VH + VH * ease;
+
+                    if let Some(obj) = c.get_game_object_mut("pause_overlay") {
+                        obj.position = (cam_x, y);
+                        obj.visible = true;
+                    }
+
+                    c.set_var("pause_anim_frames", remaining);
+                    if remaining == 0 {
+                        if let Some(obj) = c.get_game_object_mut("pause_overlay") {
+                            obj.position = (cam_x, 0.0);
+                        }
+                        c.set_var("pause_animating", false);
+                        c.pause_audio();
+                        c.pause();
+                    }
+                    return;
+                }
+
+                c.set_var("pause_animating", false);
             }
 
             // ── Un-zoom from previous frame ───────────────────────────────────
@@ -760,93 +846,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
             s = st.lock().unwrap();
 
-            // Runtime feature toggles.
-            let k1 = c.key("1");
-            if k1 && !one_was_down {
-                s.spinners_enabled = !s.spinners_enabled;
-            }
-            one_was_down = k1;
-
-            let k2 = c.key("2");
-            if k2 && !two_was_down {
-                s.bounce_enabled = !s.bounce_enabled;
-            }
-            two_was_down = k2;
-
-            let k3 = c.key("3");
-            if k3 && !three_was_down {
-                // Free flip: toggle gravity direction (same as hitting a flip block)
-                if s.flip_timer > 0 {
-                    // Already flipped — refresh timer
-                    s.flip_timer = FLIP_DURATION;
-                } else {
-                    // Not flipped — do the full flip + start timer
-                    s.gravity_dir *= -1.0;
-                    s.flip_timer = FLIP_DURATION;
-                    if s.hooked {
-                        s.vy = -s.vy;
-                    } else {
-                        s.vy = -s.vy * 0.55;
-                    }
-                    s.py = VH - s.py;
-                    s.hook_y = VH - s.hook_y;
-
-                    let all_objs: Vec<(String, f32)> =
-                        s.live_hooks.iter().map(|n| (n.clone(), HOOK_R * 2.0))
-                        .chain(s.pad_live.iter().map(|n| (n.clone(), PAD_H)))
-                        .chain(s.spinner_live.iter().map(|n| (n.clone(), SPINNER_H)))
-                        .chain(s.boost_live.iter().map(|n| (n.clone(), BOOST_H)))
-                        .chain(s.coin_live.iter().map(|n| (n.clone(), COIN_R * 2.0)))
-                        .chain(s.flip_live.iter().map(|n| (n.clone(), FLIP_H)))
-                        .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), GATE_TOP_SEG_H)))
-                        .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), GATE_BOT_SEG_H)))
-                        .collect();
-                    drop(s);
-                    for (name, obj_h) in &all_objs {
-                        if let Some(obj) = c.get_game_object_mut(name) {
-                            obj.position.1 = VH - obj.position.1 - obj_h;
-                        }
-                    }
-                    s = st.lock().unwrap();
-                }
-            }
-            three_was_down = k3;
-
-            let k4 = c.key("4");
-            if k4 && !four_was_down {
-                let all_disabled = !s.spinners_enabled && !s.bounce_enabled;
-                if all_disabled {
-                    s.spinners_enabled = true;
-                    s.bounce_enabled = true;
-                } else {
-                    s.spinners_enabled = false;
-                    s.bounce_enabled = false;
-                }
-            }
-            four_was_down = k4;
-
-            let k5 = c.key("5");
-            if k5 && !five_was_down {
-                s.spinner_spin_enabled = !s.spinner_spin_enabled;
-            }
-            five_was_down = k5;
-
-            let k6 = c.key("6");
-            if k6 && !six_was_down {
-                s.dark_mode = !s.dark_mode;
-            }
-            six_was_down = k6;
-
-            let k7 = c.key("7");
-            if k7 && !seven_was_down {
-                s.magnet_debug = !s.magnet_debug;
-            }
-            seven_was_down = k7;
-
             let spinner_enabled = s.spinners_enabled;
             let spinner_spin_enabled = s.spinner_spin_enabled;
             let bounce_enabled = s.bounce_enabled;
             let dark_mode = s.dark_mode;
+            let zone_idx = zone_index_for_distance(s.distance);
+            let zone_spinner_speed = spinner_speed_for_zone(zone_idx);
             let spinner_live = s.spinner_live.clone();
             let pad_live = s.pad_live.clone();
             drop(s);
@@ -854,9 +859,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 if let Some(obj) = c.get_game_object_mut(name) {
                     obj.visible = spinner_enabled;
                     if spinner_spin_enabled {
-                        if obj.rotation_momentum.abs() < 0.01 {
-                            obj.rotation_momentum = SPINNER_ROT_SPEED;
-                        }
+                        let dir = if obj.rotation_momentum.abs() < 0.01 {
+                            1.0
+                        } else {
+                            obj.rotation_momentum.signum()
+                        };
+                        obj.rotation_momentum = dir * zone_spinner_speed;
                     } else {
                         obj.rotation_momentum = 0.0;
                     }
@@ -906,7 +914,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     // Pending empty — generate another batch (don't advance rightmost_x;
                     // it gets updated per-hook as they are actually spawned above)
                     let from = s.rightmost_x;
-                    let diff = s.difficulty;
+                    let diff = (s.distance / 18000.0).min(1.0);
                     let mut next_seed = s.seed;
                     let mut next_gen_y = s.gen_y;
                     let batch = gen_hook_batch(&mut next_seed, from, &mut next_gen_y, diff);
@@ -1000,7 +1008,9 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     raw_spin_y
                 };
                 s.spinner_rightmost = spin_x;
-                let spin_dir = if lcg(&mut s.seed) < 0.5 { -SPINNER_ROT_SPEED } else { SPINNER_ROT_SPEED };
+                let zone_idx = zone_index_for_distance(s.distance);
+                let zone_spinner_speed = spinner_speed_for_zone(zone_idx);
+                let spin_dir = if lcg(&mut s.seed) < 0.5 { -zone_spinner_speed } else { zone_spinner_speed };
                 let spin_enabled_now = s.spinner_spin_enabled;
                 let Some(id) = s.spinner_free.pop() else { break; };
                 s.spinner_live.push(id.clone());
@@ -1149,20 +1159,49 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             // ── Spawn sparse coins ahead of the player ───────────────────────
             while s.coin_rightmost < s.px + GEN_AHEAD && !s.coin_free.is_empty() {
                 let gap = lcg_range(&mut s.seed, COIN_GAP_MIN, COIN_GAP_MAX);
-                let start_x = s.coin_rightmost + gap;
+                let desired_start_x = s.coin_rightmost + gap;
                 let spawn_array = s.coin_free.len() >= COIN_ARRAY_COUNT && lcg(&mut s.seed) < COIN_ARRAY_CHANCE;
                 let mut spawn_batch: Vec<(String, f32, f32)> = Vec::new();
+                let mut spawned_start_x = desired_start_x;
 
                 if spawn_array {
-                    // Sample center from a safe range so the arc always keeps its full shape
-                    // inside the target band without clamp flattening.
-                    let center_min = (COIN_ARRAY_Y_MIN + COIN_CURVE_RISE).min(COIN_ARRAY_Y_MAX);
-                    let center_raw_y = lcg_range(&mut s.seed, center_min, COIN_ARRAY_Y_MAX);
+                    // Anchor arc arrays to a nearby live hook so placement is
+                    // relative to grab nodes, not an absolute world Y range.
+                    let mut best_anchor: Option<(f32, f32)> = None; // (hook_center_x, hook_raw_y)
+                    let mut best_score = f32::INFINITY;
+                    let hook_ids = s.live_hooks.clone();
+                    for hid in &hook_ids {
+                        if let Some(hook_obj) = c.get_game_object(hid) {
+                            let hook_center_x = hook_obj.position.0 + HOOK_R;
+                            let hook_center_world_y = hook_obj.position.1 + HOOK_R;
+                            let hook_raw_y = if s.gravity_dir < 0.0 {
+                                VH - hook_center_world_y
+                            } else {
+                                hook_center_world_y
+                            };
+                            let candidate_start_x = hook_center_x + COIN_ARRAY_HOOK_DX;
+                            let score = (candidate_start_x - desired_start_x).abs();
+                            if score < best_score {
+                                best_score = score;
+                                best_anchor = Some((hook_center_x, hook_raw_y));
+                            }
+                        }
+                    }
+
+                    let center_raw_y = if let Some((hook_center_x, hook_raw_y)) = best_anchor {
+                        spawned_start_x = hook_center_x + COIN_ARRAY_HOOK_DX;
+                        hook_raw_y + COIN_ARRAY_HOOK_DY
+                    } else {
+                        // Fallback when no hook object is available yet.
+                        let center_min = (COIN_ARRAY_Y_MIN + COIN_CURVE_RISE).min(COIN_ARRAY_Y_MAX);
+                        lcg_range(&mut s.seed, center_min, COIN_ARRAY_Y_MAX)
+                    };
+
                     let half = (COIN_ARRAY_COUNT as f32 - 1.0) * 0.5;
 
-                    // Curved 5-coin formation constrained to the upper band.
+                    // Curved 5-coin formation, left-to-right from the hook offset anchor.
                     for i in 0..COIN_ARRAY_COUNT {
-                        let x = start_x + i as f32 * COIN_ARRAY_SPACING;
+                        let x = spawned_start_x + i as f32 * COIN_ARRAY_SPACING;
                         let t = i as f32 - half;
                         let norm = if half > 0.0 { (t.abs() / half).clamp(0.0, 1.0) } else { 0.0 };
                         let arch = 1.0 - norm * norm;
@@ -1179,7 +1218,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
                     if let Some(id) = s.coin_free.pop() {
                         s.coin_live.push(id.clone());
-                        spawn_batch.push((id, start_x, y));
+                        spawn_batch.push((id, desired_start_x, y));
                     }
                 }
 
@@ -1188,9 +1227,9 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
 
                 s.coin_rightmost = if spawn_array {
-                    start_x + (COIN_ARRAY_COUNT as f32 - 1.0) * COIN_ARRAY_SPACING
+                    spawned_start_x + (COIN_ARRAY_COUNT as f32 - 1.0) * COIN_ARRAY_SPACING
                 } else {
-                    start_x
+                    desired_start_x
                 };
                 drop(s);
 
@@ -1919,9 +1958,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             // Track distance
             let travelled = (s.px - SPAWN_X).max(0.0);
             if travelled > s.distance {
-                s.distance   = travelled;
-                s.difficulty = (s.distance / 18000.0).min(1.0);
+                s.distance = travelled;
             }
+
+            let zone_idx = zone_index_for_distance(s.distance);
+            let dark_now = s.dark_mode;
+            let floor_y = if s.gravity_dir < 0.0 { 0.0 } else { VH - 28.0 };
 
             // ── Sync player object position ───────────────────────────────────
             // NOT IN API: no Action::SetPosition. We set obj.position directly
@@ -1938,30 +1980,29 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             // Pin background and floor to the camera position each tick
             // so they always fill the screen without being world-sized textures.
             let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
-            let dark_now = st.lock().unwrap().dark_mode;
             if let Some(obj) = c.get_game_object_mut("bg") {
                 obj.position = (cam_x, 0.0);
-                if dark_now {
+                let bg_theme = (dark_now, zone_idx);
+                if prev_bg_theme != Some(bg_theme) {
+                    let image_data = if dark_now {
+                        solid(4, 4, 8, 255)
+                    } else {
+                        match zone_idx {
+                            0 => bg_zone_start_img.clone(),
+                            1 => bg_zone_purple_img.clone(),
+                            _ => bg_zone_black_img.clone(),
+                        }
+                    };
                     obj.set_image(Image {
                         shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-                        image: solid(4, 4, 8, 255).into(),
+                        image: image_data.into(),
                         color: None,
                     });
-                } else {
-                    obj.set_image(Image {
-                        shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-                        image: gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT).into(),
-                        color: None,
-                    });
+                    prev_bg_theme = Some(bg_theme);
                 }
             }
-            {
-                let s = st.lock().unwrap();
-                let floor_y = if s.gravity_dir < 0.0 { 0.0 } else { VH - 28.0 };
-                drop(s);
-                if let Some(obj) = c.get_game_object_mut("danger_floor") {
-                    obj.position = (cam_x, floor_y);
-                }
+            if let Some(obj) = c.get_game_object_mut("danger_floor") {
+                obj.position = (cam_x, floor_y);
             }
 
             // ── Dark mode: set/clear glows only on transition ──────────────
@@ -2257,6 +2298,8 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 c.load_scene("gameover");
             }
         });
+        canvas.set_var("game_tick_registered", true);
+        } // end if !tick_registered
     })
 }
 

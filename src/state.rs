@@ -64,7 +64,6 @@ pub struct State {
     pub score:      u32,
     pub coin_count: u32,
     pub boost_charge: f32,
-    pub difficulty: f32,
     pub gravity_dir: f32,
 
     pub seed:        u64,

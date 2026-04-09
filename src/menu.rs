@@ -173,6 +173,16 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             let cam = Camera::new((VW, VH), (VW, VH));
             canvas.set_camera(cam);
 
+            // Start BGM while on menu so first transition into gameplay is smooth.
+            let bgm_started = matches!(canvas.get_var("bgm_started"), Some(Value::Bool(true)));
+            if !bgm_started {
+                canvas.play_sound_with(
+                    "assets/synful_reach.mp3",
+                    SoundOptions::new().volume(0.5).looping(true),
+                );
+                canvas.set_var("bgm_started", true);
+            }
+
             let selected = Arc::new(Mutex::new(0usize));
 
             if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
@@ -194,38 +204,44 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 }
             }
 
-            canvas.on_key_press({
-                let sel = Arc::clone(&selected);
-                move |c, key| {
-                    let n = GAME_MODES.len();
-                    let changed = {
-                        let mut idx = sel.lock().unwrap();
-                        match key {
-                            Key::Named(NamedKey::ArrowLeft) => {
-                                *idx = (*idx + n - 1) % n;
-                                true
+            let menu_key_registered = matches!(canvas.get_var("menu_key_registered"), Some(Value::Bool(true)));
+            if !menu_key_registered {
+                canvas.on_key_press({
+                    let sel = Arc::clone(&selected);
+                    move |c, key| {
+                        if !c.is_scene("menu") { return; }
+
+                        let n = GAME_MODES.len();
+                        let changed = {
+                            let mut idx = sel.lock().unwrap();
+                            match key {
+                                Key::Named(NamedKey::ArrowLeft) => {
+                                    *idx = (*idx + n - 1) % n;
+                                    true
+                                }
+                                Key::Named(NamedKey::ArrowRight) => {
+                                    *idx = (*idx + 1) % n;
+                                    true
+                                }
+                                _ => false,
                             }
-                            Key::Named(NamedKey::ArrowRight) => {
-                                *idx = (*idx + 1) % n;
-                                true
-                            }
-                            _ => false,
-                        }
-                    };
-                    if changed {
-                        let idx = *sel.lock().unwrap();
-                        let (mode_name, mode_desc) = GAME_MODES[idx];
-                        if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
-                            if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
-                                obj.set_text(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0));
-                            }
-                            if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
-                                obj.set_text(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0));
+                        };
+                        if changed {
+                            let idx = *sel.lock().unwrap();
+                            let (mode_name, mode_desc) = GAME_MODES[idx];
+                            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+                                if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
+                                    obj.set_text(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0));
+                                }
+                                if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
+                                    obj.set_text(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0));
+                                }
                             }
                         }
                     }
-                }
-            });
+                });
+                canvas.set_var("menu_key_registered", true);
+            }
 
             canvas.register_custom_event("goto_game".into(), |c| c.load_scene("game"));
         })
