@@ -54,24 +54,6 @@ pub fn make_spinner(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         .build(ctx)
 }
 
-pub fn make_boost(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
-    GameObject::new_rect(
-        ctx,
-        id.into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (BOOST_W, BOOST_H), 0.0),
-            image: boost_image_cached(),
-            color: None,
-        }),
-        (BOOST_W, BOOST_H),
-        (x, y),
-        vec!["boost".into()],
-        (0.0, 0.0),
-        (1.0, 1.0),
-        0.0,
-    )
-}
-
 pub fn make_coin(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
     GameObject::new_rect(
         ctx,
@@ -102,6 +84,24 @@ pub fn make_flip(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         (FLIP_W, FLIP_H),
         (x, y),
         vec!["flip".into()],
+        (0.0, 0.0),
+        (1.0, 1.0),
+        0.0,
+    )
+}
+
+pub fn make_score_x2(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
+    GameObject::new_rect(
+        ctx,
+        id.into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (SCORE_X2_W, SCORE_X2_H), 0.0),
+            image: circle_img((SCORE_X2_W * 0.5) as u32, 255, 220, 90).into(),
+            color: None,
+        }),
+        (SCORE_X2_W, SCORE_X2_H),
+        (x, y),
+        vec!["score_x2".into()],
         (0.0, 0.0),
         (1.0, 1.0),
         0.0,

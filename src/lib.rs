@@ -34,6 +34,7 @@ fn spinner_speed_for_zone(zone_idx: usize) -> f32 {
 }
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
+const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Game scene
@@ -99,11 +100,11 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
     let dist_bar = GameObject::new_rect(
         ctx, "dist_bar".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (500.0, 40.0), 0.0),
-            image: bar_img(500, 40, 0.0, 80, 220, 160).into(),
+            shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
+            image: bar_img(920, 48, 0.0, 80, 220, 160).into(),
             color: None,
         }),
-        (500.0, 40.0), (VW - 580.0, 50.0),
+        (920.0, 48.0), (VW * 0.5 - 460.0, 30.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
@@ -115,17 +116,6 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             color: None,
         }),
         (300.0, 70.0), (30.0, 40.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-
-    let boost_meter = GameObject::new_rect(
-        ctx, "boost_meter".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (320.0, 34.0), 0.0),
-            image: bar_img(320, 34, 0.0, 120, 255, 140).into(),
-            color: None,
-        }),
-        (320.0, 34.0), (30.0, 128.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
@@ -265,13 +255,11 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         .with_object("player",       player)
         .with_object("dist_bar",     dist_bar)
         .with_object("coin_counter", coin_counter)
-        .with_object("boost_meter",  boost_meter)
         .with_object("momentum_counter", momentum_counter)
         .with_object("gravity_indicator", gravity_indicator)
         .with_object("y_meter", y_meter)
         .with_object("x_meter", x_meter)
         .with_object("combo_flash",  combo_flash)
-        .with_object("pause_overlay", pause_overlay)
         .with_object("flip_timer", flip_timer_hud)
         .with_object("coin_magnet_radius", coin_magnet_radius);
 
@@ -316,22 +304,17 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         scene = scene.with_object(id, obj);
     }
 
-    // Preallocate phasing boost pool
-    let mut boost_free: Vec<String> = Vec::new();
-    for i in 0..BOOST_POOL_SIZE {
-        let id = format!("boost_{i}");
-        let mut obj = make_boost(ctx, &id, -3600.0, -3600.0);
-        obj.visible = false;
-        boost_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
-
     // Decode the coin GIF once. We keep pooled coins static until first use,
     // then enable animation lazily to avoid startup lag spikes.
     let coin_static_sprite = load_image_sized("assets/coin.gif", COIN_R * 2.0, COIN_R * 2.0);
     let coin_anim_template = AnimatedSprite::new(
         include_bytes!("../assets/coin.gif"),
         (COIN_R * 2.0, COIN_R * 2.0),
+        12.0,
+    ).ok();
+    let score_x2_anim_template = AnimatedSprite::new(
+        include_bytes!("../assets/2x.gif"),
+        (SCORE_X2_W, SCORE_X2_H),
         12.0,
     ).ok();
 
@@ -353,6 +336,21 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         let mut obj = make_flip(ctx, &id, -3800.0, -3800.0);
         obj.visible = false;
         flip_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // Preallocate score x2 pickup pool
+    let score_x2_sprite = load_image_sized("assets/2x.gif", SCORE_X2_W, SCORE_X2_H);
+    let mut score_x2_free: Vec<String> = Vec::new();
+    for i in 0..SCORE_X2_POOL_SIZE {
+        let id = format!("score_x2_{i}");
+        let mut obj = make_score_x2(ctx, &id, -3850.0, -3850.0);
+        obj.set_image(score_x2_sprite.clone());
+        if let Some(anim) = &score_x2_anim_template {
+            obj.set_animation(anim.clone());
+        }
+        obj.visible = false;
+        score_x2_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
 
@@ -388,6 +386,9 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         gate_free.push(gid);
     }
 
+    // Add pause overlay last so it always renders above world and HUD objects.
+    scene = scene.with_object("pause_overlay", pause_overlay);
+
     let scene = scene;
 
     // Persistent state arc — created on first enter, reused on respawns.
@@ -395,6 +396,29 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
     let persistent_state: Arc<Mutex<Option<Arc<Mutex<State>>>>> = Arc::new(Mutex::new(None));
 
     scene.on_enter(move |canvas| {
+        // Quartz particles run through the crystalline step path.
+        // Enable once so player emitter can render.
+        let crystalline_ready = matches!(canvas.get_var("crystalline_ready"), Some(Value::Bool(true)));
+        if !crystalline_ready {
+            canvas.enable_crystalline();
+            canvas.set_var("crystalline_ready", true);
+        }
+
+        // Player particle trail (Quartz particles branch).
+        canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+        let player_trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+            .rate(72.0)
+            .lifetime(0.68)
+            .velocity(-2.0, 8.0)
+            .spread(6.0, 6.0)
+            .size(9.0)
+            .color(C_PLAYER.0, C_PLAYER.1, C_PLAYER.2, 255)
+            .gravity_scale(0.0)
+            .collision(CollisionResponse::None)
+            .build();
+        canvas.add_emitter(player_trail);
+        canvas.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
+
         // ── Background music (looped) ────────────────────────────────────
         // Usually started from menu on first boot; keep this as a fallback
         // in case game scene is entered directly.
@@ -425,7 +449,20 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
 
                 if c.is_paused() {
                     c.resume();
-                    c.resume_audio();
+                    c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+                    c.clear_particles();
+                    let player_trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+                        .rate(72.0)
+                        .lifetime(0.68)
+                        .velocity(-2.0, 8.0)
+                        .spread(6.0, 6.0)
+                        .size(9.0)
+                        .color(C_PLAYER.0, C_PLAYER.1, C_PLAYER.2, 255)
+                        .gravity_scale(0.0)
+                        .collision(CollisionResponse::None)
+                        .build();
+                    c.add_emitter(player_trail);
+                    c.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
                     c.set_var("pause_animating", false);
                     c.set_var("pause_anim_frames", 0);
                     if let Some(obj) = c.get_game_object_mut("pause_overlay") {
@@ -434,6 +471,10 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 } else {
                     let animating = matches!(c.get_var("pause_animating"), Some(Value::Bool(true)));
                     if animating { return; }
+
+                    // Keep particles from rendering over the pause panel.
+                    c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+                    c.clear_particles();
 
                     // Start overlay above the screen and slide it in.
                     let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
@@ -487,7 +528,6 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             distance:   0.0,
             score:      0,
             coin_count: 0,
-            boost_charge: 0.0,
             gravity_dir: 1.0,
             seed,
             pending:     first_batch,
@@ -505,12 +545,10 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             spinner_live:      Vec::new(),
             spinner_free:      spinner_free.clone(),
             spinner_rightmost: SPAWN_X + VW * 0.65,
+            spinner_origins:   Vec::new(),
             spinners_enabled: true,
             spinner_spin_enabled: true,
             spinner_hit_cooldown: 0,
-            boost_live:      Vec::new(),
-            boost_free:      boost_free.clone(),
-            boost_rightmost: SPAWN_X,
             coin_live:      Vec::new(),
             coin_free:      coin_free.clone(),
             coin_rightmost: SPAWN_X,
@@ -520,6 +558,10 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             flip_free:      flip_free.clone(),
             flip_rightmost: SPAWN_X + VW * 1.1,
             flip_timer:     0,
+            score_x2_live:      Vec::new(),
+            score_x2_free:      score_x2_free.clone(),
+            score_x2_rightmost: SPAWN_X + VW * 1.35,
+            score_x2_timer:     0,
             gate_live:      Vec::new(),
             gate_free:      gate_free.clone(),
             gate_rightmost: SPAWN_X + VW * 1.0,
@@ -643,7 +685,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 let rope_len = dist.clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
                 let speed    = (s.vx*s.vx + s.vy*s.vy).sqrt();
 
-                // Slightly boost tangential speed on attach for snappier re-grabs.
+                // Slightly increase tangential speed on attach for snappier re-grabs.
                 let dx = s.px - hx;
                 let dy = s.py - hy;
                 let inv_dist = 1.0 / (dx*dx + dy*dy).sqrt().max(1.0);
@@ -661,8 +703,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     } else {
                         -1.0
                     };
-                    s.vx += tx * GRAB_SURGE * dir;
-                    s.vy += ty * GRAB_SURGE * dir;
+                    s.vx += tx * GRAB_SURGE * dir * 2.0;
+                    s.vy += ty * GRAB_SURGE * dir * 2.0;
+                    let tangent_surge = (tangent_v.abs() * GRAB_TANGENT_SURGE_SCALE)
+                        .clamp(0.0, GRAB_TANGENT_SURGE_MAX);
+                    s.vx += tx * tangent_surge * dir * 2.0;
+                    s.vy += ty * tangent_surge * dir * 2.0;
 
                     s.hooked     = true;
                     s.hook_x     = hx;
@@ -670,7 +716,8 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     s.rope_len   = rope_len;
                     s.active_hook = hook_id.clone();
                     s.pad_bounce_count = 0;
-                    s.score      += (speed * 2.0) as u32;
+                    let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+                    s.score      += ((speed * 2.0) as u32).saturating_mul(score_mult);
                     let do_combo  = speed > 16.0;
                     drop(s);
 
@@ -707,7 +754,6 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         if !tick_registered {
         let st = state.clone();
         let mut space_was_down = false;
-        let mut w_was_down = false;
         let mut prev_nearest_hook: String = String::new();
         let mut dark_mode_prev = false;
         let mut prev_bg_theme: Option<(bool, usize)> = None;
@@ -744,7 +790,6 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                             obj.position = (cam_x, 0.0);
                         }
                         c.set_var("pause_animating", false);
-                        c.pause_audio();
                         c.pause();
                     }
                     return;
@@ -766,13 +811,13 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                         s.live_hooks.iter().map(|n| (n.clone(), (HOOK_R*2.0, HOOK_R*2.0)))
                         .chain(s.pad_live.iter().map(|n| (n.clone(), (PAD_W, PAD_H))))
                         .chain(s.spinner_live.iter().map(|n| (n.clone(), (SPINNER_W, SPINNER_H))))
-                        .chain(s.boost_live.iter().map(|n| (n.clone(), (BOOST_W, BOOST_H))))
                         .chain(s.coin_live.iter().map(|n| (n.clone(), (COIN_R*2.0, COIN_R*2.0))))
                         .chain(std::iter::once((
                             "coin_magnet_radius".to_string(),
                             (COIN_MAGNET_RADIUS * 2.0, COIN_MAGNET_RADIUS * 2.0),
                         )))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
+                        .chain(s.score_x2_live.iter().map(|n| (n.clone(), (SCORE_X2_W, SCORE_X2_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
                         .collect();
@@ -797,23 +842,32 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
             space_was_down = space_now;
 
-            let w_now = c.key("w");
-            if w_now && !w_was_down {
-                let mut s = st.lock().unwrap();
-                if s.boost_charge >= BOOST_USE_MIN {
-                    let use_amt = s.boost_charge.min(0.35);
-                    s.boost_charge -= use_amt;
-                    // Zero out unusable residual so the bar doesn't show a misleading sliver
-                    if s.boost_charge < BOOST_USE_MIN { s.boost_charge = 0.0; }
-                    let speed = (s.vx * s.vx + s.vy * s.vy).sqrt().max(1.0);
-                    let dir_x = s.vx / speed;
-                    let dir_y = s.vy / speed;
-                    let power = 8.0 + 12.0 * use_amt;
-                    s.vx += dir_x * power;
-                    s.vy += dir_y * power;
-                }
+            // Speed-reactive trail: faster movement produces a denser,
+            // longer and slightly wider connected ribbon.
+            {
+                let s = st.lock().unwrap();
+                let speed = (s.vx * s.vx + s.vy * s.vy).sqrt();
+                let rate = (62.0 + speed * 1.6).clamp(62.0, 150.0);
+                let life = (0.62 + speed * 0.010).clamp(0.62, 0.95);
+                let size = (8.0 + speed * 0.06).clamp(8.0, 12.0);
+                let spread = (5.0 + speed * 0.05).clamp(5.0, 9.5);
+                let evx = (-s.vx * 0.35).clamp(-26.0, 26.0);
+                let evy = (-s.vy * 0.35 + 6.0).clamp(-26.0, 26.0);
+                drop(s);
+
+                c.run(Action::set_emitter_rate(PLAYER_TRAIL_EMITTER_NAME, rate));
+                c.run(Action::set_emitter_lifetime(PLAYER_TRAIL_EMITTER_NAME, life));
+                c.run(Action::set_emitter_size(PLAYER_TRAIL_EMITTER_NAME, size));
+                c.run(Action::set_emitter_spread(PLAYER_TRAIL_EMITTER_NAME, spread, spread));
+                c.run(Action::set_emitter_velocity(PLAYER_TRAIL_EMITTER_NAME, evx, evy));
+                c.run(Action::set_emitter_color(
+                    PLAYER_TRAIL_EMITTER_NAME,
+                    C_PLAYER.0,
+                    C_PLAYER.1,
+                    C_PLAYER.2,
+                    255,
+                ));
             }
-            w_was_down = w_now;
 
             let mut s = st.lock().unwrap();
             s.ticks += 1;
@@ -853,7 +907,10 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             let zone_idx = zone_index_for_distance(s.distance);
             let zone_spinner_speed = spinner_speed_for_zone(zone_idx);
             let spinner_live = s.spinner_live.clone();
+            let spinner_origins = s.spinner_origins.clone();
             let pad_live = s.pad_live.clone();
+            let spinner_vertical_active = zone_idx >= 2;
+            let spinner_t = s.ticks as f32 / 60.0;
             drop(s);
             for name in &spinner_live {
                 if let Some(obj) = c.get_game_object_mut(name) {
@@ -870,6 +927,15 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
                     if obj.rotation > 360.0 || obj.rotation < -360.0 {
                         obj.rotation = obj.rotation.rem_euclid(360.0);
+                    }
+                    if let Some((_, base_y, amp, speed, phase)) =
+                        spinner_origins.iter().find(|(id, _, _, _, _)| id == name)
+                    {
+                        obj.position.1 = if spinner_vertical_active {
+                            *base_y + (spinner_t * *speed + *phase).sin() * *amp
+                        } else {
+                            *base_y
+                        };
                     }
                     // Dark mode: apply glow to newly-visible spinners
                     if dark_mode && obj.highlight.is_none() {
@@ -890,13 +956,29 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             s = st.lock().unwrap();
 
             // ── Spawn pending hooks ahead of the player ───────────────────────
-            while s.rightmost_x < s.px + GEN_AHEAD && !s.pool_free.is_empty() {
+            let mut hooks_spawned_this_tick = 0usize;
+            while hooks_spawned_this_tick < HOOKS_SPAWN_BUDGET_PER_TICK
+                && s.rightmost_x < s.px + GEN_AHEAD
+                && !s.pool_free.is_empty()
+            {
                 if let Some(spec) = s.pending.pop_front() {
                     let Some(id) = s.pool_free.pop() else { break; };
-                    s.rightmost_x = spec.x;
-                    let hx = spec.x;
+                    let mut hx = spec.x;
+                    let hook_spinner_min_x_gap = HOOK_SPINNER_MIN_X_GAP;
+                    for spinner_name in &s.spinner_live {
+                        if let Some(spinner_obj) = c.get_game_object(spinner_name) {
+                            let spinner_center_x = spinner_obj.position.0 + SPINNER_W * 0.5;
+                            let dx = hx - spinner_center_x;
+                            if dx.abs() < hook_spinner_min_x_gap {
+                                let dir = if dx >= 0.0 { 1.0 } else { -1.0 };
+                                hx += dir * HOOK_SPINNER_PUSH_X;
+                            }
+                        }
+                    }
+                    s.rightmost_x = hx;
                     let hy = if s.gravity_dir < 0.0 { VH - spec.y } else { spec.y };
                     s.live_hooks.push(id.clone());
+                    hooks_spawned_this_tick += 1;
                     drop(s);
 
                     if let Some(obj) = c.get_game_object_mut(&id) {
@@ -925,7 +1007,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
 
             // ── Spawn bounce pads ahead of the player ────────────────────────
-            while s.bounce_enabled && s.pad_rightmost < s.px + GEN_AHEAD && !s.pad_free.is_empty() {
+            let mut pads_spawned_this_tick = 0usize;
+            while pads_spawned_this_tick < PADS_SPAWN_BUDGET_PER_TICK
+                && s.bounce_enabled
+                && s.pad_rightmost < s.px + GEN_AHEAD
+                && !s.pad_free.is_empty()
+            {
                 let gap = lcg_range(&mut s.seed, PAD_GAP_MIN, PAD_GAP_MAX);
                 let pad_x = s.pad_rightmost + gap;
                 let pad_y = if s.gravity_dir < 0.0 {
@@ -938,6 +1025,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 let moves = lcg(&mut s.seed) < 0.35;
                 let Some(id) = s.pad_free.pop() else { break; };
                 s.pad_live.push(id.clone());
+                pads_spawned_this_tick += 1;
                 if moves {
                     let amp = lcg_range(&mut s.seed, PAD_MOVE_RANGE * 0.45, PAD_MOVE_RANGE * 1.10);
                     let speed = lcg_range(&mut s.seed, PAD_MOVE_SPEED * 0.65, PAD_MOVE_SPEED * 1.45);
@@ -960,7 +1048,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
 
             // ── Spawn spinning obstacles ahead of the player ─────────────────
-            while s.spinners_enabled && s.spinner_rightmost < s.px + GEN_AHEAD && !s.spinner_free.is_empty() {
+            let mut spinners_spawned_this_tick = 0usize;
+            while spinners_spawned_this_tick < SPINNERS_SPAWN_BUDGET_PER_TICK
+                && s.spinners_enabled
+                && s.spinner_rightmost < s.px + GEN_AHEAD
+                && !s.spinner_free.is_empty()
+            {
                 let gap = lcg_range(&mut s.seed, SPINNER_GAP_MIN, SPINNER_GAP_MAX);
                 let mut spin_x = s.spinner_rightmost + gap;
                 for gate_name in &s.gate_live {
@@ -973,6 +1066,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                         }
                     }
                 }
+
                 // Spinner Y: prefer above a nearby hook; otherwise use legacy low lanes.
                 let mut hook_anchor_y: Option<f32> = None;
                 let mut best_dx = f32::MAX;
@@ -1014,6 +1108,11 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 let spin_enabled_now = s.spinner_spin_enabled;
                 let Some(id) = s.spinner_free.pop() else { break; };
                 s.spinner_live.push(id.clone());
+                let move_amp = lcg_range(&mut s.seed, SPINNER_BLACK_MOVE_AMP_MIN, SPINNER_BLACK_MOVE_AMP_MAX);
+                let move_speed = lcg_range(&mut s.seed, SPINNER_BLACK_MOVE_SPEED_MIN, SPINNER_BLACK_MOVE_SPEED_MAX);
+                let move_phase = lcg_range(&mut s.seed, 0.0, core::f32::consts::TAU);
+                s.spinner_origins.push((id.clone(), spin_y, move_amp, move_speed, move_phase));
+                spinners_spawned_this_tick += 1;
                 drop(s);
 
                 if let Some(obj) = c.get_game_object_mut(&id) {
@@ -1031,33 +1130,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 s = st.lock().unwrap();
             }
 
-            // ── Spawn phasing boosts ahead of the player ─────────────────────
-            while s.boost_rightmost < s.px + GEN_AHEAD && !s.boost_free.is_empty() {
-                let gap = lcg_range(&mut s.seed, BOOST_GAP_MIN, BOOST_GAP_MAX);
-                let boost_x = s.boost_rightmost + gap;
-                let boost_lanes = [VH * 0.40, VH * 0.48, VH * 0.56];
-                let lane_i = ((lcg(&mut s.seed) * boost_lanes.len() as f32) as usize).min(boost_lanes.len() - 1);
-                let raw_boost_y = (boost_lanes[lane_i] + lcg_range(&mut s.seed, -26.0, 26.0)).clamp(VH * 0.30, VH * 0.62);
-                let boost_y = if s.gravity_dir < 0.0 {
-                    VH - raw_boost_y - BOOST_H
-                } else {
-                    raw_boost_y
-                };
-                s.boost_rightmost = boost_x;
-                let Some(id) = s.boost_free.pop() else { break; };
-                s.boost_live.push(id.clone());
-                drop(s);
-
-                if let Some(obj) = c.get_game_object_mut(&id) {
-                    obj.position = (boost_x, boost_y);
-                    obj.visible = true;
-                }
-
-                s = st.lock().unwrap();
-            }
-
             // ── Spawn gravity flip pickups ahead of the player ──────────────
-            while s.flip_rightmost < s.px + GEN_AHEAD && !s.flip_free.is_empty() {
+            let mut flips_spawned_this_tick = 0usize;
+            while flips_spawned_this_tick < FLIPS_SPAWN_BUDGET_PER_TICK
+                && s.flip_rightmost < s.px + GEN_AHEAD
+                && !s.flip_free.is_empty()
+            {
                 let gap = lcg_range(&mut s.seed, FLIP_GAP_MIN, FLIP_GAP_MAX);
                 let flip_x = s.flip_rightmost + gap;
                 let raw_flip_y = lcg_range(&mut s.seed, VH * 0.28, VH * 0.66);
@@ -1069,6 +1147,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 s.flip_rightmost = flip_x;
                 let Some(id) = s.flip_free.pop() else { break; };
                 s.flip_live.push(id.clone());
+                flips_spawned_this_tick += 1;
                 drop(s);
 
                 if let Some(obj) = c.get_game_object_mut(&id) {
@@ -1079,9 +1158,42 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 s = st.lock().unwrap();
             }
 
+            // ── Spawn score x2 pickups ahead of the player ─────────────────
+            let mut score_x2_spawned_this_tick = 0usize;
+            while score_x2_spawned_this_tick < 1
+                && s.score_x2_rightmost < s.px + GEN_AHEAD
+                && !s.score_x2_free.is_empty()
+            {
+                let gap = lcg_range(&mut s.seed, SCORE_X2_GAP_MIN, SCORE_X2_GAP_MAX);
+                let x2_x = s.score_x2_rightmost + gap;
+                let raw_x2_y = lcg_range(&mut s.seed, VH * 0.26, VH * 0.64);
+                let x2_y = if s.gravity_dir < 0.0 {
+                    VH - raw_x2_y - SCORE_X2_H
+                } else {
+                    raw_x2_y
+                };
+                s.score_x2_rightmost = x2_x;
+                let Some(id) = s.score_x2_free.pop() else { break; };
+                s.score_x2_live.push(id.clone());
+                score_x2_spawned_this_tick += 1;
+                drop(s);
+
+                if let Some(obj) = c.get_game_object_mut(&id) {
+                    obj.position = (x2_x, x2_y);
+                    obj.visible = true;
+                }
+
+                s = st.lock().unwrap();
+            }
+
             // ── Spawn flappy-style gate obstacles ahead of the player ───────
             // Gap obstacles disabled: procedural gate clusters removed from gameplay loop.
-            while GATES_ENABLED && s.gate_rightmost < s.px + GEN_AHEAD && !s.gate_free.is_empty() {
+            let mut gates_spawned_this_tick = 0usize;
+            while gates_spawned_this_tick < GATES_SPAWN_BUDGET_PER_TICK
+                && GATES_ENABLED
+                && s.gate_rightmost < s.px + GEN_AHEAD
+                && !s.gate_free.is_empty()
+            {
                 let gap = lcg_range(&mut s.seed, GATE_GAP_MIN, GATE_GAP_MAX);
                 let base_x = s.gate_rightmost + gap.max(GATE_MIN_CLUSTER_SEPARATION);
                 let gaps_in_cluster = 2 + ((lcg(&mut s.seed) * 3.0) as usize);
@@ -1097,7 +1209,18 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // Spawn a hook near each gate gap when possible.
                     let hook_spawn = if let Some(hook_id) = s.pool_free.pop() {
-                        let hx = gate_x - 450.0;
+                        let mut hx = gate_x - 450.0;
+                        let hook_spinner_min_x_gap = HOOK_SPINNER_MIN_X_GAP;
+                        for spinner_name in &s.spinner_live {
+                            if let Some(spinner_obj) = c.get_game_object(spinner_name) {
+                                let spinner_center_x = spinner_obj.position.0 + SPINNER_W * 0.5;
+                                let dx = hx - spinner_center_x;
+                                if dx.abs() < hook_spinner_min_x_gap {
+                                    let dir = if dx >= 0.0 { 1.0 } else { -1.0 };
+                                    hx += dir * HOOK_SPINNER_PUSH_X;
+                                }
+                            }
+                        }
                         let hy = 650.0;
                         s.live_hooks.push(hook_id.clone());
                         Some((hook_id, hx, hy))
@@ -1114,6 +1237,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
 
                 let last_gate_x = spawn_batch.last().map(|(_, _, x, _)| *x).unwrap_or(base_x);
                 s.gate_rightmost = last_gate_x;
+                gates_spawned_this_tick += 1;
                 let spinner_ids = s.spinner_live.clone();
                 drop(s);
 
@@ -1157,12 +1281,22 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
 
             // ── Spawn sparse coins ahead of the player ───────────────────────
-            while s.coin_rightmost < s.px + GEN_AHEAD && !s.coin_free.is_empty() {
+            let mut coin_batches_spawned_this_tick = 0usize;
+            while coin_batches_spawned_this_tick < COIN_BATCHES_BUDGET_PER_TICK
+                && s.coin_rightmost < s.px + GEN_AHEAD
+                && !s.coin_free.is_empty()
+            {
                 let gap = lcg_range(&mut s.seed, COIN_GAP_MIN, COIN_GAP_MAX);
                 let desired_start_x = s.coin_rightmost + gap;
                 let spawn_array = s.coin_free.len() >= COIN_ARRAY_COUNT && lcg(&mut s.seed) < COIN_ARRAY_CHANCE;
-                let mut spawn_batch: Vec<(String, f32, f32)> = Vec::new();
+                let mut spawn_batch: Vec<(String, f32, f32, usize)> = Vec::new();
                 let mut spawned_start_x = desired_start_x;
+                let coin_anim_frames = coin_spawn_anim
+                    .as_ref()
+                    .map(|a| a.frame_count().max(1))
+                    .unwrap_or(1);
+                // Keep each array internally synced, but desync arrays/singles from each other.
+                let array_phase_frame = (lcg(&mut s.seed) * coin_anim_frames as f32) as usize;
 
                 if spawn_array {
                     // Anchor arc arrays to a nearby live hook so placement is
@@ -1210,7 +1344,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
 
                         let Some(id) = s.coin_free.pop() else { break; };
                         s.coin_live.push(id.clone());
-                        spawn_batch.push((id, x, y));
+                        spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
                     }
                 } else {
                     // Single coins can spawn anywhere below the array band.
@@ -1218,7 +1352,9 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
                     if let Some(id) = s.coin_free.pop() {
                         s.coin_live.push(id.clone());
-                        spawn_batch.push((id, desired_start_x, y));
+                        let single_phase = ((lcg(&mut s.seed) * coin_anim_frames as f32) as usize)
+                            .min(coin_anim_frames - 1);
+                        spawn_batch.push((id, desired_start_x, y, single_phase));
                     }
                 }
 
@@ -1231,16 +1367,20 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 } else {
                     desired_start_x
                 };
+                coin_batches_spawned_this_tick += 1;
                 drop(s);
 
-                for (id, coin_x, coin_y) in &spawn_batch {
+                for (id, coin_x, coin_y, phase_frame) in &spawn_batch {
                     if let Some(obj) = c.get_game_object_mut(id) {
                         obj.position = (*coin_x - COIN_R, *coin_y - COIN_R);
                         obj.visible = true;
                         obj.set_image(coin_spawn_image.clone());
-                        if obj.animated_sprite.is_none() {
-                            if let Some(anim) = &coin_spawn_anim {
+                        if let Some(anim) = &coin_spawn_anim {
+                            if obj.animated_sprite.is_none() {
                                 obj.set_animation(anim.clone());
+                            }
+                            if let Some(a) = obj.animated_sprite.as_mut() {
+                                a.set_frame(*phase_frame);
                             }
                         }
                     }
@@ -1293,30 +1433,9 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
             let spins_rm_set: HashSet<&str> = spins_remove.iter().map(|n| n.as_str()).collect();
             s.spinner_live.retain(|n| !spins_rm_set.contains(n.as_str()));
+            s.spinner_origins.retain(|(id, _, _, _, _)| !spins_rm_set.contains(id.as_str()));
             for name in spins_remove {
                 s.spinner_free.push(name);
-            }
-
-            // ── Cull boosts behind the player ─────────────────────────────────
-            let boost_cutoff = s.px - VW * 1.5;
-            let boosts_remove: Vec<String> = s.boost_live.iter()
-                .filter(|name| {
-                    c.get_game_object(name)
-                        .map(|o| o.position.0 + BOOST_W < boost_cutoff)
-                        .unwrap_or(true)
-                })
-                .cloned()
-                .collect();
-            for name in &boosts_remove {
-                if let Some(obj) = c.get_game_object_mut(name) {
-                    obj.visible = false;
-                    obj.position = (-3600.0, -3600.0);
-                }
-            }
-            let boosts_rm_set: HashSet<&str> = boosts_remove.iter().map(|n| n.as_str()).collect();
-            s.boost_live.retain(|n| !boosts_rm_set.contains(n.as_str()));
-            for name in boosts_remove {
-                s.boost_free.push(name);
             }
 
             // ── Cull coins behind the player ──────────────────────────────────
@@ -1362,6 +1481,28 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             s.flip_live.retain(|n| !flips_rm_set.contains(n.as_str()));
             for name in flips_remove {
                 s.flip_free.push(name);
+            }
+
+            // ── Cull score x2 pickups behind the player ─────────────────────
+            let score_x2_cutoff = s.px - VW * 1.5;
+            let score_x2_remove: Vec<String> = s.score_x2_live.iter()
+                .filter(|name| {
+                    c.get_game_object(name)
+                        .map(|o| o.position.0 + SCORE_X2_W < score_x2_cutoff)
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect();
+            for name in &score_x2_remove {
+                if let Some(obj) = c.get_game_object_mut(name) {
+                    obj.visible = false;
+                    obj.position = (-3850.0, -3850.0);
+                }
+            }
+            let score_x2_rm_set: HashSet<&str> = score_x2_remove.iter().map(|n| n.as_str()).collect();
+            s.score_x2_live.retain(|n| !score_x2_rm_set.contains(n.as_str()));
+            for name in score_x2_remove {
+                s.score_x2_free.push(name);
             }
 
             // ── Cull gates behind the player ─────────────────────────────────
@@ -1698,44 +1839,6 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
 
-            // ── Speed boost collection (phase through) ───────────────────────
-            let player_left   = s.px - PLAYER_R;
-            let player_right  = s.px + PLAYER_R;
-            let player_top    = s.py - PLAYER_R;
-            let player_bottom = s.py + PLAYER_R;
-            let mut hit_boost: Option<String> = None;
-            for name in &s.boost_live {
-                if let Some(obj) = c.get_game_object(name) {
-                    let bl = obj.position.0;
-                    let br = obj.position.0 + BOOST_W;
-                    let bt = obj.position.1;
-                    let bb = obj.position.1 + BOOST_H;
-                    if player_right > bl && player_left < br && player_bottom > bt && player_top < bb {
-                        hit_boost = Some(name.clone());
-                        break;
-                    }
-                }
-            }
-            if let Some(name) = hit_boost {
-                s.vx += BOOST_VX;
-                s.vy += BOOST_VY;
-                s.boost_charge = (s.boost_charge + BOOST_CHARGE_PER_PICKUP).min(1.0);
-                s.boost_live.retain(|n| n != &name);
-                s.boost_free.push(name.clone());
-                s.glow_flashes.push(("player".to_string(), 10));
-                drop(s);
-
-                if let Some(obj) = c.get_game_object_mut(&name) {
-                    obj.visible = false;
-                    obj.position = (-3600.0, -3600.0);
-                }
-                if let Some(obj) = c.get_game_object_mut("player") {
-                    obj.set_glow(GlowConfig { color: Color(120, 255, 140, 220), width: 14.0 });
-                }
-
-                s = st.lock().unwrap();
-            }
-
             // ── Gravity flip pickup ──────────────────────────────────────────
             let player_left   = s.px - PLAYER_R;
             let player_right  = s.px + PLAYER_R;
@@ -1791,9 +1894,9 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                         s.live_hooks.iter().map(|n| (n.clone(), HOOK_R * 2.0))
                         .chain(s.pad_live.iter().map(|n| (n.clone(), PAD_H)))
                         .chain(s.spinner_live.iter().map(|n| (n.clone(), SPINNER_H)))
-                        .chain(s.boost_live.iter().map(|n| (n.clone(), BOOST_H)))
                         .chain(s.coin_live.iter().map(|n| (n.clone(), COIN_R * 2.0)))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), FLIP_H)))
+                        .chain(s.score_x2_live.iter().map(|n| (n.clone(), SCORE_X2_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), GATE_TOP_SEG_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), GATE_BOT_SEG_H)))
                         .collect();
@@ -1836,9 +1939,9 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                         s.live_hooks.iter().map(|n| (n.clone(), HOOK_R * 2.0))
                         .chain(s.pad_live.iter().map(|n| (n.clone(), PAD_H)))
                         .chain(s.spinner_live.iter().map(|n| (n.clone(), SPINNER_H)))
-                        .chain(s.boost_live.iter().map(|n| (n.clone(), BOOST_H)))
                         .chain(s.coin_live.iter().map(|n| (n.clone(), COIN_R * 2.0)))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), FLIP_H)))
+                        .chain(s.score_x2_live.iter().map(|n| (n.clone(), SCORE_X2_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), GATE_TOP_SEG_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), GATE_BOT_SEG_H)))
                         .collect();
@@ -1859,6 +1962,47 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     s = st.lock().unwrap();
                 }
+            }
+
+            // ── Score x2 pickup (5s timer refresh) ─────────────────────────
+            let player_left   = s.px - PLAYER_R;
+            let player_right  = s.px + PLAYER_R;
+            let player_top    = s.py - PLAYER_R;
+            let player_bottom = s.py + PLAYER_R;
+            let mut hit_score_x2: Option<String> = None;
+            for name in &s.score_x2_live {
+                if let Some(obj) = c.get_game_object(name) {
+                    let xl = obj.position.0;
+                    let xr = obj.position.0 + SCORE_X2_W;
+                    let xt = obj.position.1;
+                    let xb = obj.position.1 + SCORE_X2_H;
+                    if player_right > xl && player_left < xr && player_bottom > xt && player_top < xb {
+                        hit_score_x2 = Some(name.clone());
+                        break;
+                    }
+                }
+            }
+            if let Some(name) = hit_score_x2 {
+                s.score_x2_timer = SCORE_X2_DURATION;
+                s.score_x2_live.retain(|n| n != &name);
+                s.score_x2_free.push(name.clone());
+                s.glow_flashes.push(("player".to_string(), 12));
+                drop(s);
+
+                if let Some(obj) = c.get_game_object_mut(&name) {
+                    obj.visible = false;
+                    obj.position = (-3850.0, -3850.0);
+                }
+                if let Some(obj) = c.get_game_object_mut("player") {
+                    obj.set_glow(GlowConfig { color: Color(255, 220, 120, 220), width: 14.0 });
+                }
+
+                s = st.lock().unwrap();
+            }
+
+            // Score x2 countdown
+            if s.score_x2_timer > 0 {
+                s.score_x2_timer -= 1;
             }
 
             // ── Coin magnet pull (radius + latch) ───────────────────────────
@@ -1936,7 +2080,8 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
             if let Some(name) = hit_coin {
-                s.score = s.score.saturating_add(COIN_SCORE);
+                let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+                s.score = s.score.saturating_add(COIN_SCORE.saturating_mul(score_mult));
                 s.coin_count = s.coin_count.saturating_add(1);
                 s.coin_live.retain(|n| n != &name);
                 s.coin_magnet_locked.retain(|n| n != &name);
@@ -2106,6 +2251,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                                 image: circle_img(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2).into(),
                                 color: None,
                             });
+                            obj.clear_glow();
                         }
                     }
                     // Set new highlight
@@ -2116,6 +2262,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                                 image: circle_img(HOOK_R as u32, C_HOOK_NEAR.0, C_HOOK_NEAR.1, C_HOOK_NEAR.2).into(),
                                 color: None,
                             });
+                            obj.set_glow(GlowConfig { color: Color(255, 170, 80, 220), width: 10.0 });
                         }
                     }
                     prev_nearest_hook = cur_nearest;
@@ -2123,20 +2270,24 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
             }
 
             // ── Update HUD ────────────────────────────────────────────────────
-            let dist_fill = { st.lock().unwrap().distance / 40000.0 }.min(1.0);
+            let dist_fill = {
+                let distance_now = st.lock().unwrap().distance;
+                let zone_idx_now = zone_index_for_distance(distance_now);
+                let zone_start = zone_idx_now as f32 * ZONE_DISTANCE_STEP;
+                ((distance_now - zone_start) / ZONE_DISTANCE_STEP).clamp(0.0, 1.0)
+            };
             if let Some(obj) = c.get_game_object_mut("dist_bar") {
-                obj.position = (cam_x + VW - 580.0, 50.0);
+                obj.position = (cam_x + VW * 0.5 - 460.0, 30.0);
                 obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (500.0, 40.0), 0.0),
-                    image: bar_img(500, 40, dist_fill, 80, 220, 160).into(),
+                    shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
+                    image: bar_img(920, 48, dist_fill, 80, 220, 160).into(),
                     color: None,
                 });
             }
-            let (coins, boost_fill, momentum_now, gravity_flipped, y_now, x_now, flip_timer_val) = {
+            let (coins, momentum_now, gravity_flipped, y_now, x_now, flip_timer_val) = {
                 let ss = st.lock().unwrap();
                 (
                     ss.coin_count,
-                    ss.boost_charge,
                     (ss.vx*ss.vx + ss.vy*ss.vy).sqrt(),
                     ss.gravity_dir < 0.0,
                     ss.py,
@@ -2152,16 +2303,8 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                     color: None,
                 });
             }
-            if let Some(obj) = c.get_game_object_mut("boost_meter") {
-                obj.position = (cam_x + 30.0, 128.0);
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (320.0, 34.0), 0.0),
-                    image: bar_img(320, 34, boost_fill, 120, 255, 140).into(),
-                    color: None,
-                });
-            }
             if let Some(obj) = c.get_game_object_mut("momentum_counter") {
-                obj.position = (cam_x + 30.0, 176.0);
+                obj.position = (cam_x + 30.0, 128.0);
                 obj.set_image(Image {
                     shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
                     image: momentum_counter_img(momentum_now).into(),
@@ -2169,7 +2312,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 });
             }
             if let Some(obj) = c.get_game_object_mut("gravity_indicator") {
-                obj.position = (cam_x + 30.0, 248.0);
+                obj.position = (cam_x + 30.0, 200.0);
                 obj.set_image(Image {
                     shape: ShapeType::Rectangle(0.0, (220.0, 60.0), 0.0),
                     image: gravity_indicator_img(gravity_flipped, true).into(),
@@ -2177,7 +2320,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 });
             }
             if let Some(obj) = c.get_game_object_mut("y_meter") {
-                obj.position = (cam_x + 30.0, 320.0);
+                obj.position = (cam_x + 30.0, 272.0);
                 obj.set_image(Image {
                     shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
                     image: y_counter_img(y_now).into(),
@@ -2185,7 +2328,7 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                 });
             }
             if let Some(obj) = c.get_game_object_mut("x_meter") {
-                obj.position = (cam_x + 30.0, 392.0);
+                obj.position = (cam_x + 30.0, 344.0);
                 obj.set_image(Image {
                     shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
                     image: x_counter_img(x_now).into(),
@@ -2247,13 +2390,13 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
                         s.live_hooks.iter().map(|n| (n.clone(), (HOOK_R*2.0, HOOK_R*2.0)))
                         .chain(s.pad_live.iter().map(|n| (n.clone(), (PAD_W, PAD_H))))
                         .chain(s.spinner_live.iter().map(|n| (n.clone(), (SPINNER_W, SPINNER_H))))
-                        .chain(s.boost_live.iter().map(|n| (n.clone(), (BOOST_W, BOOST_H))))
                         .chain(s.coin_live.iter().map(|n| (n.clone(), (COIN_R*2.0, COIN_R*2.0))))
                         .chain(std::iter::once((
                             "coin_magnet_radius".to_string(),
                             (COIN_MAGNET_RADIUS * 2.0, COIN_MAGNET_RADIUS * 2.0),
                         )))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
+                        .chain(s.score_x2_live.iter().map(|n| (n.clone(), (SCORE_X2_W, SCORE_X2_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
                         .collect();
@@ -2301,6 +2444,12 @@ fn build_game_scene(ctx: &mut Context) -> Scene {
         canvas.set_var("game_tick_registered", true);
         } // end if !tick_registered
     })
+    .on_exit(|canvas| {
+        canvas.run(Action::DetachEmitter {
+            emitter_name: PLAYER_TRAIL_EMITTER_NAME.to_string(),
+        });
+        canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2308,7 +2457,7 @@ pub struct App;
 
 impl App {
     fn new(ctx: &mut Context, _assets: Assets) -> impl Drawable {
-        let mut canvas = Canvas::new(ctx, CanvasMode::Landscape);
+        let mut canvas = Canvas::new(ctx, CanvasMode::LandscapeFill);
         canvas.add_scene(build_menu_scene(ctx));
         canvas.add_scene(build_game_scene(ctx));
         canvas.add_scene(build_gameover_scene(ctx));

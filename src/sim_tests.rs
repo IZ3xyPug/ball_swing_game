@@ -88,10 +88,6 @@ fn cached_images_are_reused() {
     let s2 = spinner_image_cached();
     assert!(std::sync::Arc::ptr_eq(&s1, &s2));
 
-    let b1 = boost_image_cached();
-    let b2 = boost_image_cached();
-    assert!(std::sync::Arc::ptr_eq(&b1, &b2));
-
     let f1 = flip_image_cached();
     let f2 = flip_image_cached();
     assert!(std::sync::Arc::ptr_eq(&f1, &f2));
@@ -108,7 +104,6 @@ fn startup_cache_smoke_budget() {
     for _ in 0..50_000 {
         let _ = pad_image_cached();
         let _ = spinner_image_cached();
-        let _ = boost_image_cached();
         let _ = flip_image_cached();
         let _ = gate_image_cached();
     }

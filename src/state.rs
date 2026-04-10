@@ -63,7 +63,6 @@ pub struct State {
     pub distance:   f32,
     pub score:      u32,
     pub coin_count: u32,
-    pub boost_charge: f32,
     pub gravity_dir: f32,
 
     pub seed:        u64,
@@ -85,13 +84,10 @@ pub struct State {
     pub spinner_live:      Vec<String>,
     pub spinner_free:      Vec<String>,
     pub spinner_rightmost: f32,
+    pub spinner_origins:   Vec<(String, f32, f32, f32, f32)>,
     pub spinners_enabled:  bool,
     pub spinner_spin_enabled: bool,
     pub spinner_hit_cooldown: u8,
-
-    pub boost_live:      Vec<String>,
-    pub boost_free:      Vec<String>,
-    pub boost_rightmost: f32,
 
     pub coin_live:      Vec<String>,
     pub coin_free:      Vec<String>,
@@ -103,6 +99,11 @@ pub struct State {
     pub flip_free:      Vec<String>,
     pub flip_rightmost: f32,
     pub flip_timer:     u32,
+
+    pub score_x2_live:      Vec<String>,
+    pub score_x2_free:      Vec<String>,
+    pub score_x2_rightmost: f32,
+    pub score_x2_timer:     u32,
 
     pub gate_live:      Vec<String>,
     pub gate_free:      Vec<String>,

@@ -134,29 +134,6 @@ pub fn spinner_img(w: u32, h: u32) -> image::RgbaImage {
 }
 cached_image!(spinner_image_cached, spinner_img(SPINNER_W as u32, SPINNER_H as u32));
 
-pub fn boost_img(w: u32, h: u32) -> image::RgbaImage {
-    let mut img = image::RgbaImage::new(w, h);
-    let cx = w as f32 * 0.5;
-    let cy = h as f32 * 0.5;
-    let outer = w.min(h) as f32 * 0.50;
-    let inner = w.min(h) as f32 * 0.28;
-    for py in 0..h { for px in 0..w {
-        let dx = px as f32 - cx;
-        let dy = py as f32 - cy;
-        let d = (dx*dx + dy*dy).sqrt();
-        let pxl = if d <= outer && d >= inner {
-            image::Rgba([C_BOOST.0, C_BOOST.1, C_BOOST.2, 235])
-        } else if d < inner {
-            image::Rgba([30, 130, 75, 140])
-        } else {
-            image::Rgba([0, 0, 0, 0])
-        };
-        img.put_pixel(px, py, pxl);
-    }}
-    img
-}
-cached_image!(boost_image_cached, boost_img(BOOST_W as u32, BOOST_H as u32));
-
 pub fn flip_img(w: u32, h: u32) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
     for py in 0..h { for px in 0..w {
@@ -198,32 +175,72 @@ pub fn pause_overlay_img() -> image::RgbaImage {
     let w = VW as u32;
     let h = VH as u32;
     let mut img = image::RgbaImage::new(w, h);
-    for py in 0..h { for px in 0..w {
-        img.put_pixel(px, py, image::Rgba([0, 0, 0, 160]));
-    }}
-    let letters: &[&[(u32, u32, u32, u32)]] = &[
-        &[(0,0,10,50), (0,0,30,10), (30,0,10,30), (0,20,30,10)],       // P
-        &[(0,0,10,50), (0,0,30,10), (30,0,10,50), (0,24,30,10)],       // A
-        &[(0,0,10,50), (0,40,30,10), (30,0,10,50)],                     // U
-        &[(0,0,40,10), (0,0,10,30), (0,20,40,10), (30,20,10,30), (0,40,40,10)], // S
-        &[(0,0,40,10), (0,0,10,50), (0,20,30,10), (0,40,40,10)],       // E
-        &[(0,0,10,50), (0,0,30,10), (30,10,10,30), (0,40,30,10)],      // D
-    ];
-    let letter_w = 50u32;
-    let scale = 3u32;
-    let total_w = letters.len() as u32 * letter_w * scale;
-    let base_x = w / 2 - total_w / 2;
-    let base_y = h / 2 - 25 * scale;
-    let col = image::Rgba([255, 255, 255, 240]);
-    for (li, segs) in letters.iter().enumerate() {
-        let lx = base_x + li as u32 * letter_w * scale;
-        for &(sx, sy, sw, sh) in *segs {
-            for py in 0..(sh * scale) { for px in 0..(sw * scale) {
-                let fx = lx + sx * scale + px;
-                let fy = base_y + sy * scale + py;
-                if fx < w && fy < h { img.put_pixel(fx, fy, col); }
-            }}
+
+    let panel_w = (w as f32 * 0.40) as u32;
+    let panel_x = (w - panel_w) / 2;
+    let panel_right = panel_x + panel_w;
+
+    // Dark translucent side columns (flush against the center panel).
+    draw_rect(&mut img, 0, 0, panel_x, h, [0, 0, 0, 170]);
+    draw_rect(&mut img, panel_right, 0, w - panel_right, h, [0, 0, 0, 170]);
+
+    // White center panel
+    draw_rect(&mut img, panel_x, 0, panel_w, h, [250, 250, 250, 255]);
+    draw_rect(&mut img, panel_x, 0, 3, h, [28, 28, 28, 255]);
+    draw_rect(&mut img, panel_x + panel_w - 3, 0, 3, h, [28, 28, 28, 255]);
+
+    // Horizontal option rails in the center panel
+    let rail_w = (panel_w as f32 * 0.74) as u32;
+    let rail_x = panel_x + (panel_w - rail_w) / 2;
+    draw_rect(&mut img, rail_x, h / 2 - 180, rail_w, 4, [28, 28, 28, 240]);
+    draw_rect(&mut img, rail_x, h / 2 - 40, rail_w, 4, [28, 28, 28, 240]);
+    draw_rect(&mut img, rail_x, h / 2 + 100, rail_w, 4, [28, 28, 28, 240]);
+    draw_rect(&mut img, rail_x, h / 2 + 240, rail_w, 4, [28, 28, 28, 240]);
+
+    // Pixel-styled black text: PAUSED / RESUME / MENU / SETTINGS
+    let col = [18, 18, 18, 255];
+    let scale = 4u32;
+
+    // PAUSED
+    draw_word(&mut img, panel_x + panel_w / 2 - 250, h / 2 - 300, scale, "PAUSED", col);
+    // Menu options
+    draw_word(&mut img, panel_x + panel_w / 2 - 170, h / 2 - 150, scale, "RESUME", col);
+    draw_word(&mut img, panel_x + panel_w / 2 - 130, h / 2 - 10, scale, "MENU", col);
+    draw_word(&mut img, panel_x + panel_w / 2 - 190, h / 2 + 130, scale, "SETTINGS", col);
+
+    img
+}
+
+fn draw_word(img: &mut image::RgbaImage, x: u32, y: u32, scale: u32, text: &str, color: [u8; 4]) {
+    let mut cx = x;
+    for ch in text.bytes() {
+        draw_block_char(img, cx, y, scale, ch, color);
+        cx += 6 * scale;
+    }
+}
+
+fn draw_block_char(img: &mut image::RgbaImage, x: u32, y: u32, s: u32, ch: u8, c: [u8; 4]) {
+    let glyph: [u8; 25] = match ch {
+        b'A' => [0,1,1,1,0, 1,0,0,0,1, 1,1,1,1,1, 1,0,0,0,1, 1,0,0,0,1],
+        b'D' => [1,1,1,1,0, 1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 1,1,1,1,0],
+        b'E' => [1,1,1,1,1, 1,0,0,0,0, 1,1,1,1,0, 1,0,0,0,0, 1,1,1,1,1],
+        b'G' => [0,1,1,1,1, 1,0,0,0,0, 1,0,1,1,1, 1,0,0,0,1, 0,1,1,1,1],
+        b'I' => [1,1,1,1,1, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 1,1,1,1,1],
+        b'M' => [1,0,0,0,1, 1,1,0,1,1, 1,0,1,0,1, 1,0,0,0,1, 1,0,0,0,1],
+        b'N' => [1,0,0,0,1, 1,1,0,0,1, 1,0,1,0,1, 1,0,0,1,1, 1,0,0,0,1],
+        b'P' => [1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0, 1,0,0,0,0, 1,0,0,0,0],
+        b'R' => [1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0, 1,0,1,0,0, 1,0,0,1,0],
+        b'S' => [0,1,1,1,1, 1,0,0,0,0, 0,1,1,1,0, 0,0,0,0,1, 1,1,1,1,0],
+        b'T' => [1,1,1,1,1, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0],
+        b'U' => [1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 0,1,1,1,0],
+        b' ' => [0; 25],
+        _ => [0; 25],
+    };
+    for gy in 0..5u32 {
+        for gx in 0..5u32 {
+            if glyph[(gy * 5 + gx) as usize] == 1 {
+                draw_rect(img, x + gx * s, y + gy * s, s, s, c);
+            }
         }
     }
-    img
 }
