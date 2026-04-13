@@ -212,20 +212,20 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
 
             if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
                 if let Some(obj) = canvas.get_game_object_mut("menu_title_text") {
-                    obj.set_text(ui_text_spec("ball_swing", &font, 74.0, Color(0, 0, 0, 255), 1700.0));
+                    obj.set_drawable(Box::new(ui_text_spec("ball_swing", &font, 74.0, Color(0, 0, 0, 255), 1700.0)));
                 }
                 if let Some(obj) = canvas.get_game_object_mut("menu_sub_text") {
-                    obj.set_text(ui_text_spec("SELECT   MODE", &font, 22.0, Color(180, 220, 255, 220), 600.0));
+                    obj.set_drawable(Box::new(ui_text_spec("SELECT   MODE", &font, 22.0, Color(180, 220, 255, 220), 600.0)));
                 }
                 let (mode_name, mode_desc) = GAME_MODES[0];
                 if let Some(obj) = canvas.get_game_object_mut("menu_mode_name_text") {
-                    obj.set_text(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0));
+                    obj.set_drawable(Box::new(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0)));
                 }
                 if let Some(obj) = canvas.get_game_object_mut("menu_mode_desc_text") {
-                    obj.set_text(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0));
+                    obj.set_drawable(Box::new(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0)));
                 }
                 if let Some(obj) = canvas.get_game_object_mut("menu_start_text") {
-                    obj.set_text(ui_text_spec("SPACE   \u{2022}   CLICK   TO   PLAY", &font, 24.0, Color(0, 0, 0, 255), 540.0));
+                    obj.set_drawable(Box::new(ui_text_spec("SPACE   \u{2022}   CLICK   TO   PLAY", &font, 24.0, Color(0, 0, 0, 255), 540.0)));
                 }
             }
 
@@ -256,10 +256,10 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                             let (mode_name, mode_desc) = GAME_MODES[idx];
                             if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
                                 if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
-                                    obj.set_text(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0));
+                                    obj.set_drawable(Box::new(ui_text_spec(mode_name, &font, 48.0, Color(200, 240, 255, 255), 640.0)));
                                 }
                                 if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
-                                    obj.set_text(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0));
+                                    obj.set_drawable(Box::new(ui_text_spec(mode_desc, &font, 22.0, Color(140, 190, 240, 200), 800.0)));
                                 }
                             }
                         }
@@ -477,20 +477,20 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
                 }
 
                 if let Some(obj) = canvas.get_game_object_mut("go_title_text") {
-                    obj.set_text(ui_text_spec("YOU FELL", &font, 74.0, Color(0, 0, 0, 255), 1300.0));
+                    obj.set_drawable(Box::new(ui_text_spec("YOU FELL", &font, 74.0, Color(0, 0, 0, 255), 1300.0)));
                 }
 
                 if let Some(obj) = canvas.get_game_object_mut("go_retry_text") {
-                    obj.set_text(ui_text_spec("RETRY", &font, 54.0, Color(255, 255, 255, 255), 520.0));
+                    obj.set_drawable(Box::new(ui_text_spec("RETRY", &font, 54.0, Color(255, 255, 255, 255), 520.0)));
                 }
 
                 if let Some(obj) = canvas.get_game_object_mut("go_menu_text") {
-                    obj.set_text(ui_text_spec("MENU", &font, 54.0, Color(255, 255, 255, 255), 520.0));
+                    obj.set_drawable(Box::new(ui_text_spec("MENU", &font, 54.0, Color(255, 255, 255, 255), 520.0)));
                 }
 
                 if let Some(obj) = canvas.get_game_object_mut("go_stats_text") {
                     let stats_line = format!("DISTANCE  {:05}\nCOINS  {:03}", last_distance as i32, last_coins);
-                    obj.set_text(ui_text_spec(&stats_line, &font, 64.0, Color(255, 255, 255, 255), 1000.0));
+                    obj.set_drawable(Box::new(ui_text_spec(&stats_line, &font, 64.0, Color(255, 255, 255, 255), 1000.0)));
                 }
             }
 

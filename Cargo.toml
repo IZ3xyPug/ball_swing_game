@@ -10,7 +10,7 @@ authors = ["Caleb Couch <caleb@orange.me>", "Ella Couch <ella@orange.me>"]
 [dependencies]
 image = "0.25.6"
 
-ramp = { package = "ramp2", version = "0.1.3" }
+ramp = { package = "ramp2", path = "../ramp" }
 
 quartz = { path = "../quartz"}
 rodio = "0.21.1"

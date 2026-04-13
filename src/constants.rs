@@ -117,8 +117,8 @@ pub const C_SKY_TOP:  (u8,u8,u8) = (15,  20,  45 );
 pub const C_SKY_BOT:  (u8,u8,u8) = (30,  50,  90 );
 pub const C_ZONE_PURPLE_TOP:(u8,u8,u8) = (42,  16,  70 );
 pub const C_ZONE_PURPLE_BOT:(u8,u8,u8) = (88,  36, 128 );
-pub const C_ZONE_BLACK_TOP: (u8,u8,u8) = (246, 206, 64);
-pub const C_ZONE_BLACK_BOT: (u8,u8,u8) = (255, 242, 140);
+pub const C_ZONE_BLACK_TOP: (u8,u8,u8) = (220, 130, 35);
+pub const C_ZONE_BLACK_BOT: (u8,u8,u8) = (255, 175, 80);
 pub const C_PLAYER:   (u8,u8,u8) = (80,  220, 160);
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
@@ -153,7 +153,7 @@ pub const START_HOOK_X: f32 = SPAWN_X + 160.0;
 pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 
 // ── Asset paths ──────────────────────────────────────────────────────────────
-pub const ASSET_COIN_GIF: &str = "assets/coin.gif";
-pub const ASSET_SCORE_X2_GIF: &str = "assets/2x.gif";
-pub const ASSET_BGM_TRACK: &str = "assets/synful_reach.mp3";
-pub const ASSET_SWOOSH_SFX: &str = "assets/swipe.mp3";
+pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin.gif");
+pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
+pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
+pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");

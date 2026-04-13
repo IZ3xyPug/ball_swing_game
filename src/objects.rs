@@ -133,18 +133,20 @@ pub fn make_gate_segment(
     )
 }
 
-pub fn ui_text_spec(text: &str, font: &Font, font_size: f32, color: Color, width: f32) -> TextSpec {
-    let _ = width;
-    TextSpec::new(vec![
-        SpanSpec {
-            text: text.to_string(),
+pub fn ui_text_spec(text: &str, font: &Font, font_size: f32, color: Color, width: f32) -> Text {
+    Text::new(
+        vec![Span::new(
+            text.to_string(),
             font_size,
-            line_height: None,
-            font: font.clone(),
+            Some(font_size * 1.25),
+            Arc::new(font.clone()),
             color,
-            letter_spacing: 0.0,
-        }
-    ], Align::Center)
+            0.0,
+        )],
+        Some(width),
+        Align::Center,
+        None,
+    )
 }
 
 pub fn circle_hits_obb(
