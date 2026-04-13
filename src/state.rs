@@ -105,6 +105,11 @@ pub struct State {
     pub score_x2_rightmost: f32,
     pub score_x2_timer:     u32,
 
+    pub zero_g_live:      Vec<String>,
+    pub zero_g_free:      Vec<String>,
+    pub zero_g_rightmost: f32,
+    pub zero_g_timer:     u32,
+
     pub gate_live:      Vec<String>,
     pub gate_free:      Vec<String>,
     pub gate_rightmost: f32,

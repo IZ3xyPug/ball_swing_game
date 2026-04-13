@@ -228,6 +228,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     );
     flip_timer_hud.visible = false;
 
+    let mut zero_g_timer_hud = GameObject::new_rect(
+        ctx, "zero_g_timer".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+            image: flip_timer_img(ZERO_G_DURATION, ZERO_G_DURATION).into(),
+            color: None,
+        }),
+        (360.0, 84.0), (VW * 0.5 - 180.0, 556.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    zero_g_timer_hud.visible = false;
+
     let mut coin_magnet_radius = {
         let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;
         let mut img = image::RgbaImage::new(d, d);
@@ -286,6 +298,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         .with_object("x_meter", x_meter)
         .with_object("combo_flash",  combo_flash)
         .with_object("flip_timer", flip_timer_hud)
+        .with_object("zero_g_timer", zero_g_timer_hud)
         .with_object("coin_magnet_radius", coin_magnet_radius);
 
     let mut starter_names: Vec<String> = Vec::new();
@@ -376,6 +389,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         }
         obj.visible = false;
         score_x2_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // Preallocate zero-g pickup pool
+    let mut zero_g_free: Vec<String> = Vec::new();
+    for i in 0..ZERO_G_POOL_SIZE {
+        let id = format!("zero_g_{i}");
+        let mut obj = make_zero_g(ctx, &id, -3875.0, -3875.0);
+        obj.visible = false;
+        zero_g_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
 
@@ -597,6 +620,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             score_x2_free:      score_x2_free.clone(),
             score_x2_rightmost: SPAWN_X + VW * 1.35,
             score_x2_timer:     0,
+            zero_g_live:      Vec::new(),
+            zero_g_free:      zero_g_free.clone(),
+            zero_g_rightmost: SPAWN_X + VW * 1.6,
+            zero_g_timer:     0,
             gate_live:      Vec::new(),
             gate_free:      gate_free.clone(),
             gate_rightmost: SPAWN_X + VW * 1.0,
@@ -842,6 +869,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         )))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
                         .chain(s.score_x2_live.iter().map(|n| (n.clone(), (SCORE_X2_W, SCORE_X2_H))))
+                        .chain(s.zero_g_live.iter().map(|n| (n.clone(), (ZERO_G_W, ZERO_G_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
                         .collect();
@@ -1278,6 +1306,34 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 s = st.lock().unwrap();
             }
 
+            // ── Spawn zero-g pickups ahead of the player ───────────────────
+            let mut zero_g_spawned_this_tick = 0usize;
+            while zero_g_spawned_this_tick < ZERO_G_SPAWN_BUDGET_PER_TICK
+                && s.zero_g_rightmost < s.px + GEN_AHEAD
+                && !s.zero_g_free.is_empty()
+            {
+                let gap = lcg_range(&mut s.seed, ZERO_G_GAP_MIN, ZERO_G_GAP_MAX);
+                let zg_x = s.zero_g_rightmost + gap;
+                let raw_zg_y = lcg_range(&mut s.seed, VH * 0.24, VH * 0.62);
+                let zg_y = if s.gravity_dir < 0.0 {
+                    VH - raw_zg_y - ZERO_G_H
+                } else {
+                    raw_zg_y
+                };
+                s.zero_g_rightmost = zg_x;
+                let Some(id) = s.zero_g_free.pop() else { break; };
+                s.zero_g_live.push(id.clone());
+                zero_g_spawned_this_tick += 1;
+                drop(s);
+
+                if let Some(obj) = c.get_game_object_mut(&id) {
+                    obj.position = (zg_x, zg_y);
+                    obj.visible = true;
+                }
+
+                s = st.lock().unwrap();
+            }
+
             // ── Spawn flappy-style gate obstacles ahead of the player ───────
             // Gap obstacles disabled: procedural gate clusters removed from gameplay loop.
             let mut gates_spawned_this_tick = 0usize;
@@ -1599,6 +1655,28 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 s.score_x2_free.push(name);
             }
 
+            // ── Cull zero-g pickups behind the player ──────────────────────
+            let zero_g_cutoff = s.px - VW * 1.5;
+            let zero_g_remove: Vec<String> = s.zero_g_live.iter()
+                .filter(|name| {
+                    c.get_game_object(name)
+                        .map(|o| o.position.0 + ZERO_G_W < zero_g_cutoff)
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect();
+            for name in &zero_g_remove {
+                if let Some(obj) = c.get_game_object_mut(name) {
+                    obj.visible = false;
+                    obj.position = (-3875.0, -3875.0);
+                }
+            }
+            let zero_g_rm_set: HashSet<&str> = zero_g_remove.iter().map(|n| n.as_str()).collect();
+            s.zero_g_live.retain(|n| !zero_g_rm_set.contains(n.as_str()));
+            for name in zero_g_remove {
+                s.zero_g_free.push(name);
+            }
+
             // ── Cull gates behind the player ─────────────────────────────────
             let gate_cutoff = s.px - VW * 1.5;
             let gates_remove: Vec<String> = s.gate_live.iter()
@@ -1688,6 +1766,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                 let radial_v = s.vx * nx + s.vy * ny;
                 let mut tangent_v = s.vx * tx + s.vy * ty;
+                let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
 
                 // Keep the rope taut and remove radial velocity so momentum stays on-arc.
                 s.px = s.hook_x + nx * s.rope_len;
@@ -1696,7 +1775,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 s.vy -= radial_v * ny * SWING_TENSION;
 
                 // Apply only tangential gravity while hooked; allows full loops if fast enough.
-                tangent_v += GRAVITY * s.gravity_dir * ty;
+                tangent_v += GRAVITY * gravity_scale * s.gravity_dir * ty;
                 tangent_v *= SWING_DRAG;
                 s.vx = tx * tangent_v;
                 s.vy = ty * tangent_v;
@@ -1718,7 +1797,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 s = st.lock().unwrap();
             } else {
                 // Free-fall gravity while not attached.
-                s.vy += GRAVITY * s.gravity_dir;
+                let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+                s.vy += GRAVITY * gravity_scale * s.gravity_dir;
             }
 
             // Clamp max speed
@@ -2000,6 +2080,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         .chain(s.coin_live.iter().map(|n| (n.clone(), COIN_R * 2.0)))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), FLIP_H)))
                         .chain(s.score_x2_live.iter().map(|n| (n.clone(), SCORE_X2_H)))
+                        .chain(s.zero_g_live.iter().map(|n| (n.clone(), ZERO_G_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), GATE_TOP_SEG_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), GATE_BOT_SEG_H)))
                         .collect();
@@ -2045,6 +2126,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         .chain(s.coin_live.iter().map(|n| (n.clone(), COIN_R * 2.0)))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), FLIP_H)))
                         .chain(s.score_x2_live.iter().map(|n| (n.clone(), SCORE_X2_H)))
+                        .chain(s.zero_g_live.iter().map(|n| (n.clone(), ZERO_G_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), GATE_TOP_SEG_H)))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), GATE_BOT_SEG_H)))
                         .collect();
@@ -2106,6 +2188,46 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // Score x2 countdown
             if s.score_x2_timer > 0 {
                 s.score_x2_timer -= 1;
+            }
+
+            // ── Zero-g pickup (8s timer refresh) ───────────────────────────
+            let player_left   = s.px - PLAYER_R;
+            let player_right  = s.px + PLAYER_R;
+            let player_top    = s.py - PLAYER_R;
+            let player_bottom = s.py + PLAYER_R;
+            let mut hit_zero_g: Option<String> = None;
+            for name in &s.zero_g_live {
+                if let Some(obj) = c.get_game_object(name) {
+                    let zl = obj.position.0;
+                    let zr = obj.position.0 + ZERO_G_W;
+                    let zt = obj.position.1;
+                    let zb = obj.position.1 + ZERO_G_H;
+                    if player_right > zl && player_left < zr && player_bottom > zt && player_top < zb {
+                        hit_zero_g = Some(name.clone());
+                        break;
+                    }
+                }
+            }
+            if let Some(name) = hit_zero_g {
+                s.zero_g_timer = ZERO_G_DURATION;
+                s.zero_g_live.retain(|n| n != &name);
+                s.zero_g_free.push(name.clone());
+                s.glow_flashes.push(("player".to_string(), 14));
+                drop(s);
+
+                if let Some(obj) = c.get_game_object_mut(&name) {
+                    obj.visible = false;
+                    obj.position = (-3875.0, -3875.0);
+                }
+                if let Some(obj) = c.get_game_object_mut("player") {
+                    obj.set_glow(GlowConfig { color: Color(135, 220, 255, 230), width: 16.0 });
+                }
+
+                s = st.lock().unwrap();
+            }
+
+            if s.zero_g_timer > 0 {
+                s.zero_g_timer -= 1;
             }
 
             // ── Coin magnet pull (radius + latch) ───────────────────────────
@@ -2397,7 +2519,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     color: None,
                 });
             }
-            let (coins, momentum_now, gravity_flipped, y_now, x_now, flip_timer_val) = {
+            let (coins, momentum_now, gravity_flipped, y_now, x_now, flip_timer_val, zero_g_timer_val) = {
                 let ss = st.lock().unwrap();
                 (
                     ss.coin_count,
@@ -2406,6 +2528,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     ss.py,
                     ss.px,
                     ss.flip_timer,
+                    ss.zero_g_timer,
                 )
             };
             if let Some(obj) = c.get_game_object_mut("coin_counter") {
@@ -2464,6 +2587,21 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
 
+            // Zero-g timer HUD — mirrors the gravity flip timer style
+            if let Some(obj) = c.get_game_object_mut("zero_g_timer") {
+                if zero_g_timer_val > 0 {
+                    obj.position = (cam_x + VW * 0.5 - 180.0, 556.0);
+                    obj.visible = true;
+                    obj.set_image(Image {
+                        shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+                        image: flip_timer_img(zero_g_timer_val, ZERO_G_DURATION).into(),
+                        color: None,
+                    });
+                } else {
+                    obj.visible = false;
+                }
+            }
+
             // Hide combo flash after 40 ticks
             if st.lock().unwrap().ticks % 40 == 0 {
                 c.run(Action::Hide { target: Target::name("combo_flash") });
@@ -2510,6 +2648,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         )))
                         .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
                         .chain(s.score_x2_live.iter().map(|n| (n.clone(), (SCORE_X2_W, SCORE_X2_H))))
+                        .chain(s.zero_g_live.iter().map(|n| (n.clone(), (ZERO_G_W, ZERO_G_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
                         .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
                         .collect();

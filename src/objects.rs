@@ -108,6 +108,24 @@ pub fn make_score_x2(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject 
     )
 }
 
+pub fn make_zero_g(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
+    GameObject::new_rect(
+        ctx,
+        id.into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (ZERO_G_W, ZERO_G_H), 0.0),
+            image: circle_img((ZERO_G_W * 0.5) as u32, 135, 220, 255).into(),
+            color: None,
+        }),
+        (ZERO_G_W, ZERO_G_H),
+        (x, y),
+        vec!["zero_g".into()],
+        (0.0, 0.0),
+        (1.0, 1.0),
+        0.0,
+    )
+}
+
 pub fn make_gate_segment(
     ctx: &mut Context,
     id: &str,
