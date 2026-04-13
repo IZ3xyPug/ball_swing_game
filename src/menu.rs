@@ -4,6 +4,8 @@ use crate::constants::*;
 use crate::images::*;
 use crate::objects::ui_text_spec;
 
+const MENU_UI_ANIM_FRAMES: i32 = 60;
+
 pub static GAME_MODES: &[(&str, &str)] = &[
     ("FREE ROAM", "SWING FREELY   \u{2022}   SANDBOX MODE"),
 ];
@@ -173,21 +175,44 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             let cam = Camera::new((VW, VH), (VW, VH));
             canvas.set_camera(cam);
 
-            // Start BGM while on menu so first transition into gameplay is smooth.
-            let bgm_started = matches!(canvas.get_var("bgm_started"), Some(Value::Bool(true)));
-            if !bgm_started {
-                canvas.play_sound_with(
-                    "assets/synful_reach.mp3",
-                    SoundOptions::new().volume(0.5).looping(true),
-                );
-                canvas.set_var("bgm_started", true);
+            // Slide menu UI in from the left on every menu entry.
+            let off = -VW;
+            if let Some(obj) = canvas.get_game_object_mut("menu_title") {
+                obj.position.0 = off + (VW/2.0 - 1700.0/2.0);
             }
+            if let Some(obj) = canvas.get_game_object_mut("menu_sub") {
+                obj.position.0 = off + (VW/2.0 - 600.0/2.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_mode_selector") {
+                obj.position.0 = off + (VW/2.0 - 400.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("start_btn") {
+                obj.position.0 = off + (VW/2.0 - 540.0/2.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_title_text") {
+                obj.position.0 = off + (VW * 0.5 - 850.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_sub_text") {
+                obj.position.0 = off + (VW * 0.5 - 300.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_mode_name_text") {
+                obj.position.0 = off + (VW * 0.5 - 320.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_mode_desc_text") {
+                obj.position.0 = off + (VW * 0.5 - 400.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_start_text") {
+                obj.position.0 = off + (VW * 0.5 - 270.0);
+            }
+            canvas.set_var("menu_ui_animating", true);
+            canvas.set_var("menu_ui_anim_frames", MENU_UI_ANIM_FRAMES);
+            canvas.set_var("menu_ui_anim_total", MENU_UI_ANIM_FRAMES);
 
             let selected = Arc::new(Mutex::new(0usize));
 
             if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
                 if let Some(obj) = canvas.get_game_object_mut("menu_title_text") {
-                    obj.set_text(ui_text_spec("KNIGHTS OF QUARTZ", &font, 74.0, Color(0, 0, 0, 255), 1700.0));
+                    obj.set_text(ui_text_spec("ball_swing", &font, 74.0, Color(0, 0, 0, 255), 1700.0));
                 }
                 if let Some(obj) = canvas.get_game_object_mut("menu_sub_text") {
                     obj.set_text(ui_text_spec("SELECT   MODE", &font, 22.0, Color(180, 220, 255, 220), 600.0));
@@ -241,6 +266,60 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     }
                 });
                 canvas.set_var("menu_key_registered", true);
+            }
+
+            let menu_anim_registered = matches!(canvas.get_var("menu_anim_registered"), Some(Value::Bool(true)));
+            if !menu_anim_registered {
+                canvas.on_update(|c| {
+                    if !c.is_scene("menu") { return; }
+                    if !matches!(c.get_var("menu_ui_animating"), Some(Value::Bool(true))) { return; }
+
+                    let mut remaining = c.get_i32("menu_ui_anim_frames").max(0);
+                    let total = c.get_i32("menu_ui_anim_total").max(1);
+                    if remaining <= 0 {
+                        c.set_var("menu_ui_animating", false);
+                        return;
+                    }
+
+                    remaining -= 1;
+                    let t = 1.0 - (remaining as f32 / total as f32);
+                    let ease = 1.0 - (1.0 - t).powi(3);
+                    let off = (1.0 - ease) * -VW;
+
+                    if let Some(obj) = c.get_game_object_mut("menu_title") {
+                        obj.position.0 = off + (VW/2.0 - 1700.0/2.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_sub") {
+                        obj.position.0 = off + (VW/2.0 - 600.0/2.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_mode_selector") {
+                        obj.position.0 = off + (VW/2.0 - 400.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("start_btn") {
+                        obj.position.0 = off + (VW/2.0 - 540.0/2.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_title_text") {
+                        obj.position.0 = off + (VW * 0.5 - 850.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_sub_text") {
+                        obj.position.0 = off + (VW * 0.5 - 300.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
+                        obj.position.0 = off + (VW * 0.5 - 320.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
+                        obj.position.0 = off + (VW * 0.5 - 400.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_start_text") {
+                        obj.position.0 = off + (VW * 0.5 - 270.0);
+                    }
+
+                    c.set_var("menu_ui_anim_frames", remaining);
+                    if remaining == 0 {
+                        c.set_var("menu_ui_animating", false);
+                    }
+                });
+                canvas.set_var("menu_anim_registered", true);
             }
 
             canvas.register_custom_event("goto_game".into(), |c| c.load_scene("game"));

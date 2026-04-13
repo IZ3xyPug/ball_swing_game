@@ -102,16 +102,50 @@ macro_rules! cached_image {
 
 pub fn pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
-    for py in 0..h { for px in 0..w {
-        let border = px < 2 || px >= w-2 || py < 2 || py >= h-2;
-        let (cr, cg, cb) = if border { (r/2+80, g/2+80, b/2+80) } else { (r, g, b) };
-        img.put_pixel(px, py, image::Rgba([cr, cg, cb, 240]));
-    }}
+    let corner_r = ((h as f32) * 0.32).round() as i32;
+    let w_i = w as i32;
+    let h_i = h as i32;
+    for py in 0..h {
+        for px in 0..w {
+            let x = px as i32;
+            let y = py as i32;
+
+            // Rounded-rect mask: keep center strips, carve outside quarter-circles.
+            let in_mid_x = x >= corner_r && x < (w_i - corner_r);
+            let in_mid_y = y >= corner_r && y < (h_i - corner_r);
+            let inside = if in_mid_x || in_mid_y {
+                true
+            } else {
+                let cx = if x < corner_r { corner_r } else { w_i - corner_r - 1 };
+                let cy = if y < corner_r { corner_r } else { h_i - corner_r - 1 };
+                let dx = x - cx;
+                let dy = y - cy;
+                dx * dx + dy * dy <= corner_r * corner_r
+            };
+
+            if !inside {
+                img.put_pixel(px, py, image::Rgba([0, 0, 0, 0]));
+                continue;
+            }
+
+            let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
+            let (cr, cg, cb) = if border {
+                (
+                    r.saturating_div(2).saturating_add(90),
+                    g.saturating_div(2).saturating_add(90),
+                    b.saturating_div(2).saturating_add(90),
+                )
+            } else {
+                (r, g, b)
+            };
+            img.put_pixel(px, py, image::Rgba([cr, cg, cb, 240]));
+        }
+    }
     img
 }
 cached_image!(pad_image_cached, pad_img(PAD_W as u32, PAD_H as u32, C_PAD.0, C_PAD.1, C_PAD.2));
 
-pub fn spinner_img(w: u32, h: u32) -> image::RgbaImage {
+pub fn spinner_img(w: u32, h: u32, base_r: u8, base_g: u8, base_b: u8) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
     for py in 0..h { for px in 0..w {
         let cx = w as f32 * 0.5;
@@ -124,15 +158,19 @@ pub fn spinner_img(w: u32, h: u32) -> image::RgbaImage {
         let (r, g, b) = if edge {
             (255, 235, 230)
         } else if stripe {
-            (C_SPINNER.0, C_SPINNER.1, C_SPINNER.2)
+            (base_r, base_g, base_b)
         } else {
-            (220, 70, 65)
+            (
+                base_r.saturating_sub(35),
+                base_g.saturating_sub(30),
+                base_b.saturating_sub(25),
+            )
         };
         img.put_pixel(px, py, image::Rgba([r, g, b, 245]));
     }}
     img
 }
-cached_image!(spinner_image_cached, spinner_img(SPINNER_W as u32, SPINNER_H as u32));
+cached_image!(spinner_image_cached, spinner_img(SPINNER_W as u32, SPINNER_H as u32, C_SPINNER.0, C_SPINNER.1, C_SPINNER.2));
 
 pub fn flip_img(w: u32, h: u32) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);

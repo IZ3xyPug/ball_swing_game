@@ -12,6 +12,8 @@ pub const SWING_DRAG:     f32 = 0.999;
 pub const GRAB_SURGE:     f32 = 4.2;
 pub const GRAB_TANGENT_SURGE_SCALE: f32 = 0.12;
 pub const GRAB_TANGENT_SURGE_MAX:   f32 = 4.0;
+pub const GRAB_SURGE_MULT: f32 = 2.6;
+pub const GRAB_SPIN_DISABLE_SPEED: f32 = 50.0;
 pub const RELEASE_MIN_SWING_SPEED: f32 = 3.2;
 pub const RELEASE_SURGE_SCALE: f32 = 0.42;
 pub const RELEASE_SURGE_MAX: f32 = 14.0;
@@ -115,8 +117,8 @@ pub const C_SKY_TOP:  (u8,u8,u8) = (15,  20,  45 );
 pub const C_SKY_BOT:  (u8,u8,u8) = (30,  50,  90 );
 pub const C_ZONE_PURPLE_TOP:(u8,u8,u8) = (42,  16,  70 );
 pub const C_ZONE_PURPLE_BOT:(u8,u8,u8) = (88,  36, 128 );
-pub const C_ZONE_BLACK_TOP: (u8,u8,u8) = (2,   2,   6  );
-pub const C_ZONE_BLACK_BOT: (u8,u8,u8) = (10,  10,  20 );
+pub const C_ZONE_BLACK_TOP: (u8,u8,u8) = (246, 206, 64);
+pub const C_ZONE_BLACK_BOT: (u8,u8,u8) = (255, 242, 140);
 pub const C_PLAYER:   (u8,u8,u8) = (80,  220, 160);
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
@@ -129,8 +131,29 @@ pub const C_SPINNER:  (u8,u8,u8) = (255, 100, 95);
 pub const C_COIN:     (u8,u8,u8) = (255, 95, 210);
 pub const C_FLIP:     (u8,u8,u8) = (255, 245, 120);
 
+// Zone-specific object palettes (zone 0 keeps existing base colors).
+pub const C_HOOK_ZONE1:      (u8,u8,u8) = (90, 230, 210);
+pub const C_HOOK_NEAR_ZONE1: (u8,u8,u8) = (140, 255, 235);
+pub const C_HOOK_ON_ZONE1:   (u8,u8,u8) = (210, 255, 245);
+pub const C_PAD_ZONE1:       (u8,u8,u8) = (102, 74, 170);
+pub const C_PAD_HIT_ZONE1:   (u8,u8,u8) = (150, 120, 220);
+pub const C_SPINNER_ZONE1:   (u8,u8,u8) = (200, 128, 255);
+
+pub const C_HOOK_ZONE2:      (u8,u8,u8) = (106, 78, 210);
+pub const C_HOOK_NEAR_ZONE2: (u8,u8,u8) = (156, 126, 250);
+pub const C_HOOK_ON_ZONE2:   (u8,u8,u8) = (214, 194, 255);
+pub const C_PAD_ZONE2:       (u8,u8,u8) = (210, 126, 46);
+pub const C_PAD_HIT_ZONE2:   (u8,u8,u8) = (255, 170, 92);
+pub const C_SPINNER_ZONE2:   (u8,u8,u8) = (255, 193, 88);
+
 // ── Spawn positions ───────────────────────────────────────────────────────────
 pub const SPAWN_X: f32 = VW * 0.22;
 pub const SPAWN_Y: f32 = VH * 0.38;
 pub const START_HOOK_X: f32 = SPAWN_X + 160.0;
 pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
+
+// ── Asset paths ──────────────────────────────────────────────────────────────
+pub const ASSET_COIN_GIF: &str = "assets/coin.gif";
+pub const ASSET_SCORE_X2_GIF: &str = "assets/2x.gif";
+pub const ASSET_BGM_TRACK: &str = "assets/synful_reach.mp3";
+pub const ASSET_SWOOSH_SFX: &str = "assets/swipe.mp3";

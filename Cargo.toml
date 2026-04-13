@@ -39,3 +39,6 @@ label = "Application Name"
 
 [package.metadata.deb]
 maintainer-scripts = "debian/"
+
+[patch.crates-io]
+prism2 = { path = "../prism" }

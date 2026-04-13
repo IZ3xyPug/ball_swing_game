@@ -1682,9 +1682,9 @@ dependencies = [
 
 [[package]]
 name = "maverick_os"
-version = "0.3.3"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5904eca25ea60035c91eebee95dc77868614b034579b812178615e766d6288c1"
+checksum = "0e9e0a80624053fb4ca8916cce769bb3ddba7ce9686ea8132751fbb574cb9897"
 dependencies = [
  "android-activity",
  "android_logger",
@@ -2824,8 +2824,6 @@ checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 [[package]]
 name = "prism2"
 version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33376f9536f67658720bd15edba3d8756855095a3764eb284a5ed1601ed76902"
 dependencies = [
  "anyanymap",
  "downcast-rs 2.0.2",
