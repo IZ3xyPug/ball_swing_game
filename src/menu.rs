@@ -207,28 +207,9 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("menu_ui_animating", true);
             canvas.set_var("menu_ui_anim_frames", MENU_UI_ANIM_FRAMES);
             canvas.set_var("menu_ui_anim_total", MENU_UI_ANIM_FRAMES);
+            canvas.set_var("menu_text_dirty", true);
 
             let selected = Arc::new(Mutex::new(0usize));
-
-            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
-                let s = canvas.virtual_scale();
-                if let Some(obj) = canvas.get_game_object_mut("menu_title_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("ball_swing", &font, 58.0 * s, Color(0, 0, 0, 255), 1700.0 * s)));
-                }
-                if let Some(obj) = canvas.get_game_object_mut("menu_sub_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("SELECT   MODE", &font, 18.0 * s, Color(180, 220, 255, 220), 600.0 * s)));
-                }
-                let (mode_name, mode_desc) = GAME_MODES[0];
-                if let Some(obj) = canvas.get_game_object_mut("menu_mode_name_text") {
-                    obj.set_drawable(Box::new(ui_text_spec(mode_name, &font, 36.0 * s, Color(200, 240, 255, 255), 640.0 * s)));
-                }
-                if let Some(obj) = canvas.get_game_object_mut("menu_mode_desc_text") {
-                    obj.set_drawable(Box::new(ui_text_spec(mode_desc, &font, 18.0 * s, Color(140, 190, 240, 200), 800.0 * s)));
-                }
-                if let Some(obj) = canvas.get_game_object_mut("menu_start_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("SPACE   \u{2022}   CLICK   TO   PLAY", &font, 20.0 * s, Color(0, 0, 0, 255), 540.0 * s)));
-                }
-            }
 
             let menu_key_registered = matches!(canvas.get_var("menu_key_registered"), Some(Value::Bool(true)));
             if !menu_key_registered {
@@ -274,6 +255,30 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             if !menu_anim_registered {
                 canvas.on_update(|c| {
                     if !c.is_scene("menu") { return; }
+
+                    if matches!(c.get_var("menu_text_dirty"), Some(Value::Bool(true))) {
+                        if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+                            let s = c.virtual_scale();
+                            if let Some(obj) = c.get_game_object_mut("menu_title_text") {
+                                obj.set_drawable(Box::new(ui_text_spec("ball_swing", &font, 58.0 * s, Color(0, 0, 0, 255), 1700.0 * s)));
+                            }
+                            if let Some(obj) = c.get_game_object_mut("menu_sub_text") {
+                                obj.set_drawable(Box::new(ui_text_spec("SELECT   MODE", &font, 18.0 * s, Color(180, 220, 255, 220), 600.0 * s)));
+                            }
+                            let (mode_name, mode_desc) = GAME_MODES[0];
+                            if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
+                                obj.set_drawable(Box::new(ui_text_spec(mode_name, &font, 36.0 * s, Color(200, 240, 255, 255), 640.0 * s)));
+                            }
+                            if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
+                                obj.set_drawable(Box::new(ui_text_spec(mode_desc, &font, 18.0 * s, Color(140, 190, 240, 200), 800.0 * s)));
+                            }
+                            if let Some(obj) = c.get_game_object_mut("menu_start_text") {
+                                obj.set_drawable(Box::new(ui_text_spec("SPACE   \u{2022}   CLICK   TO   PLAY", &font, 20.0 * s, Color(0, 0, 0, 255), 540.0 * s)));
+                            }
+                        }
+                        c.set_var("menu_text_dirty", false);
+                    }
+
                     if !matches!(c.get_var("menu_ui_animating"), Some(Value::Bool(true))) { return; }
 
                     let mut remaining = c.get_i32("menu_ui_anim_frames").max(0);
