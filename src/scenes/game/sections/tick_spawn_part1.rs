@@ -49,41 +49,6 @@
                 c.set_var("pause_animating", false);
             }
 
-            // ── Un-zoom from previous frame ───────────────────────────────────
-            // Reverses the zoom applied at the end of the previous tick so all
-            // game logic runs in real (un-zoomed) world coordinates.
-            {
-                let s = st.lock().unwrap();
-                let z = s.zoom;
-                if z > 1.001 {
-                    let zcx = s.zoom_cx;
-                    let zay = s.zoom_anchor_y;
-                    let world_objs: Vec<(String, (f32, f32))> =
-                        s.live_hooks.iter().map(|n| (n.clone(), (HOOK_R*2.0, HOOK_R*2.0)))
-                        .chain(s.pad_live.iter().map(|n| (n.clone(), (PAD_W, PAD_H))))
-                        .chain(s.spinner_live.iter().map(|n| (n.clone(), (SPINNER_W, SPINNER_H))))
-                        .chain(s.coin_live.iter().map(|n| (n.clone(), (COIN_R*2.0, COIN_R*2.0))))
-                        .chain(std::iter::once((
-                            "coin_magnet_radius".to_string(),
-                            (COIN_MAGNET_RADIUS * 2.0, COIN_MAGNET_RADIUS * 2.0),
-                        )))
-                        .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
-                        .chain(s.score_x2_live.iter().map(|n| (n.clone(), (SCORE_X2_W, SCORE_X2_H))))
-                        .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
-                        .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
-                        .collect();
-                    drop(s);
-                    for (name, base_size) in &world_objs {
-                        if let Some(obj) = c.get_game_object_mut(name) {
-                            obj.position.0 = zcx + (obj.position.0 - zcx) * z;
-                            obj.position.1 = zay + (obj.position.1 - zay) * z;
-                            obj.size = *base_size;
-                        }
-                    }
-                } else {
-                    drop(s);
-                }
-            }
             // Space: press to grab, release to ungrab
             let space_now = c.key("space");
             if space_now && !space_was_down {

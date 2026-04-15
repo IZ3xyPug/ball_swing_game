@@ -86,6 +86,7 @@ pub struct State {
     pub spinner_rightmost: f32,
     pub spinner_origins:   Vec<(String, f32, f32, f32, f32)>,
     pub spinners_enabled:  bool,
+    #[allow(dead_code)]
     pub spinner_spin_enabled: bool,
     pub spinner_hit_cooldown: u8,
 
@@ -114,12 +115,14 @@ pub struct State {
     pub gate_free:      Vec<String>,
     pub gate_rightmost: f32,
 
+    pub gwell_live:      Vec<String>,
+    pub gwell_free:      Vec<String>,
+    pub gwell_rightmost: f32,
+    /// Per-well timer tracking: (id, ticks_remaining, currently_active)
+    pub gwell_timers:    Vec<(String, u32, bool)>,
+
     pub bounce_enabled: bool,
 
     pub dark_mode: bool,
     pub glow_flashes: Vec<(String, u8)>,
-
-    pub zoom: f32,
-    pub zoom_cx: f32,
-    pub zoom_anchor_y: f32,
 }

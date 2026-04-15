@@ -86,74 +86,30 @@
             }
 
             // ── Apply zoom (Dune-style: zoom out when player goes high) ──────
+            // Uses engine smooth_zoom + zoom_anchor instead of manual per-object transform.
             // Gravity-aware: normal gravity anchors at VH (bottom),
             // flipped gravity anchors at 0 (top).
             {
-                let mut s = st.lock().unwrap();
+                let s = st.lock().unwrap();
                 let flipped = s.gravity_dir < 0.0;
                 let anchor_y = if flipped { 0.0 } else { VH };
 
                 let target_zoom = if flipped {
-                    // Flipped: player falls up. Zoom when y increases (away from ceiling).
                     let effective_y = s.py + s.vy.max(0.0) * ZOOM_LOOKAHEAD_T;
                     (effective_y / (VH - ZOOM_TOP_MARGIN)).clamp(1.0, ZOOM_MAX)
                 } else {
-                    // Normal: player falls down. Zoom when y decreases (away from floor).
                     let effective_y = s.py + s.vy.min(0.0) * ZOOM_LOOKAHEAD_T;
                     ((VH - effective_y) / (VH - ZOOM_TOP_MARGIN)).clamp(1.0, ZOOM_MAX)
                 };
 
-                let lerp = if target_zoom > s.zoom { ZOOM_OUT_LERP } else { ZOOM_IN_LERP };
-                s.zoom += (target_zoom - s.zoom) * lerp;
-                if (s.zoom - 1.0).abs() < 0.003 && (target_zoom - 1.0).abs() < 0.001 {
-                    s.zoom = 1.0;
-                }
+                let px = s.px;
+                drop(s);
 
-                let z = s.zoom;
-                if z > 1.001 {
-                    let zcx = s.px;
-                    s.zoom_cx = zcx;
-                    s.zoom_anchor_y = anchor_y;
-
-                    let world_objs: Vec<(String, (f32, f32))> =
-                        s.live_hooks.iter().map(|n| (n.clone(), (HOOK_R*2.0, HOOK_R*2.0)))
-                        .chain(s.pad_live.iter().map(|n| (n.clone(), (PAD_W, PAD_H))))
-                        .chain(s.spinner_live.iter().map(|n| (n.clone(), (SPINNER_W, SPINNER_H))))
-                        .chain(s.coin_live.iter().map(|n| (n.clone(), (COIN_R*2.0, COIN_R*2.0))))
-                        .chain(std::iter::once((
-                            "coin_magnet_radius".to_string(),
-                            (COIN_MAGNET_RADIUS * 2.0, COIN_MAGNET_RADIUS * 2.0),
-                        )))
-                        .chain(s.flip_live.iter().map(|n| (n.clone(), (FLIP_W, FLIP_H))))
-                        .chain(s.score_x2_live.iter().map(|n| (n.clone(), (SCORE_X2_W, SCORE_X2_H))))
-                        .chain(s.gate_live.iter().map(|n| (format!("{n}_top"), (GATE_W, GATE_TOP_SEG_H))))
-                        .chain(s.gate_live.iter().map(|n| (format!("{n}_bot"), (GATE_W, GATE_BOT_SEG_H))))
-                        .collect();
-                    drop(s);
-
-                    // Zoom world objects: anchor at ground, shrink toward it
-                    for (name, base_size) in &world_objs {
-                        if let Some(obj) = c.get_game_object_mut(name) {
-                            obj.position.0 = zcx + (obj.position.0 - zcx) / z;
-                            obj.position.1 = anchor_y + (obj.position.1 - anchor_y) / z;
-                            obj.size = (base_size.0 / z, base_size.1 / z);
-                        }
-                    }
-                    // Zoom player
-                    if let Some(obj) = c.get_game_object_mut("player") {
-                        obj.position.1 = anchor_y + (obj.position.1 - anchor_y) / z;
-                        obj.size = (PLAYER_R * 2.0 / z, PLAYER_R * 2.0 / z);
-                    }
-                    // Zoom rope
-                    if let Some(obj) = c.get_game_object_mut("rope") {
-                        if obj.visible {
-                            obj.position.0 = zcx + (obj.position.0 - zcx) / z;
-                            obj.position.1 = anchor_y + (obj.position.1 - anchor_y) / z;
-                            obj.size = (obj.size.0 / z, obj.size.1 / z);
-                        }
-                    }
-                } else {
-                    drop(s);
+                if let Some(cam) = c.camera_mut() {
+                    // Asymmetric lerp: fast zoom-out, slow zoom-in
+                    cam.zoom_lerp_speed = if target_zoom > cam.zoom { ZOOM_OUT_LERP } else { ZOOM_IN_LERP };
+                    cam.zoom_anchor = Some((px, anchor_y));
+                    cam.smooth_zoom(target_zoom);
                 }
             }
 
@@ -165,8 +121,10 @@
                 c.set_var("last_distance", s.distance);
                 c.set_var("last_coins", s.coin_count as i32);
                 s.dead = true;
-                s.zoom = 1.0; // reset zoom before scene change
                 drop(s);
+                if let Some(cam) = c.camera_mut() {
+                    cam.snap_zoom(1.0);
+                }
                 c.load_scene("gameover");
             }
         });

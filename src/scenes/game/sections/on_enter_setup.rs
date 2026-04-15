@@ -171,9 +171,6 @@
             bounce_enabled: true,
             dark_mode: false,
             glow_flashes: Vec::new(),
-            zoom: 1.0,
-            zoom_cx: SPAWN_X,
-            zoom_anchor_y: VH,
         };
 
         // Reuse persistent Arc across respawns so on_update keeps working.
