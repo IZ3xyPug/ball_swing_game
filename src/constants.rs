@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // ── Virtual resolution ────────────────────────────────────────────────────────
 pub const VW: f32 = 3840.0;
 pub const VH: f32 = 2160.0;
@@ -165,3 +166,27 @@ pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/co
 pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
+
+// ── Gravity wells ─────────────────────────────────────────────────────────────
+pub const GWELL_POOL_SIZE:     usize = 10;
+pub const GWELL_GAP_MIN:       f32 = 5400.0;
+pub const GWELL_GAP_MAX:       f32 = 9200.0;
+pub const GWELL_RADIUS_MIN:    f32 = 200.0;
+pub const GWELL_RADIUS_MAX:    f32 = 420.0;
+pub const GWELL_STRENGTH_MIN:  f32 = 0.35;
+pub const GWELL_STRENGTH_MAX:  f32 = 0.75;
+pub const GWELL_ON_TICKS:      u32 = 240;   // 4 seconds at 60fps
+pub const GWELL_OFF_TICKS:     u32 = 180;   // 3 seconds at 60fps
+pub const GWELL_Y_MIN:         f32 = VH * 0.15;
+pub const GWELL_Y_MAX:         f32 = VH * 0.80;
+pub const GWELL_SPAWN_BUDGET:  usize = 1;
+pub const GWELL_VISUAL_SCALE_MIN: f32 = 3.0;   // smallest well = 3× player diameter
+pub const GWELL_VISUAL_SCALE_MAX: f32 = 10.0;  // largest well = 10× player diameter
+pub const GWELL_RING_COUNT:    u32 = 5;         // concentric alpha rings
+pub const GWELL_PULSE_MIN:     f32 = 0.7;
+pub const GWELL_PULSE_SPEED:   f32 = 0.08;
+pub const C_GWELL_ACTIVE:      (u8,u8,u8) = (130, 80, 255);
+pub const C_GWELL_DORMANT:     (u8,u8,u8) = (60, 40, 110);
+
+// ── Starfield background ──────────────────────────────────────────────────────
+pub const STARFIELD_STAR_COUNT: u32 = 350;

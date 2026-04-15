@@ -156,11 +156,11 @@
                 obj.momentum = (0.0, 0.0);
             }
 
-            // Pin background and floor to the camera position each tick
-            // so they always fill the screen without being world-sized textures.
+            // Pin floor to the camera position each tick;
+            // bg uses ignore_zoom so its position is screen-space (always 0,0).
             let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
             if let Some(obj) = c.get_game_object_mut("bg") {
-                obj.position = (cam_x, 0.0);
+                obj.position = (0.0, 0.0);
                 let bg_theme = (dark_now, zone_idx);
                 if prev_bg_theme != Some(bg_theme) {
                     let image_data = if dark_now {

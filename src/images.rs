@@ -4,6 +4,90 @@ use crate::constants::*;
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitives
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Generate a gravity well image with concentric stepped-alpha rings.
+/// `visual_r` is the visual radius in pixels. The returned image is (2*visual_r) square.
+/// Rings fade from high alpha in the center to low alpha at the edge.
+pub fn gwell_ring_img(visual_r: f32, r: u8, g: u8, b: u8, ring_count: u32, base_alpha: f32) -> image::RgbaImage {
+    let d = (visual_r * 2.0).ceil().max(2.0) as u32;
+    let mut img = image::RgbaImage::new(d, d);
+    let ctr = visual_r;
+    let rings = ring_count.max(1);
+
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 + 0.5 - ctr;
+            let dy = py as f32 + 0.5 - ctr;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > visual_r { continue; }
+
+            // Which ring band does this pixel fall in? (0 = innermost)
+            let norm = dist / visual_r; // 0..1
+            let band = (norm * rings as f32).floor().min(rings as f32 - 1.0) as u32;
+
+            // Alpha steps down from center outward
+            let step_alpha = 1.0 - (band as f32 / rings as f32);
+            let alpha = (base_alpha * step_alpha).clamp(0.0, 255.0) as u8;
+
+            // Slight brightness boost toward center
+            let bright = 1.0 + 0.3 * (1.0 - norm);
+            let pr = (r as f32 * bright).min(255.0) as u8;
+            let pg = (g as f32 * bright).min(255.0) as u8;
+            let pb = (b as f32 * bright).min(255.0) as u8;
+
+            img.put_pixel(px, py, image::Rgba([pr, pg, pb, alpha]));
+        }
+    }
+    img
+}
+
+/// Composite a starfield (quartz Image) into the upper half of a gradient.
+/// The starfield occupies `0..split_y` and the gradient fills `split_y..h`.
+/// A soft blend zone of `blend_h` pixels smooths the transition.
+pub fn composite_starfield_gradient(
+    starfield: &image::RgbaImage,
+    gradient: &image::RgbaImage,
+    out_w: u32,
+    out_h: u32,
+    blend_h: u32,
+) -> image::RgbaImage {
+    let split_y = out_h / 2;
+    let mut img = image::RgbaImage::new(out_w, out_h);
+    for py in 0..out_h {
+        for px in 0..out_w {
+            let star_px = starfield.get_pixel(px % starfield.width(), py % starfield.height());
+            let grad_px = gradient.get_pixel(px % gradient.width(), py % gradient.height());
+
+            let pixel = if py < split_y.saturating_sub(blend_h) {
+                // Pure starfield
+                *star_px
+            } else if py < split_y + blend_h {
+                // Blend zone
+                let blend_start = split_y.saturating_sub(blend_h) as f32;
+                let blend_end = (split_y + blend_h) as f32;
+                let t = ((py as f32 - blend_start) / (blend_end - blend_start)).clamp(0.0, 1.0);
+                let sr = star_px[0] as f32;
+                let sg = star_px[1] as f32;
+                let sb = star_px[2] as f32;
+                let gr = grad_px[0] as f32;
+                let gg = grad_px[1] as f32;
+                let gb = grad_px[2] as f32;
+                image::Rgba([
+                    (sr * (1.0 - t) + gr * t) as u8,
+                    (sg * (1.0 - t) + gg * t) as u8,
+                    (sb * (1.0 - t) + gb * t) as u8,
+                    255,
+                ])
+            } else {
+                // Pure gradient
+                *grad_px
+            };
+            img.put_pixel(px, py, pixel);
+        }
+    }
+    img
+}
+
 pub fn solid(r: u8, g: u8, b: u8, a: u8) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(1, 1);
     img.put_pixel(0, 0, image::Rgba([r, g, b, a]));

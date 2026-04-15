@@ -4,7 +4,7 @@
 
     // Background — screen-sized gradient, repositioned each tick to follow the camera.
     // Texture must be ≤8192px on any axis (GPU limit), so we never make it world-sized.
-    let bg = GameObject::new_rect(
+    let mut bg = GameObject::new_rect(
         ctx, "bg".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
@@ -13,6 +13,7 @@
         }),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    bg.ignore_zoom = true;
 
     // Player — a circle; gravity=0 and resistance=1 so we manage physics manually
     let player = GameObject::new_rect(
