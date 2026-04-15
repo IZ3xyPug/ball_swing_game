@@ -15,6 +15,81 @@ pub fn tick_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_zero_g_timer(c, st);
 }
 
+// ── Mirror all live obstacles around VH centre on gravity flip ──────────────
+
+fn flip_all_live_objects(c: &mut Canvas, s: &State) {
+    // Mirror helper: new_y = VH - old_y - height
+    // Hooks
+    for name in &s.live_hooks {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Pads
+    for name in &s.pad_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Spinners
+    for name in &s.spinner_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Coins
+    for name in &s.coin_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Flip pickups
+    for name in &s.flip_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Score x2 pickups
+    for name in &s.score_x2_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Zero-g pickups
+    for name in &s.zero_g_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Gate segments
+    for gate_id in &s.gate_live {
+        let top_id = format!("{gate_id}_top");
+        let bot_id = format!("{gate_id}_bot");
+        for seg_id in [top_id, bot_id] {
+            if let Some(obj) = c.get_game_object_mut(&seg_id) {
+                obj.position.1 = VH - obj.position.1 - obj.size.1;
+            }
+        }
+    }
+    // Gravity wells
+    for name in &s.gwell_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+}
+
+/// Also mirror the mover origin Y values so animated movers stay in sync.
+fn flip_mover_origins(s: &mut State) {
+    // Spinner origins: (id, origin_y, amp, speed, phase)
+    for entry in s.spinner_origins.iter_mut() {
+        entry.1 = VH - entry.1 - SPINNER_H;
+    }
+    // Pad origins: (id, origin_x, amp, speed, phase) — pads move horizontally,
+    // but their Y is set by position so we don't need to flip origin_x.
+    // However pad positions are already flipped above, so nothing extra needed.
+}
+
 // ── Coin magnet pull ────────────────────────────────────────────────────────
 
 fn tick_coin_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -124,11 +199,6 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.gravity_dir *= -1.0;
         s.flip_timer = FLIP_DURATION;
     }
-    let gdir = s.gravity_dir;
-    let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
-    let _px = s.px;
-    let _vy = s.vy;
-    let hooked = s.hooked;
     drop(s);
 
     for name in &collected {
@@ -146,6 +216,12 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if s.hooked {
             s.hook_y = VH - s.hook_y;
         }
+        // Flip all live obstacle positions and mover origins.
+        flip_all_live_objects(c, &s);
+        flip_mover_origins(&mut s);
+        let gdir = s.gravity_dir;
+        let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+        let hooked = s.hooked;
         drop(s);
         // Set engine gravity.
         if !hooked {
@@ -240,6 +316,9 @@ fn tick_flip_timer(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if s.hooked {
                 s.hook_y = VH - s.hook_y;
             }
+            // Flip all live obstacle positions and mover origins back.
+            flip_all_live_objects(c, &s);
+            flip_mover_origins(&mut s);
             let gdir = s.gravity_dir;
             let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
             let hooked = s.hooked;

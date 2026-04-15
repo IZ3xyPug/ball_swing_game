@@ -41,6 +41,18 @@ pub fn gwell_ring_img(visual_r: f32, r: u8, g: u8, b: u8, ring_count: u32, base_
     img
 }
 
+/// Flip an RgbaImage vertically (mirror top-to-bottom).
+pub fn flip_image_vertical(src: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (src.width(), src.height());
+    let mut out = image::RgbaImage::new(w, h);
+    for py in 0..h {
+        for px in 0..w {
+            out.put_pixel(px, py, *src.get_pixel(px, h - 1 - py));
+        }
+    }
+    out
+}
+
 /// Composite a starfield (quartz Image) into the upper half of a gradient.
 /// The starfield occupies `0..split_y` and the gradient fills `split_y..h`.
 /// A soft blend zone of `blend_h` pixels smooths the transition.
