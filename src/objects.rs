@@ -7,7 +7,11 @@ pub fn make_hook(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
     GameObject::new_rect(
         ctx,
         id.into(),
-        Some(solid_ellipse(HOOK_R*2.0, HOOK_R*2.0, Color(C_HOOK.0, C_HOOK.1, C_HOOK.2, 255))),
+        Some(Image {
+            shape: ShapeType::Ellipse(0.0, (HOOK_R*2.0, HOOK_R*2.0), 0.0),
+            image: circle_img(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2).into(),
+            color: None,
+        }),
         (HOOK_R*2.0, HOOK_R*2.0),
         (x - HOOK_R, y - HOOK_R),
         vec!["hook".into()],
@@ -108,7 +112,11 @@ pub fn make_zero_g(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
     GameObject::new_rect(
         ctx,
         id.into(),
-        Some(solid_ellipse(ZERO_G_W, ZERO_G_H, Color(135, 220, 255, 255))),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (ZERO_G_W, ZERO_G_H), 0.0),
+            image: circle_img((ZERO_G_W * 0.5) as u32, 135, 220, 255).into(),
+            color: None,
+        }),
         (ZERO_G_W, ZERO_G_H),
         (x, y),
         vec!["zero_g".into()],

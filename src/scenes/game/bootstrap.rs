@@ -40,7 +40,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Player — engine-native gravity ───────────────────────────────────
     let mut player = GameObject::new_rect(
         ctx, "player".into(),
-        Some(solid_ellipse(PLAYER_R*2.0, PLAYER_R*2.0, Color(C_PLAYER.0, C_PLAYER.1, C_PLAYER.2, 255))),
+        Some(Image {
+            shape: ShapeType::Ellipse(0.0, (PLAYER_R*2.0, PLAYER_R*2.0), 0.0),
+            image: circle_img(PLAYER_R as u32, C_PLAYER.0, C_PLAYER.1, C_PLAYER.2).into(),
+            color: None,
+        }),
         (PLAYER_R*2.0, PLAYER_R*2.0),
         (SPAWN_X - PLAYER_R, SPAWN_Y - PLAYER_R),
         vec!["player".into()],
@@ -65,7 +69,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     rope.visible = false;
 
     // Danger floor
-    let floor = GameObject::new_rect(
+    let mut floor = GameObject::new_rect(
         ctx, "danger_floor".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (VW, 28.0), 0.0),
@@ -74,9 +78,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         }),
         (VW, 28.0), (0.0, VH - 28.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    floor.ignore_zoom = true;
 
     // ── HUD elements ─────────────────────────────────────────────────────
-    let dist_bar = GameObject::new_rect(
+    let mut dist_bar = GameObject::new_rect(
         ctx, "dist_bar".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
@@ -86,8 +91,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (920.0, 48.0), (VW * 0.5 - 460.0, 30.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    dist_bar.ignore_zoom = true;
 
-    let coin_counter = GameObject::new_rect(
+    let mut coin_counter = GameObject::new_rect(
         ctx, "coin_counter".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (300.0, 70.0), 0.0),
@@ -97,8 +103,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (300.0, 70.0), (30.0, 40.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    coin_counter.ignore_zoom = true;
 
-    let momentum_counter = GameObject::new_rect(
+    let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
@@ -108,8 +115,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (300.0, 62.0), (30.0, 176.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    momentum_counter.ignore_zoom = true;
 
-    let gravity_indicator = GameObject::new_rect(
+    let mut gravity_indicator = GameObject::new_rect(
         ctx, "gravity_indicator".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (220.0, 60.0), 0.0),
@@ -119,8 +127,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (220.0, 60.0), (30.0, 248.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    gravity_indicator.ignore_zoom = true;
 
-    let y_meter = GameObject::new_rect(
+    let mut y_meter = GameObject::new_rect(
         ctx, "y_meter".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
@@ -130,8 +139,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (300.0, 62.0), (30.0, 320.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    y_meter.ignore_zoom = true;
 
-    let x_meter = GameObject::new_rect(
+    let mut x_meter = GameObject::new_rect(
         ctx, "x_meter".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
@@ -141,6 +151,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (300.0, 62.0), (30.0, 392.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    x_meter.ignore_zoom = true;
 
     let mut combo_flash = {
         let (w, h) = (420u32, 80u32);
@@ -156,6 +167,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         )
     };
     combo_flash.visible = false;
+    combo_flash.ignore_zoom = true;
 
     let mut pause_overlay = GameObject::new_rect(
         ctx, "pause_overlay".into(),
@@ -182,6 +194,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     flip_timer_hud.visible = false;
+    flip_timer_hud.ignore_zoom = true;
 
     let mut zero_g_timer_hud = GameObject::new_rect(
         ctx, "zero_g_timer".into(),
@@ -194,6 +207,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     zero_g_timer_hud.visible = false;
+    zero_g_timer_hud.ignore_zoom = true;
 
     let mut coin_magnet_radius = {
         let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;

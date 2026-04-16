@@ -40,7 +40,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             if let Some(obj) = c.get_game_object_mut(&prev) {
                 let (r, g, b) = hook_base_for_zone(zone_idx);
                 obj.set_image(hook_img(r, g, b));
-                obj.clear_highlight();
+                obj.clear_glow();
             }
         }
     });
@@ -136,18 +136,20 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
     });
 
     // ── Mouse ────────────────────────────────────────────────────────────
+    // Callbacks only latch a flag; the on_update tick polls it with
+    // edge-detection so mouse and spacebar trigger at exactly the same
+    // point in the frame, avoiding inter-tick timing differences.
     let mouse_registered = matches!(canvas.get_var("game_mouse_registered"), Some(Value::Bool(true)));
     if !mouse_registered {
-        canvas.on_mouse_press(move |c, btn, pos| {
-            if btn != MouseButton::Left || !c.is_scene("game") { return; }
-            c.set_var("mouse_grab_x", pos.0);
-            c.set_var("mouse_grab_y", pos.1);
-            c.set_var("mouse_grab_queued", true);
+        canvas.on_mouse_press(move |c, btn, _pos| {
+            if btn != MouseButton::Left { return; }
+            c.set_var("mouse_left_held", true);
         });
         canvas.on_mouse_release(move |c, btn, _pos| {
-            if btn != MouseButton::Left || !c.is_scene("game") { return; }
-            c.set_var("mouse_release_queued", true);
+            if btn != MouseButton::Left { return; }
+            c.set_var("mouse_left_held", false);
         });
+        canvas.set_var("mouse_left_held", false);
         canvas.set_var("game_mouse_registered", true);
     }
 }

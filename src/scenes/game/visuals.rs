@@ -56,6 +56,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
     let hooks = s.live_hooks.clone();
     drop(s);
 
+    let max_r2 = ROPE_LEN_MAX * ROPE_LEN_MAX;
     let mut best_id: Option<String> = None;
     let mut best_dist = f32::INFINITY;
     let max_dist2 = ROPE_LEN_MAX * ROPE_LEN_MAX;

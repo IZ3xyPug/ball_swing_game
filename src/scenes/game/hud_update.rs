@@ -7,7 +7,7 @@ use crate::hud::*;
 use crate::images::*;
 use crate::state::*;
 
-pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
+pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let distance = s.distance;
     let zone_idx = zone_index_for_distance(distance);
@@ -50,7 +50,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
 
     // Distance progress bar
     if let Some(obj) = c.get_game_object_mut("dist_bar") {
-        obj.position = (cam_x + VW * 0.5 - 460.0, 30.0);
+        obj.position = (VW * 0.5 - 460.0, 30.0);
         if dirty_dist {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
@@ -62,7 +62,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
 
     // Coin counter
     if let Some(obj) = c.get_game_object_mut("coin_counter") {
-        obj.position = (cam_x + 30.0, 40.0);
+        obj.position = (30.0, 40.0);
         if dirty_coins {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (300.0, 70.0), 0.0),
@@ -74,7 +74,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
 
     // Momentum counter
     if let Some(obj) = c.get_game_object_mut("momentum_counter") {
-        obj.position = (cam_x + 30.0, 128.0);
+        obj.position = (30.0, 128.0);
         if dirty_momentum {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
@@ -86,7 +86,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
 
     // Gravity indicator
     if let Some(obj) = c.get_game_object_mut("gravity_indicator") {
-        obj.position = (cam_x + 30.0, 200.0);
+        obj.position = (30.0, 200.0);
         if dirty_gravity {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (220.0, 60.0), 0.0),
@@ -98,7 +98,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
 
     // Y meter
     if let Some(obj) = c.get_game_object_mut("y_meter") {
-        obj.position = (cam_x + 30.0, 272.0);
+        obj.position = (30.0, 272.0);
         if dirty_py {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
@@ -110,7 +110,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
 
     // X meter
     if let Some(obj) = c.get_game_object_mut("x_meter") {
-        obj.position = (cam_x + 30.0, 344.0);
+        obj.position = (30.0, 344.0);
         if dirty_px {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
@@ -123,7 +123,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
     // Flip timer HUD
     if let Some(obj) = c.get_game_object_mut("flip_timer") {
         if flip_timer_val > 0 {
-            obj.position = (cam_x + VW * 0.5 - 180.0, 460.0);
+            obj.position = (VW * 0.5 - 180.0, 460.0);
             obj.visible = true;
             if dirty_flip {
                 obj.set_image(Image {
@@ -140,7 +140,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
     // Zero-g timer HUD
     if let Some(obj) = c.get_game_object_mut("zero_g_timer") {
         if zero_g_timer_val > 0 {
-            obj.position = (cam_x + VW * 0.5 - 180.0, 556.0);
+            obj.position = (VW * 0.5 - 180.0, 556.0);
             obj.visible = true;
             if dirty_zero_g {
                 obj.set_image(Image {
