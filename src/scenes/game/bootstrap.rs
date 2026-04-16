@@ -40,11 +40,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Player — engine-native gravity ───────────────────────────────────
     let mut player = GameObject::new_rect(
         ctx, "player".into(),
-        Some(Image {
-            shape: ShapeType::Ellipse(0.0, (PLAYER_R*2.0, PLAYER_R*2.0), 0.0),
-            image: circle_img(PLAYER_R as u32, C_PLAYER.0, C_PLAYER.1, C_PLAYER.2).into(),
-            color: None,
-        }),
+        Some(solid_ellipse(PLAYER_R*2.0, PLAYER_R*2.0, Color(C_PLAYER.0, C_PLAYER.1, C_PLAYER.2, 255))),
         (PLAYER_R*2.0, PLAYER_R*2.0),
         (SPAWN_X - PLAYER_R, SPAWN_Y - PLAYER_R),
         vec!["player".into()],
@@ -173,6 +169,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     pause_overlay.visible = false;
     pause_overlay.layer = 10_000;
+    pause_overlay.ignore_zoom = true;
 
     let mut flip_timer_hud = GameObject::new_rect(
         ctx, "flip_timer".into(),

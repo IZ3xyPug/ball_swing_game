@@ -42,11 +42,7 @@ fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
     if !ops.prev_hook.is_empty() {
         if let Some(hobj) = c.get_game_object_mut(&ops.prev_hook) {
             let (r, g, b) = hook_base_for_zone(ops.zone_idx);
-            hobj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: circle_img(HOOK_R as u32, r, g, b).into(),
-                color: None,
-            });
+            hobj.set_image(hook_img(r, g, b));
             hobj.clear_glow();
         }
     }

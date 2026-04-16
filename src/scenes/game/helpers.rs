@@ -1,4 +1,10 @@
 use crate::constants::*;
+use quartz::{Image, Color, solid_ellipse};
+
+/// GPU-rendered hook image. Zero CPU rasterization — uses shape mask + color tint.
+pub fn hook_img(r: u8, g: u8, b: u8) -> Image {
+    solid_ellipse(HOOK_R * 2.0, HOOK_R * 2.0, Color(r, g, b, 255))
+}
 
 pub fn hook_base_for_zone(zone_idx: usize) -> (u8, u8, u8) {
     match zone_idx {

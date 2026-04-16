@@ -78,11 +78,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
         if !prev_nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(prev_nearest) {
                 let (r, g, b) = hook_base_for_zone(zone_idx);
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                    image: circle_img(HOOK_R as u32, r, g, b).into(),
-                    color: None,
-                });
+                obj.set_image(hook_img(r, g, b));
                 obj.clear_glow();
             }
         }
@@ -90,11 +86,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
         if !nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(&nearest) {
                 let (r, g, b) = hook_near_for_zone(zone_idx);
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                    image: circle_img(HOOK_R as u32, r, g, b).into(),
-                    color: None,
-                });
+                obj.set_image(hook_img(r, g, b));
                 obj.set_glow(GlowConfig { color: Color(r, g, b, 140), width: 10.0 });
             }
         }
@@ -118,11 +110,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     for hid in &hooks {
         if let Some(obj) = c.get_game_object_mut(hid) {
             let (r, g, b) = hook_base_for_zone(zone_idx);
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: circle_img(HOOK_R as u32, r, g, b).into(),
-                color: None,
-            });
+            obj.set_image(hook_img(r, g, b));
         }
     }
     for pid in &pads {

@@ -125,4 +125,14 @@ pub struct State {
 
     pub dark_mode: bool,
     pub glow_flashes: Vec<(String, u8)>,
+
+    // ── HUD dirty-tracking ──────────────────────────────────────────────
+    pub hud_last_dist_fill:     u32,   // dist_fill * 1000 as u32
+    pub hud_last_coins:         u32,
+    pub hud_last_momentum:      u32,   // momentum * 10 as u32
+    pub hud_last_gravity_flip:  bool,
+    pub hud_last_py:            i32,
+    pub hud_last_px:            i32,
+    pub hud_last_flip_timer:    u32,
+    pub hud_last_zero_g_timer:  u32,
 }

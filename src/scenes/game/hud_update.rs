@@ -8,7 +8,7 @@ use crate::images::*;
 use crate::state::*;
 
 pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
-    let s = st.lock().unwrap();
+    let mut s = st.lock().unwrap();
     let distance = s.distance;
     let zone_idx = zone_index_for_distance(distance);
     let zone_start = zone_idx as f32 * ZONE_DISTANCE_STEP;
@@ -21,66 +21,103 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
     let flip_timer_val = s.flip_timer;
     let zero_g_timer_val = s.zero_g_timer;
     let ticks = s.ticks;
+
+    // Quantize for dirty checks
+    let q_dist_fill = (dist_fill * 1000.0) as u32;
+    let q_momentum  = (momentum * 10.0) as u32;
+    let q_py        = py as i32;
+    let q_px        = px as i32;
+
+    let dirty_dist     = q_dist_fill     != s.hud_last_dist_fill;
+    let dirty_coins    = coins           != s.hud_last_coins;
+    let dirty_momentum = q_momentum      != s.hud_last_momentum;
+    let dirty_gravity  = gravity_flipped != s.hud_last_gravity_flip;
+    let dirty_py       = q_py            != s.hud_last_py;
+    let dirty_px       = q_px            != s.hud_last_px;
+    let dirty_flip     = flip_timer_val  != s.hud_last_flip_timer;
+    let dirty_zero_g   = zero_g_timer_val != s.hud_last_zero_g_timer;
+
+    // Update tracking
+    s.hud_last_dist_fill    = q_dist_fill;
+    s.hud_last_coins        = coins;
+    s.hud_last_momentum     = q_momentum;
+    s.hud_last_gravity_flip = gravity_flipped;
+    s.hud_last_py           = q_py;
+    s.hud_last_px           = q_px;
+    s.hud_last_flip_timer   = flip_timer_val;
+    s.hud_last_zero_g_timer = zero_g_timer_val;
     drop(s);
 
     // Distance progress bar
     if let Some(obj) = c.get_game_object_mut("dist_bar") {
         obj.position = (cam_x + VW * 0.5 - 460.0, 30.0);
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
-            image: bar_img(920, 48, dist_fill, 80, 220, 160).into(),
-            color: None,
-        });
+        if dirty_dist {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
+                image: bar_img(920, 48, dist_fill, 80, 220, 160).into(),
+                color: None,
+            });
+        }
     }
 
     // Coin counter
     if let Some(obj) = c.get_game_object_mut("coin_counter") {
         obj.position = (cam_x + 30.0, 40.0);
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 70.0), 0.0),
-            image: coin_counter_img(coins).into(),
-            color: None,
-        });
+        if dirty_coins {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (300.0, 70.0), 0.0),
+                image: coin_counter_img(coins).into(),
+                color: None,
+            });
+        }
     }
 
     // Momentum counter
     if let Some(obj) = c.get_game_object_mut("momentum_counter") {
         obj.position = (cam_x + 30.0, 128.0);
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
-            image: momentum_counter_img(momentum).into(),
-            color: None,
-        });
+        if dirty_momentum {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+                image: momentum_counter_img(momentum).into(),
+                color: None,
+            });
+        }
     }
 
     // Gravity indicator
     if let Some(obj) = c.get_game_object_mut("gravity_indicator") {
         obj.position = (cam_x + 30.0, 200.0);
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (220.0, 60.0), 0.0),
-            image: gravity_indicator_img(gravity_flipped, true).into(),
-            color: None,
-        });
+        if dirty_gravity {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (220.0, 60.0), 0.0),
+                image: gravity_indicator_img(gravity_flipped, true).into(),
+                color: None,
+            });
+        }
     }
 
     // Y meter
     if let Some(obj) = c.get_game_object_mut("y_meter") {
         obj.position = (cam_x + 30.0, 272.0);
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
-            image: y_counter_img(py).into(),
-            color: None,
-        });
+        if dirty_py {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+                image: y_counter_img(py).into(),
+                color: None,
+            });
+        }
     }
 
     // X meter
     if let Some(obj) = c.get_game_object_mut("x_meter") {
         obj.position = (cam_x + 30.0, 344.0);
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
-            image: x_counter_img(px).into(),
-            color: None,
-        });
+        if dirty_px {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+                image: x_counter_img(px).into(),
+                color: None,
+            });
+        }
     }
 
     // Flip timer HUD
@@ -88,11 +125,13 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
         if flip_timer_val > 0 {
             obj.position = (cam_x + VW * 0.5 - 180.0, 460.0);
             obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
-                image: flip_timer_img(flip_timer_val, FLIP_DURATION).into(),
-                color: None,
-            });
+            if dirty_flip {
+                obj.set_image(Image {
+                    shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+                    image: flip_timer_img(flip_timer_val, FLIP_DURATION).into(),
+                    color: None,
+                });
+            }
         } else {
             obj.visible = false;
         }
@@ -103,11 +142,13 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>, cam_x: f32) {
         if zero_g_timer_val > 0 {
             obj.position = (cam_x + VW * 0.5 - 180.0, 556.0);
             obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
-                image: flip_timer_img(zero_g_timer_val, ZERO_G_DURATION).into(),
-                color: None,
-            });
+            if dirty_zero_g {
+                obj.set_image(Image {
+                    shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+                    image: flip_timer_img(zero_g_timer_val, ZERO_G_DURATION).into(),
+                    color: None,
+                });
+            }
         } else {
             obj.visible = false;
         }

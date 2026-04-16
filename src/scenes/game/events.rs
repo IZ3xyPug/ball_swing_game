@@ -39,11 +39,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         if !prev.is_empty() {
             if let Some(obj) = c.get_game_object_mut(&prev) {
                 let (r, g, b) = hook_base_for_zone(zone_idx);
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (HOOK_R*2.0, HOOK_R*2.0), 0.0),
-                    image: circle_img(HOOK_R as u32, r, g, b).into(),
-                    color: None,
-                });
+                obj.set_image(hook_img(r, g, b));
             }
         }
     });
@@ -106,11 +102,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
 
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
                 let (r, g, b) = hook_on_for_zone(zone_idx);
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (HOOK_R*2.0, HOOK_R*2.0), 0.0),
-                    image: circle_img(HOOK_R as u32, r, g, b).into(),
-                    color: None,
-                });
+                obj.set_image(hook_img(r, g, b));
                 obj.set_glow(GlowConfig { color: Color(255, 200, 80, 255), width: 18.0 });
             }
 

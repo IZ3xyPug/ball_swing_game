@@ -64,11 +64,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let (r, g, b) = hook_base_for_zone(zone_idx);
             obj.position = (hx - HOOK_R, hy - HOOK_R);
             obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R*2.0, HOOK_R*2.0), 0.0),
-                image: circle_img(HOOK_R as u32, r, g, b).into(),
-                color: None,
-            });
+            obj.set_image(hook_img(r, g, b));
         }
 
         s = st.lock().unwrap();
@@ -448,11 +444,7 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.position = (*hx - HOOK_R, *hy - HOOK_R);
                     obj.visible = true;
-                    obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (HOOK_R*2.0, HOOK_R*2.0), 0.0),
-                        image: circle_img(HOOK_R as u32, r, g, b).into(),
-                        color: None,
-                    });
+                    obj.set_image(hook_img(r, g, b));
                 }
             }
         }
@@ -493,14 +485,14 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.planet_radius = Some(radius);
             obj.gravity_strength = strength;
             // Set the stepped-alpha ring image
-            let ring_img = gwell_ring_img(
+            let ring_img = gwell_ring_cached(
                 visual_r,
                 C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2,
                 GWELL_RING_COUNT, 200.0,
             );
             obj.set_image(Image {
                 shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                image: ring_img.into(),
+                image: ring_img,
                 color: None,
             });
             obj.set_glow(GlowConfig {
