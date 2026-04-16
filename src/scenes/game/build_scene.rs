@@ -213,6 +213,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
             canvas.set_var("pause_animating", false);
             canvas.set_var("game_paused", false);
+            canvas.set_var("mouse_grab_queued", false);
+            canvas.set_var("mouse_release_queued", false);
+            canvas.set_var("mouse_grab_x", 0.0f32);
+            canvas.set_var("mouse_grab_y", 0.0f32);
+            canvas.set_var("grab_from_mouse", false);
             canvas.set_var("bg_vivid", false);
             canvas.set_var("bg_force_refresh", true);
 

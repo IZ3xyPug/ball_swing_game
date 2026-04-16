@@ -59,6 +59,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
     let max_r2 = ROPE_LEN_MAX * ROPE_LEN_MAX;
     let mut best_id: Option<String> = None;
     let mut best_dist = f32::INFINITY;
+    let max_dist2 = ROPE_LEN_MAX * ROPE_LEN_MAX;
     for hid in &hooks {
         if let Some(obj) = c.get_game_object(hid) {
             let hcx = obj.position.0 + HOOK_R;
@@ -66,7 +67,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
             let dx = px - hcx;
             let dy = py - hcy;
             let d2 = dx * dx + dy * dy;
-            if d2 < best_dist && d2 <= max_r2 {
+            if d2 <= max_dist2 && d2 < best_dist {
                 best_dist = d2;
                 best_id = Some(hid.clone());
             }

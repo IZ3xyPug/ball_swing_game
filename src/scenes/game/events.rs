@@ -1,9 +1,9 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
+use std::cmp::Ordering;
 
 use crate::constants::*;
 use crate::gameplay::*;
-use crate::images::*;
 use crate::state::*;
 use super::helpers::*;
 
@@ -51,6 +51,12 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         let mut s = st.lock().unwrap();
         if s.dead || s.hooked { return; }
 
+        let mouse_target = if matches!(c.get_var("grab_from_mouse"), Some(Value::Bool(true))) {
+            Some((c.get_f32("mouse_grab_x"), c.get_f32("mouse_grab_y")))
+        } else {
+            None
+        };
+
         // Sync State position from engine before computing grab.
         if let Some(obj) = c.get_game_object("player") {
             s.px = obj.position.0 + PLAYER_R;
@@ -66,17 +72,34 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 .map(|o| {
                     let hcx = o.position.0 + HOOK_R;
                     let hcy = o.position.1 + HOOK_R;
-                    let dx = hcx - s.px;
-                    let dy = hcy - s.py;
-                    (o.id.clone(), hcx, hcy, (dx*dx + dy*dy).sqrt())
+                    let pdx = hcx - s.px;
+                    let pdy = hcy - s.py;
+                    let player_d2 = pdx * pdx + pdy * pdy;
+                    let cursor_d2 = if let Some((mx, my)) = mouse_target {
+                        let cdx = hcx - mx;
+                        let cdy = hcy - my;
+                        cdx * cdx + cdy * cdy
+                    } else {
+                        player_d2
+                    };
+                    (o.id.clone(), hcx, hcy, player_d2, cursor_d2)
                 })
-                .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap())
+                .min_by(|a, b| {
+                    if mouse_target.is_some() {
+                        a.4
+                            .partial_cmp(&b.4)
+                            .unwrap_or(Ordering::Equal)
+                            .then(a.3.partial_cmp(&b.3).unwrap_or(Ordering::Equal))
+                    } else {
+                        a.3.partial_cmp(&b.3).unwrap_or(Ordering::Equal)
+                    }
+                })
         } else {
             None
         };
 
-        if let Some((hook_id, hx, hy, dist)) = nearest {
-            let rope_len = dist.clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
+        if let Some((hook_id, hx, hy, player_d2, _cursor_d2)) = nearest {
+            let rope_len = player_d2.sqrt().clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
 
             apply_grab_impulse(&mut s, hx, hy);
 

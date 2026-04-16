@@ -63,8 +63,10 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut(&id) {
             let (r, g, b) = hook_base_for_zone(zone_idx);
             obj.position = (hx - HOOK_R, hy - HOOK_R);
+            obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible = true;
             obj.set_image(hook_img(r, g, b));
+            obj.clear_highlight();
         }
 
         s = st.lock().unwrap();
