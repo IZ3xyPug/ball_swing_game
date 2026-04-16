@@ -1,9 +1,15 @@
 use crate::constants::*;
-use quartz::{Image, Color, solid_ellipse};
+use crate::images::circle_img;
+use quartz::{Image, ShapeType};
 
-/// GPU-rendered hook image. Zero CPU rasterization — uses shape mask + color tint.
+/// Hook image using circle_img (Rectangle shape) — keeps hooks in the same
+/// render batch as other Rectangle objects to avoid z-order artifacts.
 pub fn hook_img(r: u8, g: u8, b: u8) -> Image {
-    solid_ellipse(HOOK_R * 2.0, HOOK_R * 2.0, Color(r, g, b, 255))
+    Image {
+        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+        image: circle_img(HOOK_R as u32, r, g, b).into(),
+        color: None,
+    }
 }
 
 pub fn hook_base_for_zone(zone_idx: usize) -> (u8, u8, u8) {

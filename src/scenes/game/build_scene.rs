@@ -167,8 +167,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) = c.get_game_object_mut("player") {
                             obj.visible = true;
                         }
+                        // Only restore rope if the player was hooked when pause started.
+                        let was_hooked = matches!(
+                            c.get_var("rope_visible_at_pause"),
+                            Some(Value::Bool(true))
+                        );
                         if let Some(obj) = c.get_game_object_mut("rope") {
-                            obj.visible = true;
+                            obj.visible = was_hooked;
                         }
                         if let Some(obj) = c.get_game_object_mut("pause_overlay") {
                             obj.visible = false;
@@ -184,6 +189,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) = c.get_game_object_mut("player") {
                             obj.visible = false;
                         }
+                        // Remember rope state before hiding so unpause can restore it.
+                        let rope_was_visible = c
+                            .get_game_object("rope")
+                            .map_or(false, |o| o.visible);
+                        c.set_var("rope_visible_at_pause", rope_was_visible);
                         if let Some(obj) = c.get_game_object_mut("rope") {
                             obj.visible = false;
                         }
@@ -341,6 +351,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             if !tick_registered {
                 let st = state.clone();
                 let mut space_was_down = false;
+                let mut mouse_was_down = false;
                 let mut prev_nearest_hook = String::new();
                 let mut dark_mode_prev = false;
                 let mut prev_bg_theme: Option<(bool, usize, bool, bool)> = None;
@@ -382,7 +393,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if s.gravity_dir < 0.0 { 0.0 } else { VH - 28.0 }
                     };
                     if let Some(obj) = c.get_game_object_mut("danger_floor") {
-                        obj.position = (cam_x, floor_y);
+                        obj.position = (0.0, floor_y);
                     }
 
                     // ── Pause entrance animation ─────────────────────────
@@ -437,18 +448,27 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
-                    // ── Space key (grab / release) ───────────────────────
+                    // ── Input (grab / release) ──────────────────────────
+                    // Spacebar and mouse are both polled here so they
+                    // trigger at the same point in the frame.
                     let space_now = c.key("space");
-                    if space_now && !space_was_down {
+                    let mouse_now = matches!(
+                        c.get_var("mouse_left_held"),
+                        Some(Value::Bool(true))
+                    );
+                    let action_now = space_now || mouse_now;
+                    let action_was = space_was_down || mouse_was_down;
+                    if action_now && !action_was {
                         c.run(Action::Custom {
                             name: "do_grab".into(),
                         });
-                    } else if !space_now && space_was_down {
+                    } else if !action_now && action_was {
                         c.run(Action::Custom {
                             name: "do_release".into(),
                         });
                     }
                     space_was_down = space_now;
+                    mouse_was_down = mouse_now;
 
                     // ── Speed-reactive trail ─────────────────────────────
                     {
@@ -584,7 +604,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     // ── HUD ──────────────────────────────────────────────
-                    hud_update::tick_hud(c, &st, cam_x);
+                    hud_update::tick_hud(c, &st);
 
                     // ── Background ───────────────────────────────────────
                     if matches!(c.get_var("bg_force_refresh"), Some(Value::Bool(true))) {

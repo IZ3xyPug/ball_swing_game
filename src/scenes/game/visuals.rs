@@ -56,6 +56,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
     let hooks = s.live_hooks.clone();
     drop(s);
 
+    let max_r2 = ROPE_LEN_MAX * ROPE_LEN_MAX;
     let mut best_id: Option<String> = None;
     let mut best_dist = f32::INFINITY;
     for hid in &hooks {
@@ -65,7 +66,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
             let dx = px - hcx;
             let dy = py - hcy;
             let d2 = dx * dx + dy * dy;
-            if d2 < best_dist {
+            if d2 < best_dist && d2 <= max_r2 {
                 best_dist = d2;
                 best_id = Some(hid.clone());
             }
