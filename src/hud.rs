@@ -1,5 +1,26 @@
 use crate::constants::*;
 use crate::images::*;
+use std::sync::OnceLock;
+
+fn hud_coin_icon() -> &'static image::RgbaImage {
+    static ICON: OnceLock<image::RgbaImage> = OnceLock::new();
+    ICON.get_or_init(|| {
+        let fallback = || circle_img(18, C_COIN.0, C_COIN.1, C_COIN.2);
+        let decoded = image::load_from_memory_with_format(
+            include_bytes!("../assets/coin.gif"),
+            image::ImageFormat::Gif,
+        )
+        .map(|img| img.to_rgba8())
+        .unwrap_or_else(|_| fallback());
+
+        image::imageops::resize(
+            &decoded,
+            36,
+            36,
+            image::imageops::FilterType::CatmullRom,
+        )
+    })
+}
 
 pub fn coin_counter_img(count: u32) -> image::RgbaImage {
     let w = 300;
@@ -11,10 +32,7 @@ pub fn coin_counter_img(count: u32) -> image::RgbaImage {
     draw_rect(&mut img, 0, 0, 2, h, [170, 170, 190, 255]);
     draw_rect(&mut img, w - 2, 0, 2, h, [170, 170, 190, 255]);
 
-    let mut coin = circle_img(18, C_COIN.0, C_COIN.1, C_COIN.2);
-    image::imageops::overlay(&mut img, &coin, 12, 17);
-    coin = circle_img(8, 40, 20, 45);
-    image::imageops::overlay(&mut img, &coin, 22, 27);
+    image::imageops::overlay(&mut img, hud_coin_icon(), 12, 17);
 
     let clamped = count.min(9999);
     let digits = format!("{:04}", clamped);

@@ -1,9 +1,9 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
+use std::cmp::Ordering;
 
 use crate::constants::*;
 use crate::gameplay::*;
-use crate::images::*;
 use crate::state::*;
 use super::helpers::*;
 
@@ -40,6 +40,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             if let Some(obj) = c.get_game_object_mut(&prev) {
                 let (r, g, b) = hook_base_for_zone(zone_idx);
                 obj.set_image(hook_img(r, g, b));
+                obj.clear_highlight();
             }
         }
     });
@@ -49,6 +50,12 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
     canvas.register_custom_event("do_grab".into(), move |c| {
         let mut s = st.lock().unwrap();
         if s.dead || s.hooked { return; }
+
+        let mouse_target = if matches!(c.get_var("grab_from_mouse"), Some(Value::Bool(true))) {
+            Some((c.get_f32("mouse_grab_x"), c.get_f32("mouse_grab_y")))
+        } else {
+            None
+        };
 
         // Sync State position from engine before computing grab.
         if let Some(obj) = c.get_game_object("player") {
@@ -65,17 +72,34 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 .map(|o| {
                     let hcx = o.position.0 + HOOK_R;
                     let hcy = o.position.1 + HOOK_R;
-                    let dx = hcx - s.px;
-                    let dy = hcy - s.py;
-                    (o.id.clone(), hcx, hcy, (dx*dx + dy*dy).sqrt())
+                    let pdx = hcx - s.px;
+                    let pdy = hcy - s.py;
+                    let player_d2 = pdx * pdx + pdy * pdy;
+                    let cursor_d2 = if let Some((mx, my)) = mouse_target {
+                        let cdx = hcx - mx;
+                        let cdy = hcy - my;
+                        cdx * cdx + cdy * cdy
+                    } else {
+                        player_d2
+                    };
+                    (o.id.clone(), hcx, hcy, player_d2, cursor_d2)
                 })
-                .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap())
+                .min_by(|a, b| {
+                    if mouse_target.is_some() {
+                        a.4
+                            .partial_cmp(&b.4)
+                            .unwrap_or(Ordering::Equal)
+                            .then(a.3.partial_cmp(&b.3).unwrap_or(Ordering::Equal))
+                    } else {
+                        a.3.partial_cmp(&b.3).unwrap_or(Ordering::Equal)
+                    }
+                })
         } else {
             None
         };
 
-        if let Some((hook_id, hx, hy, dist)) = nearest {
-            let rope_len = dist.clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
+        if let Some((hook_id, hx, hy, player_d2, _cursor_d2)) = nearest {
+            let rope_len = player_d2.sqrt().clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
 
             apply_grab_impulse(&mut s, hx, hy);
 
@@ -114,13 +138,15 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
     // ── Mouse ────────────────────────────────────────────────────────────
     let mouse_registered = matches!(canvas.get_var("game_mouse_registered"), Some(Value::Bool(true)));
     if !mouse_registered {
-        canvas.on_mouse_press(move |c, btn, _pos| {
+        canvas.on_mouse_press(move |c, btn, pos| {
             if btn != MouseButton::Left || !c.is_scene("game") { return; }
-            c.run(Action::Custom { name: "do_grab".into() });
+            c.set_var("mouse_grab_x", pos.0);
+            c.set_var("mouse_grab_y", pos.1);
+            c.set_var("mouse_grab_queued", true);
         });
         canvas.on_mouse_release(move |c, btn, _pos| {
             if btn != MouseButton::Left || !c.is_scene("game") { return; }
-            c.run(Action::Custom { name: "do_release".into() });
+            c.set_var("mouse_release_queued", true);
         });
         canvas.set_var("game_mouse_registered", true);
     }

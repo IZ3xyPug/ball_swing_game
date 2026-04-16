@@ -203,6 +203,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
             canvas.set_var("pause_animating", false);
             canvas.set_var("game_paused", false);
+            canvas.set_var("mouse_grab_queued", false);
+            canvas.set_var("mouse_release_queued", false);
+            canvas.set_var("mouse_grab_x", 0.0f32);
+            canvas.set_var("mouse_grab_y", 0.0f32);
+            canvas.set_var("grab_from_mouse", false);
             canvas.set_var("bg_vivid", false);
             canvas.set_var("bg_force_refresh", true);
 
@@ -438,7 +443,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     // ── Space key (grab / release) ───────────────────────
-                    let space_now = c.key("space");
+                    if matches!(c.get_var("mouse_grab_queued"), Some(Value::Bool(true))) {
+                        c.set_var("mouse_grab_queued", false);
+                        c.set_var("grab_from_mouse", true);
+                        c.run(Action::Custom { name: "do_grab".into() });
+                        c.set_var("grab_from_mouse", false);
+                    }
+                    if matches!(c.get_var("mouse_release_queued"), Some(Value::Bool(true))) {
+                        c.set_var("mouse_release_queued", false);
+                        c.run(Action::Custom { name: "do_release".into() });
+                    }
+
+                    let space_now = c.is_key_held(&Key::Named(NamedKey::Space));
                     if space_now && !space_was_down {
                         c.run(Action::Custom {
                             name: "do_grab".into(),
