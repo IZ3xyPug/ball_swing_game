@@ -7,11 +7,7 @@ pub fn make_hook(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
     GameObject::new_rect(
         ctx,
         id.into(),
-        Some(Image {
-            shape: ShapeType::Ellipse(0.0, (HOOK_R*2.0, HOOK_R*2.0), 0.0),
-            image: circle_img(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2).into(),
-            color: None,
-        }),
+        Some(solid_ellipse(HOOK_R*2.0, HOOK_R*2.0, Color(C_HOOK.0, C_HOOK.1, C_HOOK.2, 255))),
         (HOOK_R*2.0, HOOK_R*2.0),
         (x - HOOK_R, y - HOOK_R),
         vec!["hook".into()],
@@ -112,11 +108,7 @@ pub fn make_zero_g(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
     GameObject::new_rect(
         ctx,
         id.into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (ZERO_G_W, ZERO_G_H), 0.0),
-            image: circle_img((ZERO_G_W * 0.5) as u32, 135, 220, 255).into(),
-            color: None,
-        }),
+        Some(solid_ellipse(ZERO_G_W, ZERO_G_H, Color(135, 220, 255, 255))),
         (ZERO_G_W, ZERO_G_H),
         (x, y),
         vec!["zero_g".into()],
@@ -153,13 +145,13 @@ pub fn make_gate_segment(
 
 pub fn make_gravity_well(ctx: &mut Context, id: &str, x: f32, y: f32, radius: f32, strength: f32, visual_r: f32) -> GameObject {
     let d = visual_r * 2.0;
-    let ring_img = gwell_ring_img(visual_r, C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, GWELL_RING_COUNT, 200.0);
+    let ring_img = gwell_ring_cached(visual_r, C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, GWELL_RING_COUNT, 200.0);
     GameObject::build(id)
         .size(d, d)
         .position(x - visual_r, y - visual_r)
         .image(Image {
             shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-            image: ring_img.into(),
+            image: ring_img,
             color: None,
         })
         .tag("gwell")

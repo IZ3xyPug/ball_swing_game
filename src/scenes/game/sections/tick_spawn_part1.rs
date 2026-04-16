@@ -22,7 +22,6 @@
             if matches!(c.get_var("pause_animating"), Some(Value::Bool(true))) {
                 let mut remaining = c.get_i32("pause_anim_frames").max(0);
                 let total = c.get_i32("pause_anim_total").max(1);
-                let cam_x = c.get_f32("pause_cam_x");
 
                 if remaining > 0 {
                     remaining -= 1;
@@ -31,14 +30,14 @@
                     let y = -VH + VH * ease;
 
                     if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                        obj.position = (cam_x, y);
+                        obj.position = (0.0, y);
                         obj.visible = true;
                     }
 
                     c.set_var("pause_anim_frames", remaining);
                     if remaining == 0 {
                         if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                            obj.position = (cam_x, 0.0);
+                            obj.position = (0.0, 0.0);
                         }
                         c.set_var("pause_animating", false);
                         c.pause();

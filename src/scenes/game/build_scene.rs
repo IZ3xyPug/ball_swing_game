@@ -187,15 +187,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) = c.get_game_object_mut("rope") {
                             obj.visible = false;
                         }
-                        let cam_x = c
-                            .camera()
-                            .map(|cam| cam.position.0)
-                            .unwrap_or(0.0);
                         if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                            obj.position = (cam_x, -VH);
+                            obj.position = (0.0, -VH);
                             obj.visible = true;
                         }
-                        c.set_var("pause_cam_x", cam_x);
                         c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
                         c.set_var("pause_anim_frames", PAUSE_MENU_ANIM_FRAMES);
                         c.set_var("pause_animating", true);
@@ -303,6 +298,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 bounce_enabled: true,
                 dark_mode: false,
                 glow_flashes: Vec::new(),
+
+                hud_last_dist_fill:    u32::MAX,
+                hud_last_coins:        u32::MAX,
+                hud_last_momentum:     u32::MAX,
+                hud_last_gravity_flip: false,
+                hud_last_py:           i32::MAX,
+                hud_last_px:           i32::MAX,
+                hud_last_flip_timer:   u32::MAX,
+                hud_last_zero_g_timer: u32::MAX,
             };
 
             // Reuse persistent Arc across respawns.
@@ -320,15 +324,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // Start hooked to hook_0—highlight it.
             if let Some(obj) = canvas.get_game_object_mut("hook_0") {
                 let (r, g, b) = hook_on_for_zone(0);
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(
-                        0.0,
-                        (HOOK_R * 2.0, HOOK_R * 2.0),
-                        0.0,
-                    ),
-                    image: circle_img(HOOK_R as u32, r, g, b).into(),
-                    color: None,
-                });
+                obj.set_image(hook_img(r, g, b));
             }
             canvas.run(Action::Show {
                 target: Target::name("rope"),
@@ -408,7 +404,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             if let Some(obj) =
                                 c.get_game_object_mut("pause_overlay")
                             {
-                                obj.position = (cam_x, y);
+                                obj.position = (0.0, y);
                                 obj.visible = true;
                             }
                             c.set_var("pause_anim_frames", remaining);
@@ -416,7 +412,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 if let Some(obj) =
                                     c.get_game_object_mut("pause_overlay")
                                 {
-                                    obj.position = (cam_x, 0.0);
+                                    obj.position = (0.0, 0.0);
                                 }
                                 c.set_var("pause_animating", false);
                                 c.set_var("game_paused", true);

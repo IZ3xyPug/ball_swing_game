@@ -1,4 +1,5 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Mutex};
+use std::collections::HashMap;
 use crate::constants::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,6 +39,23 @@ pub fn gwell_ring_img(visual_r: f32, r: u8, g: u8, b: u8, ring_count: u32, base_
             img.put_pixel(px, py, image::Rgba([pr, pg, pb, alpha]));
         }
     }
+    img
+}
+
+/// Cached version of `gwell_ring_img`. Returns an `Arc<RgbaImage>` that is
+/// shared across all callers with the same parameters. The cache key encodes
+/// `(visual_r, r, g, b, ring_count, base_alpha)` so each unique combo is
+/// rasterized exactly once.
+pub fn gwell_ring_cached(visual_r: f32, r: u8, g: u8, b: u8, ring_count: u32, base_alpha: f32) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<(u32, u8, u8, u8, u32, u32), Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (visual_r.to_bits(), r, g, b, ring_count, base_alpha.to_bits());
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img: Arc<image::RgbaImage> = gwell_ring_img(visual_r, r, g, b, ring_count, base_alpha).into();
+    guard.insert(key, img.clone());
     img
 }
 

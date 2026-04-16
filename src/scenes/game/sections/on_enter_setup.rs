@@ -80,12 +80,11 @@
                     c.clear_particles();
 
                     // Start overlay above the screen and slide it in.
-                    let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
+                    // ignore_zoom objects use screen-space coords: (0,0) = top-left.
                     if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                        obj.position = (cam_x, -VH);
+                        obj.position = (0.0, -VH);
                         obj.visible = true;
                     }
-                    c.set_var("pause_cam_x", cam_x);
                     c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
                     c.set_var("pause_anim_frames", PAUSE_MENU_ANIM_FRAMES);
                     c.set_var("pause_animating", true);
