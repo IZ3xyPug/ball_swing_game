@@ -327,39 +327,32 @@ pub fn pause_overlay_img() -> image::RgbaImage {
     let w = VW as u32;
     let h = VH as u32;
     let mut img = image::RgbaImage::new(w, h);
+    draw_rect(&mut img, 0, 0, w, h, [0, 0, 0, 170]);
+    img
+}
 
-    let panel_w = (w as f32 * 0.40) as u32;
-    let panel_x = (w - panel_w) / 2;
-    let panel_right = panel_x + panel_w;
+pub fn pause_title_img() -> image::RgbaImage {
+    let scale = 14u32;
+    let text = "PAUSED";
+    let text_w = text.len() as u32 * 6 * scale;
+    let text_h = 5 * scale;
+    let w = text_w + scale * 4;
+    let h = text_h + scale * 2;
+    let mut img = image::RgbaImage::new(w, h);
+    let tx = (w - text_w) / 2;
+    let ty = (h - text_h) / 2;
+    draw_word(&mut img, tx, ty, scale, text, [255, 255, 255, 255]);
+    img
+}
 
-    // Dark translucent side columns (flush against the center panel).
-    draw_rect(&mut img, 0, 0, panel_x, h, [0, 0, 0, 170]);
-    draw_rect(&mut img, panel_right, 0, w - panel_right, h, [0, 0, 0, 170]);
-
-    // White center panel
-    draw_rect(&mut img, panel_x, 0, panel_w, h, [250, 250, 250, 255]);
-    draw_rect(&mut img, panel_x, 0, 3, h, [28, 28, 28, 255]);
-    draw_rect(&mut img, panel_x + panel_w - 3, 0, 3, h, [28, 28, 28, 255]);
-
-    // Horizontal option rails in the center panel
-    let rail_w = (panel_w as f32 * 0.74) as u32;
-    let rail_x = panel_x + (panel_w - rail_w) / 2;
-    draw_rect(&mut img, rail_x, h / 2 - 180, rail_w, 4, [28, 28, 28, 240]);
-    draw_rect(&mut img, rail_x, h / 2 - 40, rail_w, 4, [28, 28, 28, 240]);
-    draw_rect(&mut img, rail_x, h / 2 + 100, rail_w, 4, [28, 28, 28, 240]);
-    draw_rect(&mut img, rail_x, h / 2 + 240, rail_w, 4, [28, 28, 28, 240]);
-
-    // Pixel-styled black text: PAUSED / RESUME / MENU / SETTINGS
-    let col = [18, 18, 18, 255];
+pub fn pause_btn_img(w: u32, h: u32, r: u8, g: u8, b: u8, label: &str) -> image::RgbaImage {
+    let mut img = pad_img(w, h, r, g, b);
     let scale = 4u32;
-
-    // PAUSED
-    draw_word(&mut img, panel_x + panel_w / 2 - 250, h / 2 - 300, scale, "PAUSED", col);
-    // Menu options
-    draw_word(&mut img, panel_x + panel_w / 2 - 170, h / 2 - 150, scale, "RESUME", col);
-    draw_word(&mut img, panel_x + panel_w / 2 - 130, h / 2 - 10, scale, "MENU", col);
-    draw_word(&mut img, panel_x + panel_w / 2 - 190, h / 2 + 130, scale, "SETTINGS", col);
-
+    let text_w = label.len() as u32 * 6 * scale;
+    let text_h = 5 * scale;
+    let tx = (w.saturating_sub(text_w)) / 2;
+    let ty = (h.saturating_sub(text_h)) / 2;
+    draw_word(&mut img, tx, ty, scale, label, [255, 255, 255, 255]);
     img
 }
 
@@ -385,6 +378,7 @@ fn draw_block_char(img: &mut image::RgbaImage, x: u32, y: u32, s: u32, ch: u8, c
         b'S' => [0,1,1,1,1, 1,0,0,0,0, 0,1,1,1,0, 0,0,0,0,1, 1,1,1,1,0],
         b'T' => [1,1,1,1,1, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 0,0,1,0,0],
         b'U' => [1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 1,0,0,0,1, 0,1,1,1,0],
+        b'W' => [1,0,0,0,1, 1,0,0,0,1, 1,0,1,0,1, 1,1,0,1,1, 1,0,0,0,1],
         b' ' => [0; 25],
         _ => [0; 25],
     };

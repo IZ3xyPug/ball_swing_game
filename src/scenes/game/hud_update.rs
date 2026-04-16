@@ -65,7 +65,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         obj.position = (30.0, 40.0);
         if dirty_coins {
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (300.0, 70.0), 0.0),
+                shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
                 image: coin_counter_img(coins).into(),
                 color: None,
             });
@@ -74,10 +74,10 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Momentum counter
     if let Some(obj) = c.get_game_object_mut("momentum_counter") {
-        obj.position = (30.0, 128.0);
+        obj.position = (30.0, 150.0);
         if dirty_momentum {
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+                shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
                 image: momentum_counter_img(momentum).into(),
                 color: None,
             });
@@ -86,10 +86,10 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Gravity indicator
     if let Some(obj) = c.get_game_object_mut("gravity_indicator") {
-        obj.position = (30.0, 200.0);
+        obj.position = (30.0, 248.0);
         if dirty_gravity {
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (220.0, 60.0), 0.0),
+                shape: ShapeType::Rectangle(0.0, (308.0, 84.0), 0.0),
                 image: gravity_indicator_img(gravity_flipped, true).into(),
                 color: None,
             });
@@ -98,10 +98,10 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Y meter
     if let Some(obj) = c.get_game_object_mut("y_meter") {
-        obj.position = (30.0, 272.0);
+        obj.position = (30.0, 344.0);
         if dirty_py {
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+                shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
                 image: y_counter_img(py).into(),
                 color: None,
             });
@@ -110,10 +110,10 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // X meter
     if let Some(obj) = c.get_game_object_mut("x_meter") {
-        obj.position = (30.0, 344.0);
+        obj.position = (30.0, 442.0);
         if dirty_px {
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+                shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
                 image: x_counter_img(px).into(),
                 color: None,
             });
@@ -123,11 +123,11 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Flip timer HUD
     if let Some(obj) = c.get_game_object_mut("flip_timer") {
         if flip_timer_val > 0 {
-            obj.position = (VW * 0.5 - 180.0, 460.0);
+            obj.position = (VW * 0.5 - 252.0, 560.0);
             obj.visible = true;
             if dirty_flip {
                 obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
                     image: flip_timer_img(flip_timer_val, FLIP_DURATION).into(),
                     color: None,
                 });
@@ -140,11 +140,11 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Zero-g timer HUD
     if let Some(obj) = c.get_game_object_mut("zero_g_timer") {
         if zero_g_timer_val > 0 {
-            obj.position = (VW * 0.5 - 180.0, 556.0);
+            obj.position = (VW * 0.5 - 252.0, 690.0);
             obj.visible = true;
             if dirty_zero_g {
                 obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
                     image: flip_timer_img(zero_g_timer_val, ZERO_G_DURATION).into(),
                     color: None,
                 });

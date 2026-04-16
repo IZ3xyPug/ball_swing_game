@@ -96,11 +96,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut coin_counter = GameObject::new_rect(
         ctx, "coin_counter".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 70.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
             image: coin_counter_img(0).into(),
             color: None,
         }),
-        (300.0, 70.0), (30.0, 40.0),
+        (420.0, 98.0), (30.0, 40.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     coin_counter.ignore_zoom = true;
@@ -108,11 +108,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
             image: momentum_counter_img(0.0).into(),
             color: None,
         }),
-        (300.0, 62.0), (30.0, 176.0),
+        (420.0, 86.0), (30.0, 150.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     momentum_counter.ignore_zoom = true;
@@ -120,11 +120,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut gravity_indicator = GameObject::new_rect(
         ctx, "gravity_indicator".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (220.0, 60.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (308.0, 84.0), 0.0),
             image: gravity_indicator_img(false, true).into(),
             color: None,
         }),
-        (220.0, 60.0), (30.0, 248.0),
+        (308.0, 84.0), (30.0, 248.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     gravity_indicator.ignore_zoom = true;
@@ -132,11 +132,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut y_meter = GameObject::new_rect(
         ctx, "y_meter".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
             image: y_counter_img(SPAWN_Y).into(),
             color: None,
         }),
-        (300.0, 62.0), (30.0, 320.0),
+        (420.0, 86.0), (30.0, 344.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     y_meter.ignore_zoom = true;
@@ -144,11 +144,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut x_meter = GameObject::new_rect(
         ctx, "x_meter".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (300.0, 62.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
             image: x_counter_img(SPAWN_X).into(),
             color: None,
         }),
-        (300.0, 62.0), (30.0, 392.0),
+        (420.0, 86.0), (30.0, 442.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     x_meter.ignore_zoom = true;
@@ -186,11 +186,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut flip_timer_hud = GameObject::new_rect(
         ctx, "flip_timer".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
             image: flip_timer_img(FLIP_DURATION, FLIP_DURATION).into(),
             color: None,
         }),
-        (360.0, 84.0), (VW * 0.5 - 180.0, 460.0),
+        (504.0, 118.0), (VW * 0.5 - 252.0, 560.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     flip_timer_hud.visible = false;
@@ -199,11 +199,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut zero_g_timer_hud = GameObject::new_rect(
         ctx, "zero_g_timer".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (360.0, 84.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
             image: flip_timer_img(ZERO_G_DURATION, ZERO_G_DURATION).into(),
             color: None,
         }),
-        (360.0, 84.0), (VW * 0.5 - 180.0, 556.0),
+        (504.0, 118.0), (VW * 0.5 - 252.0, 690.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     zero_g_timer_hud.visible = false;
@@ -394,6 +394,89 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // Pause overlay last so it renders above everything.
     scene = scene.with_object("pause_overlay", pause_overlay);
+
+    // ── Pause menu buttons (above overlay) ───────────────────────────────
+    let pause_btn_w: f32 = 700.0;
+    let pause_btn_h: f32 = 120.0;
+    let pause_btn_x: f32 = (VW - pause_btn_w) / 2.0;
+    let pause_title_w: f32 = 650.0;
+    let pause_title_h: f32 = 100.0;
+
+    let mut pause_title = GameObject::new_rect(
+        ctx, "pause_title".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (pause_title_w, pause_title_h), 0.0),
+            image: pause_title_img().into(),
+            color: None,
+        }),
+        (pause_title_w, pause_title_h), ((VW - pause_title_w) / 2.0, VH * 0.20),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    pause_title.visible = false;
+    pause_title.layer = 10_001;
+    pause_title.ignore_zoom = true;
+
+    let make_pause_btn = |ctx: &mut Context, name: &str, r: u8, g: u8, b: u8, label: &str, y: f32| {
+        let img = pause_btn_img(pause_btn_w as u32, pause_btn_h as u32, r, g, b, label);
+        let mut obj = GameObject::new_rect(
+            ctx, name.to_string().into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (pause_btn_w, pause_btn_h), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (pause_btn_w, pause_btn_h), (pause_btn_x, y),
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        obj.visible = false;
+        obj.layer = 10_001;
+        obj.ignore_zoom = true;
+        obj
+    };
+
+    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", 50, 160, 90, "RESUME", 820.0);
+    let pause_respawn_btn = make_pause_btn(ctx, "pause_respawn_btn", 60, 120, 200, "RESPAWN", 980.0);
+    let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", 80, 80, 100, "SETTINGS", 1140.0);
+    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", 170, 65, 65, "MENU", 1300.0);
+
+    scene = scene
+        .with_object("pause_title", pause_title)
+        .with_object("pause_resume_btn", pause_resume_btn)
+        .with_object("pause_respawn_btn", pause_respawn_btn)
+        .with_object("pause_settings_btn", pause_settings_btn)
+        .with_object("pause_menu_btn", pause_menu_btn);
+
+    // Pause button click + hover events
+    for (name, click_name) in [
+        ("pause_resume_btn", "pause_resume_click"),
+        ("pause_respawn_btn", "pause_respawn_click"),
+        ("pause_settings_btn", "pause_settings_click"),
+        ("pause_menu_btn", "pause_menu_click"),
+    ] {
+        scene = scene
+            .with_event(
+                GameEvent::MousePress {
+                    action: Action::Custom { name: click_name.into() },
+                    target: Target::name(name),
+                    button: Some(MouseButton::Left),
+                },
+                Target::name(name),
+            )
+            .with_event(
+                GameEvent::MouseEnter {
+                    action: Action::Custom { name: format!("{name}_enter") },
+                    target: Target::name(name),
+                },
+                Target::name(name),
+            )
+            .with_event(
+                GameEvent::MouseLeave {
+                    action: Action::Custom { name: format!("{name}_leave") },
+                    target: Target::name(name),
+                },
+                Target::name(name),
+            );
+    }
 
     let pools = PoolSets {
         starter_names,

@@ -141,7 +141,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     let is_pause = *key == Key::Character("p".into());
-                    if !is_pause { return; }
+                    let is_space = *key == Key::Named(NamedKey::Space);
+                    if !is_pause && !is_space { return; }
 
                     let game_paused = c.is_paused()
                         || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
@@ -175,10 +176,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) = c.get_game_object_mut("rope") {
                             obj.visible = was_hooked;
                         }
-                        if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                            obj.visible = false;
+                        // Hide pause overlay and buttons
+                        for name in ["pause_overlay", "pause_title",
+                                     "pause_resume_btn", "pause_respawn_btn",
+                                     "pause_settings_btn", "pause_menu_btn"] {
+                            if let Some(obj) = c.get_game_object_mut(name) {
+                                obj.visible = false;
+                            }
                         }
-                    } else {
+                    } else if is_pause {
                         let animating = matches!(
                             c.get_var("pause_animating"),
                             Some(Value::Bool(true))
@@ -197,9 +203,24 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) = c.get_game_object_mut("rope") {
                             obj.visible = false;
                         }
+                        // Start overlay + buttons off-screen for slide animation
                         if let Some(obj) = c.get_game_object_mut("pause_overlay") {
                             obj.position = (0.0, -VH);
                             obj.visible = true;
+                        }
+                        // Buttons also start off-screen (shifted up by VH)
+                        let btn_layout: &[(&str, f32, f32)] = &[
+                            ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
+                            ("pause_resume_btn", (VW - 700.0) / 2.0, 820.0),
+                            ("pause_respawn_btn", (VW - 700.0) / 2.0, 980.0),
+                            ("pause_settings_btn", (VW - 700.0) / 2.0, 1140.0),
+                            ("pause_menu_btn", (VW - 700.0) / 2.0, 1300.0),
+                        ];
+                        for &(name, bx, by) in btn_layout {
+                            if let Some(obj) = c.get_game_object_mut(name) {
+                                obj.position = (bx, by - VH);
+                                obj.visible = true;
+                            }
                         }
                         c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
                         c.set_var("pause_anim_frames", PAUSE_MENU_ANIM_FRAMES);
@@ -348,6 +369,92 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
 
+            // ── Pause menu button handlers (register once) ───────────────
+            let pause_btns_registered = matches!(
+                canvas.get_var("pause_btns_registered"),
+                Some(Value::Bool(true))
+            );
+            if !pause_btns_registered {
+                // Click handlers
+                canvas.register_custom_event("pause_resume_click".into(), |c| {
+                    if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
+                    // Trigger resume via synthetic "p" press logic
+                    c.resume();
+                    c.set_var("pause_animating", false);
+                    c.set_var("pause_anim_frames", 0);
+                    c.set_var("game_paused", false);
+                    let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+                        .rate(72.0).lifetime(0.68).velocity(-2.0, 8.0)
+                        .spread(6.0, 6.0).size(9.0).color(170, 255, 170, 255)
+                        .render_layer(2).gravity_scale(0.0)
+                        .collision(CollisionResponse::None).build();
+                    c.add_emitter(trail);
+                    c.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
+                    if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
+                    let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
+                    if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
+                    for name in ["pause_overlay", "pause_title",
+                                 "pause_resume_btn", "pause_respawn_btn",
+                                 "pause_settings_btn", "pause_menu_btn"] {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                    }
+                });
+                canvas.register_custom_event("pause_respawn_click".into(), |c| {
+                    if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
+                    c.resume();
+                    c.set_var("game_paused", false);
+                    c.load_scene("game");
+                });
+                canvas.register_custom_event("pause_menu_click".into(), |c| {
+                    if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
+                    c.resume();
+                    c.set_var("game_paused", false);
+                    c.load_scene("menu");
+                });
+                canvas.register_custom_event("pause_settings_click".into(), |_c| {
+                    // Settings: no-op for now
+                });
+
+                // Hover highlight handlers
+                struct BtnStyle { name: &'static str, r: u8, g: u8, b: u8, label: &'static str }
+                let styles: &[BtnStyle] = &[
+                    BtnStyle { name: "pause_resume_btn",   r: 50,  g: 160, b: 90,  label: "RESUME" },
+                    BtnStyle { name: "pause_respawn_btn",  r: 60,  g: 120, b: 200, label: "RESPAWN" },
+                    BtnStyle { name: "pause_settings_btn", r: 80,  g: 80,  b: 100, label: "SETTINGS" },
+                    BtnStyle { name: "pause_menu_btn",     r: 170, g: 65,  b: 65,  label: "MENU" },
+                ];
+                for s in styles {
+                    let btn_name: String = s.name.into();
+                    let (hr, hg, hb) = (s.r.saturating_add(40), s.g.saturating_add(40), s.b.saturating_add(40));
+                    let hover_img = pause_btn_img(700, 120, hr, hg, hb, s.label);
+                    let normal_img = pause_btn_img(700, 120, s.r, s.g, s.b, s.label);
+                    let enter_name = format!("{}_enter", s.name);
+                    let leave_name = format!("{}_leave", s.name);
+
+                    let btn_enter = btn_name.clone();
+                    canvas.register_custom_event(enter_name, move |c| {
+                        if let Some(obj) = c.get_game_object_mut(&btn_enter) {
+                            obj.set_image(Image {
+                                shape: ShapeType::Rectangle(0.0, (700.0, 120.0), 0.0),
+                                image: hover_img.clone().into(),
+                                color: None,
+                            });
+                        }
+                    });
+                    let btn_leave = btn_name.clone();
+                    canvas.register_custom_event(leave_name, move |c| {
+                        if let Some(obj) = c.get_game_object_mut(&btn_leave) {
+                            obj.set_image(Image {
+                                shape: ShapeType::Rectangle(0.0, (700.0, 120.0), 0.0),
+                                image: normal_img.clone().into(),
+                                color: None,
+                            });
+                        }
+                    });
+                }
+                canvas.set_var("pause_btns_registered", true);
+            }
+
             // ── Main tick (register once) ────────────────────────────────
             let tick_registered = matches!(
                 canvas.get_var("game_tick_registered"),
@@ -423,12 +530,31 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 obj.position = (0.0, y);
                                 obj.visible = true;
                             }
+                            // Animate buttons alongside the overlay
+                            let btn_layout: &[(&str, f32, f32)] = &[
+                                ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
+                                ("pause_resume_btn", (VW - 700.0) / 2.0, 820.0),
+                                ("pause_respawn_btn", (VW - 700.0) / 2.0, 980.0),
+                                ("pause_settings_btn", (VW - 700.0) / 2.0, 1140.0),
+                                ("pause_menu_btn", (VW - 700.0) / 2.0, 1300.0),
+                            ];
+                            for &(name, bx, by) in btn_layout {
+                                if let Some(obj) = c.get_game_object_mut(name) {
+                                    obj.position = (bx, by + y);
+                                    obj.visible = true;
+                                }
+                            }
                             c.set_var("pause_anim_frames", remaining);
                             if remaining == 0 {
                                 if let Some(obj) =
                                     c.get_game_object_mut("pause_overlay")
                                 {
                                     obj.position = (0.0, 0.0);
+                                }
+                                for &(name, bx, by) in btn_layout {
+                                    if let Some(obj) = c.get_game_object_mut(name) {
+                                        obj.position = (bx, by);
+                                    }
                                 }
                                 c.set_var("pause_animating", false);
                                 c.set_var("game_paused", true);
