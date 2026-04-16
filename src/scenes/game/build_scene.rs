@@ -48,6 +48,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     let bg_zone_purple_vivid = composite_starfield_gradient(starfield_rgba, &grad_purple_vivid, bg_w, bg_h, blend_h);
     let bg_zone_black_vivid = composite_starfield_gradient(starfield_rgba, &grad_black_vivid, bg_w, bg_h, blend_h);
 
+    // Pre-compute vertically flipped backgrounds for reverse gravity.
+    let bg_zone_start_flip = flip_image_vertical(&bg_zone_start);
+    let bg_zone_purple_flip = flip_image_vertical(&bg_zone_purple);
+    let bg_zone_black_flip = flip_image_vertical(&bg_zone_black);
+    let bg_zone_start_vivid_flip = flip_image_vertical(&bg_zone_start_vivid);
+    let bg_zone_purple_vivid_flip = flip_image_vertical(&bg_zone_purple_vivid);
+    let bg_zone_black_vivid_flip = flip_image_vertical(&bg_zone_black_vivid);
+
     // Build all game objects and pool structures.
     let (scene, pools) = bootstrap::build_scene_objects(ctx);
 
@@ -339,7 +347,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let mut space_was_down = false;
                 let mut prev_nearest_hook = String::new();
                 let mut dark_mode_prev = false;
-                let mut prev_bg_theme: Option<(bool, usize, bool)> = None;
+                let mut prev_bg_theme: Option<(bool, usize, bool, bool)> = None;
                 let mut prev_palette_zone: usize = usize::MAX;
                 let mut frame_counter: u32 = 0;
 
@@ -349,6 +357,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let bg_sv = bg_zone_start_vivid.clone();
                 let bg_pv = bg_zone_purple_vivid.clone();
                 let bg_bv = bg_zone_black_vivid.clone();
+                let bg_sf = bg_zone_start_flip.clone();
+                let bg_pf = bg_zone_purple_flip.clone();
+                let bg_bf = bg_zone_black_flip.clone();
+                let bg_svf = bg_zone_start_vivid_flip.clone();
+                let bg_pvf = bg_zone_purple_vivid_flip.clone();
+                let bg_bvf = bg_zone_black_vivid_flip.clone();
 
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
@@ -593,6 +607,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &bg_sv,
                         &bg_pv,
                         &bg_bv,
+                        &bg_sf,
+                        &bg_pf,
+                        &bg_bf,
+                        &bg_svf,
+                        &bg_pvf,
+                        &bg_bvf,
                     );
 
                     // ── Death check ──────────────────────────────────────
