@@ -6,6 +6,7 @@ use crate::constants::*;
 use crate::gameplay::*;
 use crate::state::*;
 use super::helpers::*;
+use quartz::GrappleConstraint;
 
 /// Register do_release and do_grab custom events.
 pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
@@ -19,19 +20,20 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
 
         let prev = s.active_hook.clone();
         let zone_idx = zone_index_for_distance(s.distance);
-        let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
 
         s.hooked = false;
         s.active_hook = String::new();
 
-        // Write the impulse result to the engine object and re-enable gravity.
+        // Write the impulse result to the engine object.
+        // Gravity stays as-is (no need to re-enable — it was never zeroed).
         let (nvx, nvy) = (s.vx, s.vy);
-        let gdir = s.gravity_dir;
         drop(s);
+
+        // Release the grapple constraint — crystalline stops applying rope forces.
+        c.release_grapple("player");
 
         if let Some(obj) = c.get_game_object_mut("player") {
             obj.momentum = (nvx, nvy);
-            obj.gravity = GRAVITY * gravity_scale * gdir;
         }
 
         c.run(Action::Hide { target: Target::name("rope") });
@@ -115,14 +117,24 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
 
             let zone_idx = zone_index_for_distance(s.distance);
 
-            // Write grab impulse to engine; disable gravity (rope handles it).
+            // Write grab impulse to engine.
+            // Gravity stays active — the GrappleConstraint + gravity creates
+            // natural pendulum swing. No need to zero gravity.
             let (nvx, nvy) = (s.vx, s.vy);
             drop(s);
 
             if let Some(obj) = c.get_game_object_mut("player") {
                 obj.momentum = (nvx, nvy);
-                obj.gravity = 0.0;
             }
+
+            // Attach a grapple constraint — crystalline handles the rope physics.
+            // stiffness=1.0 → fully rigid rope (hard position projection).
+            // damping=0.001 → very slight tangential energy loss per frame,
+            // matching the feel of the original SWING_DRAG=0.999.
+            let grapple = GrappleConstraint::at_point((hx, hy), rope_len)
+                .with_stiffness(1.0)
+                .with_damping(0.001);
+            c.attach_grapple("player", grapple);
 
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
                 let (r, g, b) = hook_on_for_zone(zone_idx);

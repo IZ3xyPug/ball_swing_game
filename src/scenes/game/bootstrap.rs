@@ -392,7 +392,27 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object(id, obj);
     }
 
+    // ── Camera flash overlay (fullscreen, driven by camera effect system) ──
+    let mut camera_flash_overlay = {
+        let mut img = image::RgbaImage::new(1, 1);
+        img.put_pixel(0, 0, image::Rgba([255, 255, 255, 0]));
+        GameObject::new_rect(
+            ctx, "camera_flash_overlay".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (VW, VH), (0.0, 0.0),
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+    camera_flash_overlay.visible = false;
+    camera_flash_overlay.layer = 9_999;
+    camera_flash_overlay.ignore_zoom = true;
+
     // Pause overlay last so it renders above everything.
+    scene = scene.with_object("camera_flash_overlay", camera_flash_overlay);
     scene = scene.with_object("pause_overlay", pause_overlay);
 
     // ── Pause menu buttons (above overlay) ───────────────────────────────

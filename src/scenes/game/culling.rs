@@ -44,6 +44,7 @@ fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.active_hook = String::new();
         drop(s);
         c.run(Action::Hide { target: Target::name("rope") });
+        c.release_grapple("player");
         // Re-enable gravity when unhooked.
         if let Some(obj) = c.get_game_object_mut("player") {
             obj.gravity = GRAVITY * gravity_scale * gdir;

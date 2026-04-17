@@ -21,6 +21,7 @@ use super::hud_update;
 use super::background;
 use super::gravity_wells;
 use super::helpers::*;
+use quartz::Timer;
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
 const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
@@ -335,6 +336,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 dark_mode: false,
                 glow_flashes: Vec::new(),
 
+                shake_cooldown: Timer::new(0.001),
+                flash_cooldown: Timer::new(0.001),
+
                 hud_last_dist_fill:    u32::MAX,
                 hud_last_coins:        u32::MAX,
                 hud_last_momentum:     u32::MAX,
@@ -365,6 +369,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.run(Action::Show {
                 target: Target::name("rope"),
             });
+
+            // Attach the initial grapple constraint so crystalline enforces
+            // the rope from the very first frame (matches State.hooked = true).
+            let initial_grapple = GrappleConstraint::at_point(start_hook, start_rope_len)
+                .with_stiffness(1.0)
+                .with_damping(0.001);
+            canvas.attach_grapple("player", initial_grapple);
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -658,6 +669,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if s.spinner_hit_cooldown > 0 {
                             s.spinner_hit_cooldown -= 1;
                         }
+                        // Advance camera effect cooldown timers (1/60s per frame).
+                        s.shake_cooldown.tick(1.0 / 60.0);
+                        s.flash_cooldown.tick(1.0 / 60.0);
                     }
                     frame_counter = frame_counter.wrapping_add(1);
 
@@ -667,8 +681,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         physics::read_player_from_engine(c, &mut s);
                     }
 
-                    // ── Rope constraint (before spawning/collision) ──────
-                    physics::tick_rope_constraint(c, &st);
+                    // ── Rope visual (before spawning/collision) ─────
+                    physics::tick_rope_visual(c, &st);
 
                     // ── Spawning ─────────────────────────────────────────
                     spawning::tick_spawning(
@@ -736,6 +750,28 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── HUD ──────────────────────────────────────────────
                     hud_update::tick_hud(c, &st);
+
+                    // ── Camera flash overlay ─────────────────────────────
+                    {
+                        let flash_info = c.camera_mut().and_then(|cam| {
+                            cam.effects.flash_color()
+                        });
+                        if let Some(obj) = c.get_game_object_mut("camera_flash_overlay") {
+                            if let Some((color, alpha)) = flash_info {
+                                let a = (color.3 as f32 * alpha).min(255.0) as u8;
+                                let mut img = image::RgbaImage::new(1, 1);
+                                img.put_pixel(0, 0, image::Rgba([color.0, color.1, color.2, a]));
+                                obj.set_image(Image {
+                                    shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+                                    image: img.into(),
+                                    color: None,
+                                });
+                                obj.visible = true;
+                            } else {
+                                obj.visible = false;
+                            }
+                        }
+                    }
 
                     // ── Background ───────────────────────────────────────
                     if matches!(c.get_var("bg_force_refresh"), Some(Value::Bool(true))) {

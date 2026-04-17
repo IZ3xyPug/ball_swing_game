@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use crate::constants::*;
+use quartz::Timer;
 
 pub fn lcg(s: &mut u64) -> f32 {
     *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -125,6 +126,10 @@ pub struct State {
 
     pub dark_mode: bool,
     pub glow_flashes: Vec<(String, u8)>,
+
+    // ── Camera effect cooldowns ─────────────────────────────────────
+    pub shake_cooldown: Timer,
+    pub flash_cooldown: Timer,
 
     // ── HUD dirty-tracking ──────────────────────────────────────────────
     pub hud_last_dist_fill:     u32,   // dist_fill * 1000 as u32

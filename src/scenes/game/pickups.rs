@@ -229,6 +229,12 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.gravity = GRAVITY * gravity_scale * gdir;
             }
         }
+
+        // Gravity flip is dramatic — purple flash + shake combo.
+        if let Some(cam) = c.camera_mut() {
+            cam.flash(Color(160, 50, 220, 160), 0.35);
+            cam.shake(80.0, 0.3);
+        }
     }
 }
 
@@ -298,6 +304,13 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.visible = false;
             obj.position = (-3875.0, -3875.0);
+        }
+    }
+
+    // Zero-g = floaty feeling — gentle zoom punch.
+    if !collected.is_empty() {
+        if let Some(cam) = c.camera_mut() {
+            cam.zoom_punch(0.10, 0.35);
         }
     }
 }

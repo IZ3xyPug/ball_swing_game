@@ -1,4 +1,5 @@
 use quartz::*;
+use quartz::Timer;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
@@ -35,6 +36,7 @@ fn begin_unhook(s: &mut State) -> Option<UnhookOps> {
 
 fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
     c.run(Action::Hide { target: Target::name("rope") });
+    c.release_grapple("player");
     if let Some(obj) = c.get_game_object_mut("player") {
         obj.gravity = ops.gravity_val;
     }
@@ -88,6 +90,10 @@ fn tick_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 s.glow_flashes.push((name.clone(), 10));
 
                 let unhook_ops = begin_unhook(&mut s);
+                let can_shake = s.shake_cooldown.is_finished();
+                if can_shake {
+                    s.shake_cooldown = Timer::new(0.5);
+                }
                 drop(s);
 
                 if let Some(obj) = c.get_game_object_mut(&name) {
@@ -95,6 +101,13 @@ fn tick_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
                 if let Some(ref ops) = unhook_ops {
                     apply_unhook(c, ops);
+                }
+
+                // Camera shake on spinner hit (cooldown prevents spam).
+                if can_shake {
+                    if let Some(cam) = c.camera_mut() {
+                        cam.shake(60.0, 0.25);
+                    }
                 }
 
                 s = st.lock().unwrap();
@@ -140,10 +153,22 @@ fn tick_gate_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 s.vy += ny * 4.0;
 
                 let unhook_ops = begin_unhook(&mut s);
+                let can_flash = s.flash_cooldown.is_finished();
+                if can_flash {
+                    s.flash_cooldown = Timer::new(0.4);
+                }
                 drop(s);
                 if let Some(ref ops) = unhook_ops {
                     apply_unhook(c, ops);
                 }
+
+                // Red flash on gate hit (cooldown prevents spam).
+                if can_flash {
+                    if let Some(cam) = c.camera_mut() {
+                        cam.flash(Color(255, 60, 40, 180), 0.2);
+                    }
+                }
+
                 s = st.lock().unwrap();
             }
         }
@@ -208,6 +233,11 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 color: None,
             });
             obj.set_glow(GlowConfig { color: Color(60, 200, 255, 220), width: 10.0 });
+        }
+
+        // Zoom punch on pad bounce — bouncy visual feedback.
+        if let Some(cam) = c.camera_mut() {
+            cam.zoom_punch(0.12, 0.2);
         }
     }
 }
