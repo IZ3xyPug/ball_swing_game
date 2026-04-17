@@ -1,13 +1,13 @@
 use crate::constants::*;
-use crate::images::circle_img;
+use crate::images::circle_cached;
 use quartz::{Image, ShapeType};
 
-/// Hook image using circle_img (Rectangle shape) — keeps hooks in the same
+/// Hook image using circle_cached — keeps hooks in the same
 /// render batch as other Rectangle objects to avoid z-order artifacts.
 pub fn hook_img(r: u8, g: u8, b: u8) -> Image {
     Image {
         shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-        image: circle_img(HOOK_R as u32, r, g, b).into(),
+        image: circle_cached(HOOK_R as u32, r, g, b),
         color: None,
     }
 }

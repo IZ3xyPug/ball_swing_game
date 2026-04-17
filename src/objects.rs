@@ -9,7 +9,7 @@ pub fn make_hook(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         id.into(),
         Some(Image {
             shape: ShapeType::Ellipse(0.0, (HOOK_R*2.0, HOOK_R*2.0), 0.0),
-            image: circle_img(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2).into(),
+            image: circle_cached(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2),
             color: None,
         }),
         (HOOK_R*2.0, HOOK_R*2.0),
@@ -22,11 +22,12 @@ pub fn make_hook(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
 }
 
 pub fn make_pad(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
+    let corner_r = pad_corner_radius();
     GameObject::new_rect(
         ctx,
         id.into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
+            shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
             image: pad_image_cached(),
             color: None,
         }),
@@ -60,7 +61,7 @@ pub fn make_coin(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         id.into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (COIN_R * 2.0, COIN_R * 2.0), 0.0),
-            image: circle_img(COIN_R as u32, C_COIN.0, C_COIN.1, C_COIN.2).into(),
+            image: circle_cached(COIN_R as u32, C_COIN.0, C_COIN.1, C_COIN.2),
             color: None,
         }),
         (COIN_R * 2.0, COIN_R * 2.0),
@@ -96,7 +97,7 @@ pub fn make_score_x2(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject 
         id.into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (SCORE_X2_W, SCORE_X2_H), 0.0),
-            image: circle_img((SCORE_X2_W * 0.5) as u32, 255, 220, 90).into(),
+            image: circle_cached((SCORE_X2_W * 0.5) as u32, 255, 220, 90),
             color: None,
         }),
         (SCORE_X2_W, SCORE_X2_H),
@@ -114,7 +115,7 @@ pub fn make_zero_g(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         id.into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (ZERO_G_W, ZERO_G_H), 0.0),
-            image: circle_img((ZERO_G_W * 0.5) as u32, 135, 220, 255).into(),
+            image: circle_cached((ZERO_G_W * 0.5) as u32, 135, 220, 255),
             color: None,
         }),
         (ZERO_G_W, ZERO_G_H),

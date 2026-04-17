@@ -45,6 +45,10 @@ pub const PAD_BOUNCE_DECAY:     f32 = 0.20;
 pub const PAD_BOUNCE_MIN_FACTOR:f32 = 0.30;
 pub const PAD_MOVE_RANGE: f32 = 250.0;
 pub const PAD_MOVE_SPEED: f32 = 3.0;
+
+pub fn pad_corner_radius() -> f32 {
+	(PAD_H * 0.48).clamp(1.0, PAD_H * 0.5 - 1.0)
+}
 pub const SPINNER_POOL_SIZE: usize = 14;
 pub const SPINNER_GAP_MIN:   f32 = 3900.0;
 pub const SPINNER_GAP_MAX:   f32 = 6400.0;
@@ -91,7 +95,7 @@ pub const SCORE_X2_GAP_MIN:   f32 = 5600.0;
 pub const SCORE_X2_GAP_MAX:   f32 = 9800.0;
 pub const SCORE_X2_W:         f32 = 160.0;
 pub const SCORE_X2_H:         f32 = 160.0;
-pub const SCORE_X2_DURATION:  u32 = 300; // 5 seconds at 60fps
+pub const SCORE_X2_DURATION:  u32 = 600; // 10 seconds at 60fps
 pub const ZERO_G_POOL_SIZE:   usize = 14;
 pub const ZERO_G_GAP_MIN:     f32 = 6200.0;
 pub const ZERO_G_GAP_MAX:     f32 = 9800.0;
@@ -115,8 +119,8 @@ pub const TEST_LAYOUT_MODE: bool = false;
 pub const TEST_HOOK_GAP: f32 = 760.0;
 
 // ── Zoom ──────────────────────────────────────────────────────────────────────
-pub const ZOOM_TOP_MARGIN:  f32 = VH * 0.06;
-pub const ZOOM_MAX:         f32 = 1.8;
+pub const ZOOM_TOP_MARGIN:  f32 = VH * 0.14;
+pub const ZOOM_MAX:         f32 = 3.2;
 pub const ZOOM_OUT_LERP:    f32 = 0.22;
 pub const ZOOM_IN_LERP:     f32 = 0.05;
 pub const ZOOM_LOOKAHEAD_T: f32 = 12.0;

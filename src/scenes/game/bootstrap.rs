@@ -42,7 +42,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         ctx, "player".into(),
         Some(Image {
             shape: ShapeType::Ellipse(0.0, (PLAYER_R*2.0, PLAYER_R*2.0), 0.0),
-            image: circle_img(PLAYER_R as u32, C_PLAYER.0, C_PLAYER.1, C_PLAYER.2).into(),
+            image: circle_cached(PLAYER_R as u32, C_PLAYER.0, C_PLAYER.1, C_PLAYER.2),
             color: None,
         }),
         (PLAYER_R*2.0, PLAYER_R*2.0),
@@ -104,6 +104,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     coin_counter.ignore_zoom = true;
+
+    let mut score_counter = GameObject::new_rect(
+        ctx, "score_counter".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
+            image: score_counter_img(0).into(),
+            color: None,
+        }),
+        (420.0, 98.0), (VW - 450.0, 40.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    score_counter.ignore_zoom = true;
 
     let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
@@ -256,6 +268,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("player",       player)
         .with_object("dist_bar",     dist_bar)
         .with_object("coin_counter", coin_counter)
+        .with_object("score_counter", score_counter)
         .with_object("momentum_counter", momentum_counter)
         .with_object("gravity_indicator", gravity_indicator)
         .with_object("y_meter", y_meter)
@@ -397,7 +410,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Pause menu buttons (above overlay) ───────────────────────────────
     let pause_btn_w: f32 = 700.0;
-    let pause_btn_h: f32 = 120.0;
+    let pause_btn_h: f32 = 170.0;
     let pause_btn_x: f32 = (VW - pause_btn_w) / 2.0;
     let pause_title_w: f32 = 650.0;
     let pause_title_h: f32 = 100.0;
@@ -418,10 +431,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     let make_pause_btn = |ctx: &mut Context, name: &str, r: u8, g: u8, b: u8, label: &str, y: f32| {
         let img = pause_btn_img(pause_btn_w as u32, pause_btn_h as u32, r, g, b, label);
+        let corner_r = (pause_btn_h * 0.48 * 1.33).clamp(1.0, pause_btn_h * 0.5 - 1.0);
         let mut obj = GameObject::new_rect(
             ctx, name.to_string().into(),
             Some(Image {
-                shape: ShapeType::Rectangle(0.0, (pause_btn_w, pause_btn_h), 0.0),
+                shape: ShapeType::RoundedRectangle(0.0, (pause_btn_w, pause_btn_h), 0.0, corner_r),
                 image: img.into(),
                 color: None,
             }),
@@ -434,49 +448,17 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         obj
     };
 
-    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", 50, 160, 90, "RESUME", 820.0);
-    let pause_respawn_btn = make_pause_btn(ctx, "pause_respawn_btn", 60, 120, 200, "RESPAWN", 980.0);
-    let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", 80, 80, 100, "SETTINGS", 1140.0);
-    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", 170, 65, 65, "MENU", 1300.0);
+    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", 50, 160, 90, "RESUME", 780.0);
+    let pause_restart_btn = make_pause_btn(ctx, "pause_restart_btn", 60, 120, 200, "RESTART", 1000.0);
+    let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", 80, 80, 100, "SETTINGS", 1220.0);
+    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", 170, 65, 65, "MENU", 1440.0);
 
     scene = scene
         .with_object("pause_title", pause_title)
         .with_object("pause_resume_btn", pause_resume_btn)
-        .with_object("pause_respawn_btn", pause_respawn_btn)
+        .with_object("pause_restart_btn", pause_restart_btn)
         .with_object("pause_settings_btn", pause_settings_btn)
         .with_object("pause_menu_btn", pause_menu_btn);
-
-    // Pause button click + hover events
-    for (name, click_name) in [
-        ("pause_resume_btn", "pause_resume_click"),
-        ("pause_respawn_btn", "pause_respawn_click"),
-        ("pause_settings_btn", "pause_settings_click"),
-        ("pause_menu_btn", "pause_menu_click"),
-    ] {
-        scene = scene
-            .with_event(
-                GameEvent::MousePress {
-                    action: Action::Custom { name: click_name.into() },
-                    target: Target::name(name),
-                    button: Some(MouseButton::Left),
-                },
-                Target::name(name),
-            )
-            .with_event(
-                GameEvent::MouseEnter {
-                    action: Action::Custom { name: format!("{name}_enter") },
-                    target: Target::name(name),
-                },
-                Target::name(name),
-            )
-            .with_event(
-                GameEvent::MouseLeave {
-                    action: Action::Custom { name: format!("{name}_leave") },
-                    target: Target::name(name),
-                },
-                Target::name(name),
-            );
-    }
 
     let pools = PoolSets {
         starter_names,

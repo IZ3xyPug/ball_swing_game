@@ -30,16 +30,28 @@ pub fn tick_visuals(
 
 fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
+    let zone_idx = zone_index_for_distance(s.distance);
     let mut expired: Vec<String> = Vec::new();
     for (name, timer) in s.glow_flashes.iter_mut() {
-        *timer -= 1;
-        if *timer == 0 { expired.push(name.clone()); }
+        if *timer > 0 {
+            *timer -= 1;
+            if *timer == 0 { expired.push(name.clone()); }
+        }
     }
     s.glow_flashes.retain(|(_, t)| *t > 0);
     drop(s);
 
     for name in &expired {
         if let Some(obj) = c.get_game_object_mut(name) {
+            if obj.tags.iter().any(|t| t == "pad") {
+                let (r, g, b) = pad_for_zone(zone_idx);
+                let corner_r = pad_corner_radius();
+                obj.set_image(Image {
+                    shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
+                    image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
+                    color: None,
+                });
+            }
             obj.clear_glow();
         }
     }
@@ -118,9 +130,10 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     for pid in &pads {
         if let Some(obj) = c.get_game_object_mut(pid) {
             let (r, g, b) = pad_for_zone(zone_idx);
+            let corner_r = pad_corner_radius();
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
-                image: pad_img(PAD_W as u32, PAD_H as u32, r, g, b).into(),
+                shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
+                image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
                 color: None,
             });
         }
@@ -130,7 +143,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
             let (r, g, b) = spinner_for_zone(zone_idx);
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (SPINNER_W, SPINNER_H), 0.0),
-                image: spinner_img(SPINNER_W as u32, SPINNER_H as u32, r, g, b).into(),
+                image: spinner_cached(SPINNER_W as u32, SPINNER_H as u32, r, g, b),
                 color: None,
             });
         }
@@ -190,10 +203,10 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     let target_zoom = if flipped {
         let effective_y = s.py + s.vy.max(0.0) * ZOOM_LOOKAHEAD_T;
-        ((VH - ZOOM_TOP_MARGIN) / effective_y.max(1.0)).clamp(1.0 / ZOOM_MAX, 1.0)
+        ((VH - ZOOM_TOP_MARGIN) / effective_y.abs().max(1.0)).clamp(1.0 / ZOOM_MAX, 1.0)
     } else {
         let effective_y = s.py + s.vy.min(0.0) * ZOOM_LOOKAHEAD_T;
-        ((VH - ZOOM_TOP_MARGIN) / (VH - effective_y).max(1.0)).clamp(1.0 / ZOOM_MAX, 1.0)
+        ((VH - ZOOM_TOP_MARGIN) / (VH - effective_y).abs().max(1.0)).clamp(1.0 / ZOOM_MAX, 1.0)
     };
 
     let px = s.px;

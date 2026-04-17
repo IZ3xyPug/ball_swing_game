@@ -90,6 +90,36 @@ fn flip_mover_origins(s: &mut State) {
     // However pad positions are already flipped above, so nothing extra needed.
 }
 
+fn mirror_player_for_flip(s: &mut State) {
+    s.vy = -s.vy;
+    s.py = (VH - s.py).clamp(PLAYER_R, VH - PLAYER_R);
+    if s.hooked {
+        s.hook_y = (VH - s.hook_y).clamp(HOOK_R, VH - HOOK_R);
+    }
+}
+
+fn apply_flip_transform(c: &mut Canvas, s: &mut State) {
+    mirror_player_for_flip(s);
+    flip_all_live_objects(c, s);
+    flip_mover_origins(s);
+}
+
+pub fn trigger_flip(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    s.gravity_dir *= -1.0;
+    s.flip_timer = FLIP_DURATION;
+    apply_flip_transform(c, &mut s);
+    let gdir = s.gravity_dir;
+    let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+    let hooked = s.hooked;
+    drop(s);
+    if !hooked {
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.gravity = GRAVITY * gravity_scale * gdir;
+        }
+    }
+}
+
 // ── Coin magnet pull ────────────────────────────────────────────────────────
 
 fn tick_coin_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -196,8 +226,8 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for name in &collected {
         s.flip_live.retain(|n| n != name);
         s.flip_free.push(name.clone());
-        s.gravity_dir *= -1.0;
-        s.flip_timer = FLIP_DURATION;
+        let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+        s.score = s.score.saturating_add(50u32.saturating_mul(score_mult));
     }
     drop(s);
 
@@ -209,25 +239,19 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        // Gravity direction changed — mirror player Y around centre, flip vy.
-        let mut s = st.lock().unwrap();
-        s.vy = -s.vy;
-        s.py = VH - s.py;
-        if s.hooked {
-            s.hook_y = VH - s.hook_y;
-        }
-        // Flip all live obstacle positions and mover origins.
-        flip_all_live_objects(c, &s);
-        flip_mover_origins(&mut s);
-        let gdir = s.gravity_dir;
-        let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
-        let hooked = s.hooked;
-        drop(s);
-        // Set engine gravity.
-        if !hooked {
-            if let Some(obj) = c.get_game_object_mut("player") {
-                obj.gravity = GRAVITY * gravity_scale * gdir;
-            }
+        trigger_flip(c, st);
+
+        // Purple flash + screen shake on gravity flip collect
+        if let Some(cam) = c.camera_mut() {
+            cam.flash_with(
+                Color(160, 50, 220, 200),
+                0.50,
+                FlashMode::Pulse,
+                FlashEase::Sharp,
+                0.85,
+                0.02,
+            );
+            cam.shake(60.0, 0.60);
         }
     }
 }
@@ -291,6 +315,8 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.zero_g_live.retain(|n| n != name);
         s.zero_g_free.push(name.clone());
         s.zero_g_timer = ZERO_G_DURATION;
+        let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+        s.score = s.score.saturating_add(50u32.saturating_mul(score_mult));
     }
     drop(s);
 
@@ -311,14 +337,7 @@ fn tick_flip_timer(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if s.flip_timer == 0 {
             // Gravity reverts.
             s.gravity_dir *= -1.0;
-            s.vy = -s.vy;
-            s.py = VH - s.py;
-            if s.hooked {
-                s.hook_y = VH - s.hook_y;
-            }
-            // Flip all live obstacle positions and mover origins back.
-            flip_all_live_objects(c, &s);
-            flip_mover_origins(&mut s);
+            apply_flip_transform(c, &mut s);
             let gdir = s.gravity_dir;
             let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
             let hooked = s.hooked;

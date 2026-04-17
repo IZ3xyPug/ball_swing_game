@@ -29,6 +29,13 @@ crate-type=["staticlib", "cdylib", "rlib"]
 package = "com.orange.pkg"
 build_targets = [ "aarch64-linux-android", "armv7-linux-androideabi" ]
 
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
 

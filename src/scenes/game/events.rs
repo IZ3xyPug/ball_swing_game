@@ -110,9 +110,6 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             s.active_hook = hook_id.clone();
             s.pad_bounce_count = 0;
 
-            let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
-            s.score = s.score.saturating_add(100u32.saturating_mul(score_mult));
-
             let zone_idx = zone_index_for_distance(s.distance);
 
             // Write grab impulse to engine; disable gravity (rope handles it).

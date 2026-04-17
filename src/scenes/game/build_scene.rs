@@ -140,6 +140,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
+                    if *key == Key::Character("2".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if !game_paused {
+                            c.set_var("manual_flip_queued", true);
+                        }
+                        return;
+                    }
+
                     let is_pause = *key == Key::Character("p".into());
                     let is_space = *key == Key::Named(NamedKey::Space);
                     if !is_pause && !is_space { return; }
@@ -178,10 +187,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         }
                         // Hide pause overlay and buttons
                         for name in ["pause_overlay", "pause_title",
-                                     "pause_resume_btn", "pause_respawn_btn",
+                                     "pause_resume_btn", "pause_restart_btn",
                                      "pause_settings_btn", "pause_menu_btn"] {
                             if let Some(obj) = c.get_game_object_mut(name) {
                                 obj.visible = false;
+                                obj.clear_highlight();
                             }
                         }
                     } else if is_pause {
@@ -211,10 +221,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // Buttons also start off-screen (shifted up by VH)
                         let btn_layout: &[(&str, f32, f32)] = &[
                             ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
-                            ("pause_resume_btn", (VW - 700.0) / 2.0, 820.0),
-                            ("pause_respawn_btn", (VW - 700.0) / 2.0, 980.0),
-                            ("pause_settings_btn", (VW - 700.0) / 2.0, 1140.0),
-                            ("pause_menu_btn", (VW - 700.0) / 2.0, 1300.0),
+                            ("pause_resume_btn", (VW - 700.0) / 2.0, 780.0),
+                            ("pause_restart_btn", (VW - 700.0) / 2.0, 1000.0),
+                            ("pause_settings_btn", (VW - 700.0) / 2.0, 1220.0),
+                            ("pause_menu_btn", (VW - 700.0) / 2.0, 1440.0),
                         ];
                         for &(name, bx, by) in btn_layout {
                             if let Some(obj) = c.get_game_object_mut(name) {
@@ -234,6 +244,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
             canvas.set_var("pause_animating", false);
             canvas.set_var("game_paused", false);
+            canvas.set_var("manual_flip_queued", false);
             canvas.set_var("mouse_grab_queued", false);
             canvas.set_var("mouse_release_queued", false);
             canvas.set_var("mouse_grab_x", 0.0f32);
@@ -241,12 +252,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("grab_from_mouse", false);
             canvas.set_var("bg_vivid", false);
             canvas.set_var("bg_force_refresh", true);
+            canvas.set_var("pause_hover_idx", -1);
+            if canvas.get_var("level_nonce").is_none() {
+                canvas.set_var("level_nonce", 0i32);
+            }
 
             // ── Fresh game state ─────────────────────────────────────────
             let mut seed: u64 = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0xDEAD_BEEF);
+            let level_nonce = canvas.get_i32("level_nonce").max(0) as u64;
+            seed ^= level_nonce.wrapping_mul(0x9E37_79B9_7F4A_7C15);
 
             let mut gen_y = starter_hooks
                 .last()
@@ -287,6 +304,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 score: 0,
                 coin_count: 0,
                 gravity_dir: 1.0,
+                score_time_awards: 0,
+                score_distance_awards: 0,
                 seed,
                 pending: first_batch,
                 live_hooks: starter_names.clone(),
@@ -343,6 +362,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 hud_last_px:           i32::MAX,
                 hud_last_flip_timer:   u32::MAX,
                 hud_last_zero_g_timer: u32::MAX,
+                hud_last_score:        u32::MAX,
             };
 
             // Reuse persistent Arc across respawns.
@@ -394,15 +414,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
                     if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
                     for name in ["pause_overlay", "pause_title",
-                                 "pause_resume_btn", "pause_respawn_btn",
+                                 "pause_resume_btn", "pause_restart_btn",
                                  "pause_settings_btn", "pause_menu_btn"] {
-                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                        if let Some(obj) = c.get_game_object_mut(name) {
+                            obj.visible = false;
+                            obj.clear_highlight();
+                        }
                     }
                 });
-                canvas.register_custom_event("pause_respawn_click".into(), |c| {
+                canvas.register_custom_event("pause_restart_click".into(), |c| {
                     if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
                     c.resume();
                     c.set_var("game_paused", false);
+                    let next = c.get_i32("level_nonce").saturating_add(1);
+                    c.set_var("level_nonce", next);
                     c.load_scene("game");
                 });
                 canvas.register_custom_event("pause_menu_click".into(), |c| {
@@ -415,42 +440,94 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // Settings: no-op for now
                 });
 
-                // Hover highlight handlers
-                struct BtnStyle { name: &'static str, r: u8, g: u8, b: u8, label: &'static str }
-                let styles: &[BtnStyle] = &[
-                    BtnStyle { name: "pause_resume_btn",   r: 50,  g: 160, b: 90,  label: "RESUME" },
-                    BtnStyle { name: "pause_respawn_btn",  r: 60,  g: 120, b: 200, label: "RESPAWN" },
-                    BtnStyle { name: "pause_settings_btn", r: 80,  g: 80,  b: 100, label: "SETTINGS" },
-                    BtnStyle { name: "pause_menu_btn",     r: 170, g: 65,  b: 65,  label: "MENU" },
-                ];
-                for s in styles {
-                    let btn_name: String = s.name.into();
-                    let (hr, hg, hb) = (s.r.saturating_add(40), s.g.saturating_add(40), s.b.saturating_add(40));
-                    let hover_img = pause_btn_img(700, 120, hr, hg, hb, s.label);
-                    let normal_img = pause_btn_img(700, 120, s.r, s.g, s.b, s.label);
-                    let enter_name = format!("{}_enter", s.name);
-                    let leave_name = format!("{}_leave", s.name);
+                // Pause UI uses ignore_zoom objects, so mouse hit-tests must
+                // compensate for camera zoom (input pos is in world virtual space).
 
-                    let btn_enter = btn_name.clone();
-                    canvas.register_custom_event(enter_name, move |c| {
-                        if let Some(obj) = c.get_game_object_mut(&btn_enter) {
-                            obj.set_image(Image {
-                                shape: ShapeType::Rectangle(0.0, (700.0, 120.0), 0.0),
-                                image: hover_img.clone().into(),
-                                color: None,
-                            });
+                let pause_ui_mouse_registered = matches!(
+                    canvas.get_var("pause_ui_mouse_registered"),
+                    Some(Value::Bool(true))
+                );
+                if !pause_ui_mouse_registered {
+                    canvas.on_mouse_move({
+                        move |c, pos| {
+                            if !c.is_scene("game") { return; }
+                            if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) {
+                                return;
+                            }
+
+                            // `pos` is in scaled virtual space (layout scale includes zoom).
+                            // Ignore-zoom UI is authored in base virtual space, so rescale.
+                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                            let ux = pos.0 * zoom;
+                            let uy = pos.1 * zoom;
+                            let bx = (VW - 700.0) / 2.0;
+
+                            let over_resume = ux >= bx && ux <= bx + 700.0 && uy >= 780.0 && uy <= 950.0;
+                            let over_restart = ux >= bx && ux <= bx + 700.0 && uy >= 1000.0 && uy <= 1170.0;
+                            let over_settings = ux >= bx && ux <= bx + 700.0 && uy >= 1220.0 && uy <= 1390.0;
+                            let over_menu = ux >= bx && ux <= bx + 700.0 && uy >= 1440.0 && uy <= 1610.0;
+
+                            let hover_idx = if over_resume {
+                                0
+                            } else if over_restart {
+                                1
+                            } else if over_settings {
+                                2
+                            } else if over_menu {
+                                3
+                            } else {
+                                -1
+                            };
+
+                            let prev_idx = c.get_i32("pause_hover_idx");
+                            if hover_idx == prev_idx {
+                                return;
+                            }
+                            c.set_var("pause_hover_idx", hover_idx);
+
+                            // Subtle but visible lighter hover state.
+                            let hover_tint = Color(255, 255, 255, 92);
+                            if let Some(obj) = c.get_game_object_mut("pause_resume_btn") {
+                                if over_resume { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("pause_restart_btn") {
+                                if over_restart { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("pause_settings_btn") {
+                                if over_settings { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("pause_menu_btn") {
+                                if over_menu { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
                         }
                     });
-                    let btn_leave = btn_name.clone();
-                    canvas.register_custom_event(leave_name, move |c| {
-                        if let Some(obj) = c.get_game_object_mut(&btn_leave) {
-                            obj.set_image(Image {
-                                shape: ShapeType::Rectangle(0.0, (700.0, 120.0), 0.0),
-                                image: normal_img.clone().into(),
-                                color: None,
-                            });
+
+                    canvas.on_mouse_press(move |c, btn, pos| {
+                        if btn != MouseButton::Left { return; }
+                        if !c.is_scene("game") { return; }
+                        if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) {
+                            return;
+                        }
+
+                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                        let ux = pos.0 * zoom;
+                        let uy = pos.1 * zoom;
+                        let bx = (VW - 700.0) / 2.0;
+
+                        if ux >= bx && ux <= bx + 700.0 {
+                            if uy >= 780.0 && uy <= 950.0 {
+                                c.run(Action::Custom { name: "pause_resume_click".into() });
+                            } else if uy >= 1000.0 && uy <= 1170.0 {
+                                c.run(Action::Custom { name: "pause_restart_click".into() });
+                            } else if uy >= 1220.0 && uy <= 1390.0 {
+                                c.run(Action::Custom { name: "pause_settings_click".into() });
+                            } else if uy >= 1440.0 && uy <= 1610.0 {
+                                c.run(Action::Custom { name: "pause_menu_click".into() });
+                            }
                         }
                     });
+
+                    canvas.set_var("pause_ui_mouse_registered", true);
                 }
                 canvas.set_var("pause_btns_registered", true);
             }
@@ -533,10 +610,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             // Animate buttons alongside the overlay
                             let btn_layout: &[(&str, f32, f32)] = &[
                                 ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
-                                ("pause_resume_btn", (VW - 700.0) / 2.0, 820.0),
-                                ("pause_respawn_btn", (VW - 700.0) / 2.0, 980.0),
-                                ("pause_settings_btn", (VW - 700.0) / 2.0, 1140.0),
-                                ("pause_menu_btn", (VW - 700.0) / 2.0, 1300.0),
+                                ("pause_resume_btn", (VW - 700.0) / 2.0, 780.0),
+                                ("pause_restart_btn", (VW - 700.0) / 2.0, 1000.0),
+                                ("pause_settings_btn", (VW - 700.0) / 2.0, 1220.0),
+                                ("pause_menu_btn", (VW - 700.0) / 2.0, 1440.0),
                             ];
                             for &(name, bx, by) in btn_layout {
                                 if let Some(obj) = c.get_game_object_mut(name) {
@@ -687,6 +764,23 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Pickups ──────────────────────────────────────────
                     pickups::tick_pickups(c, &st);
 
+                    // ── Manual gravity flip (key '2') ───────────────────
+                    if matches!(c.get_var("manual_flip_queued"), Some(Value::Bool(true))) {
+                        pickups::trigger_flip(c, &st);
+                        if let Some(cam) = c.camera_mut() {
+                            cam.flash_with(
+                                Color(160, 50, 220, 200),
+                                0.50,
+                                FlashMode::Pulse,
+                                FlashEase::Sharp,
+                                0.85,
+                                0.02,
+                            );
+                            cam.shake(60.0, 0.60);
+                        }
+                        c.set_var("manual_flip_queued", false);
+                    }
+
                     // ── Gravity wells ────────────────────────────────────
                     gravity_wells::tick_gravity_wells(
                         c,
@@ -700,6 +794,26 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         let travelled = (s.px - SPAWN_X).max(0.0);
                         if travelled > s.distance {
                             s.distance = travelled;
+                        }
+
+                        let time_awards = s.ticks / 60;
+                        if time_awards > s.score_time_awards {
+                            let gained = time_awards - s.score_time_awards;
+                            let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+                            s.score = s
+                                .score
+                                .saturating_add(gained.saturating_mul(10).saturating_mul(score_mult));
+                            s.score_time_awards = time_awards;
+                        }
+
+                        let distance_awards = (s.distance / 5000.0).floor() as u32;
+                        if distance_awards > s.score_distance_awards {
+                            let gained = distance_awards - s.score_distance_awards;
+                            let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+                            s.score = s
+                                .score
+                                .saturating_add(gained.saturating_mul(200).saturating_mul(score_mult));
+                            s.score_distance_awards = distance_awards;
                         }
                     }
 

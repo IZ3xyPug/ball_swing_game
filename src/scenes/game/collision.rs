@@ -202,12 +202,10 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         if let Some(obj) = c.get_game_object_mut(&pad_name) {
             let (pr, pg, pb) = pad_hit_for_zone(zone_idx);
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
-                image: pad_img(PAD_W as u32, PAD_H as u32, pr, pg, pb).into(),
-                color: None,
+            obj.set_glow(GlowConfig {
+                color: Color(pr, pg, pb, 220),
+                width: 10.0,
             });
-            obj.set_glow(GlowConfig { color: Color(60, 200, 255, 220), width: 10.0 });
         }
     }
 }

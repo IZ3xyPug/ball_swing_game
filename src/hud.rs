@@ -44,6 +44,26 @@ pub fn coin_counter_img(count: u32) -> image::RgbaImage {
     img
 }
 
+pub fn score_counter_img(score: u32) -> image::RgbaImage {
+    let w = 420;
+    let h = 98;
+    let mut img = image::RgbaImage::new(w, h);
+    draw_rect(&mut img, 0, 0, w, h, [15, 18, 28, 210]);
+    draw_rect(&mut img, 0, 0, w, 2, [255, 205, 120, 255]);
+    draw_rect(&mut img, 0, h - 2, w, 2, [255, 205, 120, 255]);
+    draw_rect(&mut img, 0, 0, 2, h, [255, 205, 120, 255]);
+    draw_rect(&mut img, w - 2, 0, 2, h, [255, 205, 120, 255]);
+
+    let clamped = score.min(999_999);
+    let digits = format!("{:06}", clamped);
+    let mut dx = 42;
+    for ch in digits.bytes() {
+        draw_digit_7seg(&mut img, dx, 17, 3, (ch - b'0') as u8, [255, 248, 220, 255]);
+        dx += 56;
+    }
+    img
+}
+
 pub fn momentum_counter_img(momentum: f32) -> image::RgbaImage {
     let w = 420;
     let h = 86;

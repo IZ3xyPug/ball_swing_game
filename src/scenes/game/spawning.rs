@@ -24,6 +24,77 @@ pub fn tick_spawning(
     spawn_gravity_wells(c, st);
 }
 
+fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
+    let closest_x = cx.clamp(x, x + w);
+    let closest_y = cy.clamp(y, y + h);
+    let dx = cx - closest_x;
+    let dy = cy - closest_y;
+    dx * dx + dy * dy <= r * r
+}
+
+fn hook_overlaps_hazards(c: &Canvas, s: &State, hx: f32, hy: f32) -> bool {
+    let r = HOOK_R;
+
+    for pad_name in &s.pad_live {
+        if let Some(pad) = c.get_game_object(pad_name) {
+            if circle_overlaps_aabb(hx, hy, r, pad.position.0, pad.position.1, PAD_W, PAD_H) {
+                return true;
+            }
+        }
+    }
+
+    for spinner_name in &s.spinner_live {
+        if let Some(spinner) = c.get_game_object(spinner_name) {
+            if circle_overlaps_aabb(hx, hy, r, spinner.position.0, spinner.position.1, SPINNER_W, SPINNER_H) {
+                return true;
+            }
+        }
+    }
+
+    for gwell_name in &s.gwell_live {
+        if let Some(gwell) = c.get_game_object(gwell_name) {
+            let gcx = gwell.position.0 + gwell.size.0 * 0.5;
+            let gcy = gwell.position.1 + gwell.size.1 * 0.5;
+            let gr = gwell.size.0.min(gwell.size.1) * 0.5;
+            let dx = hx - gcx;
+            let dy = hy - gcy;
+            let rr = r + gr;
+            if dx * dx + dy * dy <= rr * rr {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn find_safe_hook_position(c: &Canvas, s: &State, base_x: f32, base_y: f32) -> Option<(f32, f32)> {
+    let candidates: &[(f32, f32)] = &[
+        (0.0, 0.0),
+        (0.0, -220.0),
+        (0.0, 220.0),
+        (260.0, 0.0),
+        (-260.0, 0.0),
+        (260.0, -220.0),
+        (260.0, 220.0),
+        (-260.0, -220.0),
+        (-260.0, 220.0),
+        (520.0, 0.0),
+        (-520.0, 0.0),
+        (0.0, -420.0),
+        (0.0, 420.0),
+    ];
+
+    for (dx, dy) in candidates {
+        let hx = base_x + dx;
+        let hy = (base_y + dy).clamp(HOOK_R + 8.0, VH - HOOK_R - 8.0);
+        if !hook_overlaps_hazards(c, s, hx, hy) {
+            return Some((hx, hy));
+        }
+    }
+    None
+}
+
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
 fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -38,7 +109,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let Some(id) = s.pool_free.pop() else { break; };
 
         let mut hx = spec.x;
-        let hy = spec.y;
+        let mut hy = spec.y;
 
         // Push away from nearby spinners.
         let hook_spinner_min_x_gap = HOOK_SPINNER_MIN_X_GAP;
@@ -53,8 +124,15 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
 
+        let Some((safe_hx, safe_hy)) = find_safe_hook_position(c, &s, hx, hy) else {
+            s.pool_free.push(id);
+            continue;
+        };
+        hx = safe_hx;
+        hy = safe_hy;
+
         s.live_hooks.push(id.clone());
-        if spec.x > s.rightmost_x { s.rightmost_x = spec.x; }
+        if hx > s.rightmost_x { s.rightmost_x = hx; }
         hooks_spawned += 1;
 
         let zone_idx = zone_index_for_distance(s.distance);
@@ -119,11 +197,12 @@ fn spawn_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         if let Some(obj) = c.get_game_object_mut(&id) {
             let (r, g, b) = pad_for_zone(zone_idx);
+            let corner_r = pad_corner_radius();
             obj.position = (x, y);
             obj.visible = true;
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
-                image: pad_img(PAD_W as u32, PAD_H as u32, r, g, b).into(),
+                shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
+                image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
                 color: None,
             });
         }
@@ -174,7 +253,7 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.rotation_momentum = rot_speed;
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (SPINNER_W, SPINNER_H), 0.0),
-                image: spinner_img(SPINNER_W as u32, SPINNER_H as u32, r, g, b).into(),
+                image: spinner_cached(SPINNER_W as u32, SPINNER_H as u32, r, g, b),
                 color: None,
             });
         }
@@ -403,8 +482,13 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     }
                 }
                 let hy = 650.0;
-                s.live_hooks.push(hook_id.clone());
-                Some((hook_id, hx, hy))
+                if let Some((safe_hx, safe_hy)) = find_safe_hook_position(c, &s, hx, hy) {
+                    s.live_hooks.push(hook_id.clone());
+                    Some((hook_id, safe_hx, safe_hy))
+                } else {
+                    s.pool_free.push(hook_id);
+                    None
+                }
             } else {
                 None
             };

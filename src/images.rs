@@ -138,6 +138,22 @@ pub fn circle_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     img
 }
 
+/// Cached circle: returns `Arc<RgbaImage>` keyed by (radius, r, g, b).
+/// Each unique combo is rasterized once; subsequent calls return the cached Arc.
+pub fn circle_cached(radius: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<(u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (radius, r, g, b);
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img = circle_img(radius, r, g, b);
+    let arc: Arc<image::RgbaImage> = Arc::new(img);
+    guard.insert(key, arc.clone());
+    arc
+}
+
 pub fn gradient_rect(w: u32, h: u32, (r0,g0,b0): (u8,u8,u8), (r1,g1,b1): (u8,u8,u8)) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
     for py in 0..h {
@@ -214,17 +230,152 @@ macro_rules! cached_image {
     };
 }
 
-pub fn pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+fn pad_img_with_tuning(
+    w: u32,
+    h: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+    corner_ratio: f32,
+    source_y_stretch: f32,
+) -> image::RgbaImage {
+    static PAD_BASE: OnceLock<Option<image::RgbaImage>> = OnceLock::new();
+
+    let base = PAD_BASE.get_or_init(|| {
+        image::load_from_memory(
+            include_bytes!("../assets/rounded_rectangle.png"),
+        )
+        .map(|img| {
+            let rgba = img.to_rgba8();
+
+            // Trim transparent padding so nine-slice uses the actual rounded shape,
+            // not the oversized source canvas.
+            let mut min_x = rgba.width();
+            let mut min_y = rgba.height();
+            let mut max_x = 0u32;
+            let mut max_y = 0u32;
+            let mut found = false;
+
+            for y in 0..rgba.height() {
+                for x in 0..rgba.width() {
+                    if rgba.get_pixel(x, y)[3] > 0 {
+                        found = true;
+                        min_x = min_x.min(x);
+                        min_y = min_y.min(y);
+                        max_x = max_x.max(x);
+                        max_y = max_y.max(y);
+                    }
+                }
+            }
+
+            if !found {
+                return rgba;
+            }
+
+            let cw = max_x.saturating_sub(min_x).saturating_add(1);
+            let ch = max_y.saturating_sub(min_y).saturating_add(1);
+            image::imageops::crop_imm(&rgba, min_x, min_y, cw, ch).to_image()
+        })
+        .ok()
+    });
+
+    if let Some(base_src) = base {
+        let mut stretched_src: Option<image::RgbaImage> = None;
+        let src: &image::RgbaImage = if (source_y_stretch - 1.0).abs() > f32::EPSILON {
+            let stretched_h = ((base_src.height() as f32) * source_y_stretch).round() as u32;
+            let final_h = stretched_h.max(base_src.height()).max(1);
+            stretched_src = Some(image::imageops::resize(
+                base_src,
+                base_src.width().max(1),
+                final_h,
+                image::imageops::FilterType::CatmullRom,
+            ));
+            stretched_src.as_ref().unwrap()
+        } else {
+            base_src
+        };
+
+        let sw = src.width();
+        let sh = src.height();
+        if sw > 0 && sh > 0 {
+            // Use 9-slice sampling so rounded corners keep their shape on wide buttons.
+            let mut corner = ((sw.min(sh) as f32) * corner_ratio).round() as u32;
+            let max_corner = (sw.min(sh) / 2).saturating_sub(1);
+            corner = corner.clamp(1, max_corner.max(1));
+
+            let left_d = corner.min(w / 2);
+            let right_d = corner.min(w.saturating_sub(left_d));
+            let top_d = corner.min(h / 2);
+            let bottom_d = corner.min(h.saturating_sub(top_d));
+
+            let center_dw = w.saturating_sub(left_d + right_d);
+            let center_dh = h.saturating_sub(top_d + bottom_d);
+
+            let left_s = corner;
+            let right_s = corner;
+            let top_s = corner;
+            let bottom_s = corner;
+
+            let center_sw = sw.saturating_sub(left_s + right_s);
+            let center_sh = sh.saturating_sub(top_s + bottom_s);
+
+            let mut out = image::RgbaImage::new(w, h);
+            for py in 0..h {
+                let sy = if py < top_d {
+                    if top_d > 0 { py.saturating_mul(top_s) / top_d } else { 0 }
+                } else if py >= h.saturating_sub(bottom_d) {
+                    let dy = py.saturating_sub(h.saturating_sub(bottom_d));
+                    let offs = if bottom_d > 0 { dy.saturating_mul(bottom_s) / bottom_d } else { 0 };
+                    sh.saturating_sub(bottom_s).saturating_add(offs)
+                } else {
+                    let dy = py.saturating_sub(top_d);
+                    let offs = if center_dh > 0 { dy.saturating_mul(center_sh) / center_dh } else { 0 };
+                    top_s.saturating_add(offs)
+                }
+                .min(sh.saturating_sub(1));
+
+                for px in 0..w {
+                    let sx = if px < left_d {
+                        if left_d > 0 { px.saturating_mul(left_s) / left_d } else { 0 }
+                    } else if px >= w.saturating_sub(right_d) {
+                        let dx = px.saturating_sub(w.saturating_sub(right_d));
+                        let offs = if right_d > 0 { dx.saturating_mul(right_s) / right_d } else { 0 };
+                        sw.saturating_sub(right_s).saturating_add(offs)
+                    } else {
+                        let dx = px.saturating_sub(left_d);
+                        let offs = if center_dw > 0 { dx.saturating_mul(center_sw) / center_dw } else { 0 };
+                        left_s.saturating_add(offs)
+                    }
+                    .min(sw.saturating_sub(1));
+
+                    let p = src.get_pixel(sx, sy);
+                    let luma = p[0] as f32 / 255.0;
+                    let a = p[3];
+                    if a == 0 {
+                        out.put_pixel(px, py, image::Rgba([0, 0, 0, 0]));
+                        continue;
+                    }
+                    let tr = (r as f32 * luma).clamp(0.0, 255.0) as u8;
+                    let tg = (g as f32 * luma).clamp(0.0, 255.0) as u8;
+                    let tb = (b as f32 * luma).clamp(0.0, 255.0) as u8;
+                    out.put_pixel(px, py, image::Rgba([tr, tg, tb, a]));
+                }
+            }
+            return out;
+        }
+    }
+
+    // Fallback to the old procedural rounded rectangle if asset loading fails.
     let mut img = image::RgbaImage::new(w, h);
-    let corner_r = ((h as f32) * 0.32).round() as i32;
     let w_i = w as i32;
     let h_i = h as i32;
+    let max_corner_r = ((w.min(h) as i32) / 2).saturating_sub(1).max(1);
+    let corner_r = (((h as f32) * corner_ratio).round() as i32).clamp(1, max_corner_r);
     for py in 0..h {
         for px in 0..w {
             let x = px as i32;
             let y = py as i32;
 
-            // Rounded-rect mask: keep center strips, carve outside quarter-circles.
             let in_mid_x = x >= corner_r && x < (w_i - corner_r);
             let in_mid_y = y >= corner_r && y < (h_i - corner_r);
             let inside = if in_mid_x || in_mid_y {
@@ -257,7 +408,48 @@ pub fn pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     }
     img
 }
+
+pub fn pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+    // Bounce pads: restored to a more natural old profile.
+    pad_img_with_tuning(w, h, r, g, b, 0.48, 1.0)
+}
+
+fn pause_pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+    // Pause UI: keep the fuller profile you approved.
+    pad_img_with_tuning(w, h, r, g, b, 0.62 * 1.33 * 1.33 * 1.5, 1.33 * 1.33 * 1.5)
+}
+
 cached_image!(pad_image_cached, pad_img(PAD_W as u32, PAD_H as u32, C_PAD.0, C_PAD.1, C_PAD.2));
+
+/// Cached pad image keyed by (w, h, r, g, b). Each unique color/size combo
+/// is rasterized once; subsequent calls return the cached Arc.
+pub fn pad_cached(w: u32, h: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<(u32, u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (w, h, r, g, b);
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img = pad_img(w, h, r, g, b);
+    let arc: Arc<image::RgbaImage> = Arc::new(img);
+    guard.insert(key, arc.clone());
+    arc
+}
+
+pub fn pause_pad_cached(w: u32, h: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<(u32, u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (w, h, r, g, b);
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img = pause_pad_img(w, h, r, g, b);
+    let arc: Arc<image::RgbaImage> = Arc::new(img);
+    guard.insert(key, arc.clone());
+    arc
+}
 
 pub fn spinner_img(w: u32, h: u32, base_r: u8, base_g: u8, base_b: u8) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
@@ -285,6 +477,21 @@ pub fn spinner_img(w: u32, h: u32, base_r: u8, base_g: u8, base_b: u8) -> image:
     img
 }
 cached_image!(spinner_image_cached, spinner_img(SPINNER_W as u32, SPINNER_H as u32, C_SPINNER.0, C_SPINNER.1, C_SPINNER.2));
+
+/// Cached spinner image keyed by (w, h, r, g, b).
+pub fn spinner_cached(w: u32, h: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<(u32, u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (w, h, r, g, b);
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img = spinner_img(w, h, r, g, b);
+    let arc: Arc<image::RgbaImage> = Arc::new(img);
+    guard.insert(key, arc.clone());
+    arc
+}
 
 pub fn flip_img(w: u32, h: u32) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
@@ -346,7 +553,7 @@ pub fn pause_title_img() -> image::RgbaImage {
 }
 
 pub fn pause_btn_img(w: u32, h: u32, r: u8, g: u8, b: u8, label: &str) -> image::RgbaImage {
-    let mut img = pad_img(w, h, r, g, b);
+    let mut img = (*pause_pad_cached(w, h, r, g, b)).clone();
     let scale = 4u32;
     let text_w = label.len() as u32 * 6 * scale;
     let text_h = 5 * scale;

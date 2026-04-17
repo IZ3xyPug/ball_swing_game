@@ -64,6 +64,8 @@ pub struct State {
     pub score:      u32,
     pub coin_count: u32,
     pub gravity_dir: f32,
+    pub score_time_awards: u32,
+    pub score_distance_awards: u32,
 
     pub seed:        u64,
     pub pending:     VecDeque<HookSpec>,
@@ -135,4 +137,5 @@ pub struct State {
     pub hud_last_px:            i32,
     pub hud_last_flip_timer:    u32,
     pub hud_last_zero_g_timer:  u32,
+    pub hud_last_score:         u32,
 }
