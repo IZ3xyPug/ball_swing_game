@@ -75,6 +75,7 @@ fn cull_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3500.0, -3500.0); obj.rotation_momentum = 0.0; }
+        c.remove_light(&format!("spinner_light_{}", name));
     }
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.spinner_live.retain(|n| !rm.contains(n.as_str()));

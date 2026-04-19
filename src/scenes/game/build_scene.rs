@@ -160,6 +160,25 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     });
                     canvas.add_light(trail_light);
                     canvas.attach_light("trail_light", "player", (-60.0, 0.0));
+
+                    // Particle trail segment lights — point lights at 1/4 the
+                    // radius of player_light (300 = 1200 / 4).
+                    for (i, (offset_x, intensity)) in [
+                        (-50.0_f32, 2.0_f32),
+                        (-120.0, 1.5),
+                        (-200.0, 1.0),
+                    ].iter().enumerate() {
+                        let pid = format!("trail_p{}_light", i);
+                        let tl = LightSource::new(
+                            pid.clone(),
+                            (0.0, 0.0),
+                            Color(170, 255, 170, 200),
+                            300.0,
+                            *intensity,
+                        );
+                        canvas.add_light(tl);
+                        canvas.attach_light(&pid, "player", (*offset_x, 0.0));
+                    }
                 }
             }
 
@@ -290,6 +309,47 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                             speed: 2.0,
                                         });
                                         c.add_light(coin_light);
+                                        c.attach_light(&light_id, &name, (0.0, 0.0));
+                                    }
+                                }
+                            }
+
+                            // Trail particle lights — 1/4 the radius of player_light (300 = 1200 / 4)
+                            for (i, (offset_x, intensity)) in [
+                                (-50.0_f32, 2.0_f32),
+                                (-120.0, 1.5),
+                                (-200.0, 1.0),
+                            ].iter().enumerate() {
+                                let pid = format!("trail_p{}_light", i);
+                                let tl = LightSource::new(
+                                    pid.clone(),
+                                    (0.0, 0.0),
+                                    Color(170, 255, 170, 200),
+                                    300.0,
+                                    *intensity,
+                                );
+                                c.add_light(tl);
+                                c.attach_light(&pid, "player", (*offset_x, 0.0));
+                            }
+
+                            // Spotlights aiming down from all currently visible spinners
+                            for name in c.get_names_by_tag("spinner") {
+                                if let Some(obj) = c.get_game_object(&name) {
+                                    if obj.visible {
+                                        let light_id = format!("spinner_light_{}", name);
+                                        let mut spot = LightSource::new(
+                                            light_id.clone(),
+                                            (0.0, 0.0),
+                                            Color(180, 180, 255, 200),
+                                            480.0,
+                                            3.5,
+                                        );
+                                        spot.light_type = LightType::Spot {
+                                            direction: std::f32::consts::FRAC_PI_2,
+                                            cone_angle: 1.0,
+                                        };
+                                        spot.casts_shadows = false;
+                                        c.add_light(spot);
                                         c.attach_light(&light_id, &name, (0.0, 0.0));
                                     }
                                 }

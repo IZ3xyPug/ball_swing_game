@@ -167,8 +167,8 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         drop(s);
 
+        let (r, g, b) = spinner_for_zone(zone_idx);
         if let Some(obj) = c.get_game_object_mut(&id) {
-            let (r, g, b) = spinner_for_zone(zone_idx);
             obj.position = (x, y);
             obj.visible = true;
             obj.rotation_momentum = rot_speed;
@@ -178,6 +178,23 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 color: None,
             });
         }
+
+        // Spotlight aiming down from the spinner center.
+        let light_id = format!("spinner_light_{}", id);
+        let mut spot = LightSource::new(
+            light_id.clone(),
+            (0.0, 0.0),
+            Color(r, g, b, 200),
+            480.0,
+            3.5,
+        );
+        spot.light_type = LightType::Spot {
+            direction: std::f32::consts::FRAC_PI_2,
+            cone_angle: 1.0,
+        };
+        spot.casts_shadows = false;
+        c.add_light(spot);
+        c.attach_light(&light_id, &id, (0.0, 0.0));
 
         s = st.lock().unwrap();
     }

@@ -22,7 +22,7 @@ pub fn make_hook(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
 }
 
 pub fn make_pad(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
-    GameObject::new_rect(
+    let mut obj = GameObject::new_rect(
         ctx,
         id.into(),
         Some(Image {
@@ -36,7 +36,9 @@ pub fn make_pad(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         (0.0, 0.0),
         (1.0, 1.0),
         0.0,
-    )
+    );
+    obj.shadow_caster = true;
+    obj
 }
 
 pub fn make_spinner(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
@@ -51,6 +53,7 @@ pub fn make_spinner(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         .tag("spinner")
         .tag("obstacle")
         .rotation_resistance(1.0)
+        .casts_shadow()
         .build(ctx)
 }
 
@@ -134,7 +137,7 @@ pub fn make_gate_segment(
     h: f32,
     image: Arc<image::RgbaImage>,
 ) -> GameObject {
-    GameObject::new_rect(
+    let mut obj = GameObject::new_rect(
         ctx,
         id.into(),
         Some(Image {
@@ -148,7 +151,9 @@ pub fn make_gate_segment(
         (0.0, 0.0),
         (1.0, 1.0),
         0.0,
-    )
+    );
+    obj.shadow_caster = true;
+    obj
 }
 
 pub fn make_gravity_well(ctx: &mut Context, id: &str, x: f32, y: f32, radius: f32, strength: f32, visual_r: f32) -> GameObject {
