@@ -123,6 +123,15 @@ pub struct State {
     /// Per-well timer tracking: (id, ticks_remaining, currently_active)
     pub gwell_timers:    Vec<(String, u32, bool)>,
 
+    pub turret_live:      Vec<String>,
+    pub turret_free:      Vec<String>,
+    pub turret_rightmost: f32,
+    /// (turret_id, ticks_until_next_shot)
+    pub turret_timers:    Vec<(String, u32)>,
+    /// (bullet_id, vx, vy, ticks_remaining)
+    pub bullet_live:      Vec<(String, f32, f32, u32)>,
+    pub bullet_free:      Vec<String>,
+
     pub bounce_enabled: bool,
 
     pub dark_mode: bool,

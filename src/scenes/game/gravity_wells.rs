@@ -79,4 +79,30 @@ pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
             });
         }
     }
+
+    // Disconnect player from grab node when close to an active well center.
+    let s = st.lock().unwrap();
+    let hooked = s.hooked;
+    let px = s.px;
+    let py = s.py;
+    drop(s);
+
+    if hooked {
+        for (id, _, active) in &timers {
+            if !*active { continue; }
+            if let Some(obj) = c.get_game_object(id) {
+                let well_cx = obj.position.0 + obj.size.0 * 0.5;
+                let well_cy = obj.position.1 + obj.size.1 * 0.5;
+                let pr = obj.planet_radius.unwrap_or(0.0);
+                if pr <= 0.0 { continue; }
+                let disconnect_r = pr * GWELL_DISCONNECT_FRAC;
+                let dx = px - well_cx;
+                let dy = py - well_cy;
+                if dx * dx + dy * dy < disconnect_r * disconnect_r {
+                    c.run(Action::Custom { name: "do_release".into() });
+                    break;
+                }
+            }
+        }
+    }
 }

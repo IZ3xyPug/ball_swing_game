@@ -81,7 +81,20 @@ pub fn composite_starfield_gradient(
     out_h: u32,
     blend_h: u32,
 ) -> image::RgbaImage {
-    let split_y = out_h / 2;
+    composite_starfield_gradient_with_ratio(starfield, gradient, out_w, out_h, blend_h, 0.62)
+}
+
+pub fn composite_starfield_gradient_with_ratio(
+    starfield: &image::RgbaImage,
+    gradient: &image::RgbaImage,
+    out_w: u32,
+    out_h: u32,
+    blend_h: u32,
+    split_ratio: f32,
+) -> image::RgbaImage {
+    // Keep the same soft blend logic, but move the split down so the
+    // space/starfield area occupies more of the screen.
+    let split_y = ((out_h as f32) * split_ratio.clamp(0.35, 0.90)) as u32;
     let mut img = image::RgbaImage::new(out_w, out_h);
     for py in 0..out_h {
         for px in 0..out_w {
@@ -121,6 +134,43 @@ pub fn composite_starfield_gradient(
 pub fn solid(r: u8, g: u8, b: u8, a: u8) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(1, 1);
     img.put_pixel(0, 0, image::Rgba([r, g, b, a]));
+    img
+}
+
+/// Turret composite image: circle body at center with a rectangular barrel
+/// extending to the right.  The object is square so the rotation pivot is
+/// the body's centre.
+pub fn turret_img(
+    body_r: u32,
+    barrel_len: u32,
+    barrel_w: u32,
+    body_rgb: (u8, u8, u8),
+    barrel_rgb: (u8, u8, u8),
+) -> image::RgbaImage {
+    let size = (body_r + barrel_len) * 2;
+    let mut img = image::RgbaImage::new(size, size);
+    let cx = size / 2;
+    let cy = size / 2;
+    // body circle
+    for py in 0..size {
+        for px in 0..size {
+            let dx = px as f32 - cx as f32 + 0.5;
+            let dy = py as f32 - cy as f32 + 0.5;
+            if dx * dx + dy * dy <= (body_r * body_r) as f32 {
+                img.put_pixel(px, py, image::Rgba([body_rgb.0, body_rgb.1, body_rgb.2, 255]));
+            }
+        }
+    }
+    // barrel rectangle extending right from body edge
+    let bx_start = cx;
+    let bx_end = (cx + body_r + barrel_len).min(size);
+    let by_start = cy.saturating_sub(barrel_w / 2);
+    let by_end = (cy + barrel_w / 2).min(size);
+    for py in by_start..by_end {
+        for px in bx_start..bx_end {
+            img.put_pixel(px, py, image::Rgba([barrel_rgb.0, barrel_rgb.1, barrel_rgb.2, 255]));
+        }
+    }
     img
 }
 

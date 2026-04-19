@@ -14,14 +14,31 @@ pub fn tick_spawning(
     coin_spawn_anim: &Option<AnimatedSprite>,
 ) {
     spawn_hooks(c, st);
-    spawn_pads(c, st);
-    spawn_spinners(c, st);
-    spawn_coins(c, st, coin_spawn_image, coin_spawn_anim);
-    spawn_flips(c, st);
-    spawn_score_x2(c, st);
-    spawn_zero_g(c, st);
+    if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
+        spawn_pads(c, st);
+    }
+    if matches!(c.get_var("spawn_spinners_on"), Some(Value::Bool(true)) | None) {
+        spawn_spinners(c, st);
+    }
+    if matches!(c.get_var("spawn_coins_on"), Some(Value::Bool(true)) | None) {
+        spawn_coins(c, st, coin_spawn_image, coin_spawn_anim);
+    }
+    if matches!(c.get_var("spawn_flips_on"), Some(Value::Bool(true)) | None) {
+        spawn_flips(c, st);
+    }
+    if matches!(c.get_var("spawn_score_x2_on"), Some(Value::Bool(true)) | None) {
+        spawn_score_x2(c, st);
+    }
+    if matches!(c.get_var("spawn_zero_g_on"), Some(Value::Bool(true)) | None) {
+        spawn_zero_g(c, st);
+    }
     spawn_gates(c, st);
-    spawn_gravity_wells(c, st);
+    if matches!(c.get_var("spawn_gwells_on"), Some(Value::Bool(true)) | None) {
+        spawn_gravity_wells(c, st);
+    }
+    if matches!(c.get_var("spawn_turrets_on"), Some(Value::Bool(true)) | None) {
+        spawn_turrets(c, st);
+    }
 }
 
 fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -585,6 +602,36 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 200),
                 width: 14.0,
             });
+        }
+
+        s = st.lock().unwrap();
+    }
+}
+
+// ── Turrets ───────────────────────────────────────────────────────────────────
+
+fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let mut spawned = 0usize;
+    while spawned < TURRET_SPAWN_BUDGET
+        && s.turret_rightmost < s.px + GEN_AHEAD
+        && !s.turret_free.is_empty()
+    {
+        let gap = lcg_range(&mut s.seed, TURRET_GAP_MIN, TURRET_GAP_MAX);
+        let x = s.turret_rightmost + gap;
+        let y = lcg_range(&mut s.seed, TURRET_Y_MIN, TURRET_Y_MAX);
+        let Some(id) = s.turret_free.pop() else { break; };
+        s.turret_live.push(id.clone());
+        s.turret_rightmost = x;
+        s.turret_timers.push((id.clone(), TURRET_SHOOT_INTERVAL));
+        spawned += 1;
+        drop(s);
+
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            let half = TURRET_FULL_SIZE * 0.5;
+            obj.position = (x - half, y - half);
+            obj.size = (TURRET_FULL_SIZE, TURRET_FULL_SIZE);
+            obj.visible = true;
         }
 
         s = st.lock().unwrap();

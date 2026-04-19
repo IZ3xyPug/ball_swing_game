@@ -49,6 +49,7 @@ pub fn compute_release_impulse(
     // Keep existing launch feel.
     nvx *= 2.0;
     nvy *= 2.0;
+    nvy *= RELEASE_VERTICAL_BOOST;
     (nvx, nvy)
 }
 
@@ -92,6 +93,7 @@ pub fn compute_grab_impulse(
         .clamp(0.0, GRAB_TANGENT_SURGE_MAX);
     nvx += tx * tangent_surge * dir * GRAB_SURGE_MULT;
     nvy += ty * tangent_surge * dir * GRAB_SURGE_MULT;
+    nvy *= GRAB_VERTICAL_BOOST;
     (nvx, nvy)
 }
 

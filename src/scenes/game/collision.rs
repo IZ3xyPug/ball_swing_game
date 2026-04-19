@@ -182,7 +182,7 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     if let Some((pad_name, pad_top, pad_bottom)) = bounced_pad {
         let bounce_factor = (1.0 - s.pad_bounce_count as f32 * PAD_BOUNCE_DECAY).max(PAD_BOUNCE_MIN_FACTOR);
-        s.vy = PAD_BOUNCE_VY_START * bounce_factor * s.gravity_dir;
+        s.vy = PAD_BOUNCE_VY_START * PAD_BOUNCE_VERTICAL_BOOST * bounce_factor * s.gravity_dir;
         s.pad_bounce_count = s.pad_bounce_count.saturating_add(1);
 
         if falling_down {

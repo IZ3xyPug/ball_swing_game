@@ -77,6 +77,18 @@ fn flip_all_live_objects(c: &mut Canvas, s: &State) {
             obj.position.1 = VH - obj.position.1 - obj.size.1;
         }
     }
+    // Turrets
+    for name in &s.turret_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
+    // Bullets (position only; vy is negated in apply_flip_transform)
+    for (name, _, _, _) in &s.bullet_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
 }
 
 /// Also mirror the mover origin Y values so animated movers stay in sync.
@@ -102,6 +114,10 @@ fn apply_flip_transform(c: &mut Canvas, s: &mut State) {
     mirror_player_for_flip(s);
     flip_all_live_objects(c, s);
     flip_mover_origins(s);
+    // Negate bullet vertical velocities so they keep flying in the right direction.
+    for (_, _, vy, _) in s.bullet_live.iter_mut() {
+        *vy = -*vy;
+    }
 }
 
 pub fn trigger_flip(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -113,6 +129,18 @@ pub fn trigger_flip(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
     let hooked = s.hooked;
     drop(s);
+
+    // Snap camera Y so the zoom-anchor switch (VH ↔ 0) doesn't strand the
+    // viewport at the old baseline.  Without this, lerp_toward skips Y
+    // (because zoom_anchor is Some) and the camera never catches up.
+    if let Some(cam) = c.camera_mut() {
+        if gdir < 0.0 {
+            cam.position.1 = 0.0;
+        } else {
+            cam.position.1 = VH - VH / cam.zoom;
+        }
+    }
+
     if !hooked {
         if let Some(obj) = c.get_game_object_mut("player") {
             obj.gravity = GRAVITY * gravity_scale * gdir;
@@ -201,6 +229,16 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (-3700.0, -3700.0);
         }
     }
+
+    if !collected.is_empty() {
+        let sfx_path = match c.get_i32("coin_sfx_index") {
+            1 => ASSET_COIN_SFX_1,
+            2 => ASSET_COIN_SFX_2,
+            3 => ASSET_COIN_SFX_4,
+            _ => ASSET_COIN_SFX_3,
+        };
+        c.play_sound_with(sfx_path, SoundOptions::new().volume(0.2));
+    }
 }
 
 // ── Flip collect ────────────────────────────────────────────────────────────
@@ -240,6 +278,9 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     if !collected.is_empty() {
         trigger_flip(c, st);
+
+        // coin_up SFX on gravity flip collect
+        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(0.2));
 
         // Purple flash + screen shake on gravity flip collect
         if let Some(cam) = c.camera_mut() {
@@ -326,6 +367,10 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (-3875.0, -3875.0);
         }
     }
+
+    if !collected.is_empty() {
+        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(0.2));
+    }
 }
 
 // ── Flip timer ──────────────────────────────────────────────────────────────
@@ -342,6 +387,16 @@ fn tick_flip_timer(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
             let hooked = s.hooked;
             drop(s);
+
+            // Snap camera Y for the new anchor baseline (same as trigger_flip).
+            if let Some(cam) = c.camera_mut() {
+                if gdir < 0.0 {
+                    cam.position.1 = 0.0;
+                } else {
+                    cam.position.1 = VH - VH / cam.zoom;
+                }
+            }
+
             if !hooked {
                 if let Some(obj) = c.get_game_object_mut("player") {
                     obj.gravity = GRAVITY * gravity_scale * gdir;

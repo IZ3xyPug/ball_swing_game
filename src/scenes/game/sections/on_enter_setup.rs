@@ -122,7 +122,7 @@
 
         let fresh_state = State {
             px: SPAWN_X, py: SPAWN_Y,
-            vx: 13.0,    vy: 0.0,
+            vx: 18.0,    vy: 0.0,
             hooked: true,
             hook_x: start_hook.0, hook_y: start_hook.1,
             rope_len: start_rope_len,

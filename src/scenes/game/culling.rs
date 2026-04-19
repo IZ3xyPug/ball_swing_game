@@ -16,6 +16,8 @@ pub fn tick_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     cull_zero_g(c, st);
     cull_gates(c, st);
     cull_gravity_wells(c, st);
+    cull_turrets(c, st);
+    cull_bullets(c, st);
 }
 
 fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -175,4 +177,41 @@ fn cull_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.gwell_live.retain(|n| !rm.contains(n.as_str()));
     s.gwell_timers.retain(|(n, _, _)| !rm.contains(n.as_str()));
     for name in to_remove { s.gwell_free.push(name); }
+}
+
+fn cull_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let cutoff = s.px - VW * 1.5;
+    let to_remove: Vec<String> = s.turret_live.iter()
+        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + TURRET_FULL_SIZE < cutoff).unwrap_or(true))
+        .cloned().collect();
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible = false;
+            obj.position = (-4500.0, -4500.0);
+        }
+    }
+    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+    s.turret_live.retain(|n| !rm.contains(n.as_str()));
+    s.turret_timers.retain(|(n, _)| !rm.contains(n.as_str()));
+    for name in to_remove { s.turret_free.push(name); }
+}
+
+fn cull_bullets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let to_remove: Vec<String> = s.bullet_live.iter()
+        .filter(|(n, _, _, _)| {
+            c.get_game_object(n).is_none()
+        })
+        .map(|(n, _, _, _)| n.clone())
+        .collect();
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible = false;
+            obj.position = (-5000.0, -5000.0);
+        }
+    }
+    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+    s.bullet_live.retain(|(n, _, _, _)| !rm.contains(n.as_str()));
+    for name in to_remove { s.bullet_free.push(name); }
 }

@@ -9,7 +9,7 @@ use crate::state::*;
 pub fn tick_background(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
-    prev_bg_theme: &mut Option<(bool, usize, bool, bool)>,
+    prev_bg_theme: &mut Option<(bool, usize, bool, bool, bool)>,
     bg_zone_start: &image::RgbaImage,
     bg_zone_purple: &image::RgbaImage,
     bg_zone_black: &image::RgbaImage,
@@ -22,6 +22,18 @@ pub fn tick_background(
     bg_zone_start_vivid_flip: &image::RgbaImage,
     bg_zone_purple_vivid_flip: &image::RgbaImage,
     bg_zone_black_vivid_flip: &image::RgbaImage,
+    bg_zone_start_space: &image::RgbaImage,
+    bg_zone_purple_space: &image::RgbaImage,
+    bg_zone_black_space: &image::RgbaImage,
+    bg_zone_start_vivid_space: &image::RgbaImage,
+    bg_zone_purple_vivid_space: &image::RgbaImage,
+    bg_zone_black_vivid_space: &image::RgbaImage,
+    bg_zone_start_space_flip: &image::RgbaImage,
+    bg_zone_purple_space_flip: &image::RgbaImage,
+    bg_zone_black_space_flip: &image::RgbaImage,
+    bg_zone_start_vivid_space_flip: &image::RgbaImage,
+    bg_zone_purple_vivid_space_flip: &image::RgbaImage,
+    bg_zone_black_vivid_space_flip: &image::RgbaImage,
 ) {
     let s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
@@ -29,8 +41,9 @@ pub fn tick_background(
     let flipped = s.gravity_dir < 0.0;
     drop(s);
     let vivid = matches!(c.get_var("bg_vivid"), Some(Value::Bool(true)));
+    let space_zoomed = c.camera().map(|cam| cam.zoom < 0.72).unwrap_or(false);
 
-    let key = (dark, zone_idx, vivid, flipped);
+    let key = (dark, zone_idx, vivid, flipped, space_zoomed);
     if *prev_bg_theme == Some(key) { return; }
     *prev_bg_theme = Some(key);
 
@@ -43,28 +56,28 @@ pub fn tick_background(
         // Gravity inverted — use vertically flipped backgrounds
         if vivid {
             match zone_idx {
-                0 => bg_zone_start_vivid_flip.clone(),
-                1 => bg_zone_purple_vivid_flip.clone(),
-                _ => bg_zone_black_vivid_flip.clone(),
+                0 => if space_zoomed { bg_zone_start_vivid_space_flip.clone() } else { bg_zone_start_vivid_flip.clone() },
+                1 => if space_zoomed { bg_zone_purple_vivid_space_flip.clone() } else { bg_zone_purple_vivid_flip.clone() },
+                _ => if space_zoomed { bg_zone_black_vivid_space_flip.clone() } else { bg_zone_black_vivid_flip.clone() },
             }
         } else {
             match zone_idx {
-                0 => bg_zone_start_flip.clone(),
-                1 => bg_zone_purple_flip.clone(),
-                _ => bg_zone_black_flip.clone(),
+                0 => if space_zoomed { bg_zone_start_space_flip.clone() } else { bg_zone_start_flip.clone() },
+                1 => if space_zoomed { bg_zone_purple_space_flip.clone() } else { bg_zone_purple_flip.clone() },
+                _ => if space_zoomed { bg_zone_black_space_flip.clone() } else { bg_zone_black_flip.clone() },
             }
         }
     } else if vivid {
         match zone_idx {
-            0 => bg_zone_start_vivid.clone(),
-            1 => bg_zone_purple_vivid.clone(),
-            _ => bg_zone_black_vivid.clone(),
+            0 => if space_zoomed { bg_zone_start_vivid_space.clone() } else { bg_zone_start_vivid.clone() },
+            1 => if space_zoomed { bg_zone_purple_vivid_space.clone() } else { bg_zone_purple_vivid.clone() },
+            _ => if space_zoomed { bg_zone_black_vivid_space.clone() } else { bg_zone_black_vivid.clone() },
         }
     } else {
         match zone_idx {
-            0 => bg_zone_start.clone(),
-            1 => bg_zone_purple.clone(),
-            _ => bg_zone_black.clone(),
+            0 => if space_zoomed { bg_zone_start_space.clone() } else { bg_zone_start.clone() },
+            1 => if space_zoomed { bg_zone_purple_space.clone() } else { bg_zone_purple.clone() },
+            _ => if space_zoomed { bg_zone_black_space.clone() } else { bg_zone_black.clone() },
         }
     };
 
