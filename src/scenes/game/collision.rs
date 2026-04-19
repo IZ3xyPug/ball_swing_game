@@ -89,6 +89,12 @@ fn tick_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 s.spinner_hit_cooldown = 6;
                 s.glow_flashes.push((name.clone(), 10));
 
+                // Capture burst info before dropping the lock.
+                let hit_pos = (s.px, s.py);
+                let burst_id = format!("burst_{}", s.burst_counter);
+                s.burst_counter = s.burst_counter.wrapping_add(1);
+                s.burst_emitters.push((burst_id.clone(), 4));
+
                 let unhook_ops = begin_unhook(&mut s);
                 let can_shake = s.shake_cooldown.is_finished();
                 if can_shake {
@@ -98,6 +104,33 @@ fn tick_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
                 if let Some(obj) = c.get_game_object_mut(&name) {
                     obj.set_glow(GlowConfig { color: Color(255, 100, 80, 220), width: 8.0 });
+                }
+
+                // Spawn a lit particle burst at the impact point.
+                let burst = EmitterBuilder::new(&burst_id)
+                    .origin(hit_pos.0, hit_pos.1)
+                    .rate(400.0)
+                    .lifetime(0.35)
+                    .spread(140.0, 140.0)
+                    .size(5.0)
+                    .color(255, 130, 60, 240)
+                    .gravity_scale(0.3)
+                    .render_layer(3)
+                    .build();
+                c.add_emitter(burst);
+
+                // Brief flash light at impact.
+                if c.has_lighting() {
+                    let flash_light = LightSource::new(
+                        format!("flash_{}", burst_id),
+                        hit_pos,
+                        Color(255, 140, 60, 255),
+                        520.0,
+                        4.5,
+                    ).with_shadows(false).with_effect(LightEffect::FadeOut {
+                        duration: 0.25,
+                    });
+                    c.add_light(flash_light);
                 }
                 if let Some(ref ops) = unhook_ops {
                     apply_unhook(c, ops);
@@ -219,6 +252,12 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let unhook_ops = begin_unhook(&mut s);
         let zone_idx = zone_index_for_distance(s.distance);
         s.glow_flashes.push((pad_name.clone(), 12));
+
+        // Capture burst info before dropping the lock.
+        let hit_pos = (s.px, s.py);
+        let burst_id = format!("burst_{}", s.burst_counter);
+        s.burst_counter = s.burst_counter.wrapping_add(1);
+        s.burst_emitters.push((burst_id.clone(), 4));
         drop(s);
 
         if let Some(ref ops) = unhook_ops {
@@ -233,6 +272,34 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 color: None,
             });
             obj.set_glow(GlowConfig { color: Color(60, 200, 255, 220), width: 10.0 });
+        }
+
+        // Spawn a lit particle burst at the bounce point.
+        let burst = EmitterBuilder::new(&burst_id)
+            .origin(hit_pos.0, hit_pos.1)
+            .rate(300.0)
+            .lifetime(0.3)
+            .spread(100.0, 80.0)
+            .velocity(0.0, -40.0)
+            .size(4.0)
+            .color(80, 200, 255, 230)
+            .gravity_scale(0.2)
+            .render_layer(3)
+            .build();
+        c.add_emitter(burst);
+
+        // Brief flash light at impact.
+        if c.has_lighting() {
+            let flash_light = LightSource::new(
+                format!("flash_{}", burst_id),
+                hit_pos,
+                Color(60, 200, 255, 255),
+                460.0,
+                3.8,
+            ).with_shadows(false).with_effect(LightEffect::FadeOut {
+                duration: 0.2,
+            });
+            c.add_light(flash_light);
         }
 
         // Zoom punch on pad bounce — bouncy visual feedback.

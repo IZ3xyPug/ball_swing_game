@@ -170,6 +170,8 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.visible = false;
             obj.position = (-3700.0, -3700.0);
         }
+        // Remove the coin's attached light.
+        c.remove_light(&format!("coin_light_{}", name));
     }
 }
 

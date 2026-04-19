@@ -18,6 +18,7 @@ pub fn tick_visuals(
     frame_counter: u32,
 ) {
     tick_glow_flashes(c, st);
+    tick_burst_cleanup(c, st);
     tick_nearest_hook_highlight(c, st, prev_nearest_hook);
     tick_zone_palette(c, st, prev_zone_idx);
     tick_dark_mode(c, st, dark_mode_prev);
@@ -46,6 +47,28 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 // ── Nearest hook highlight ──────────────────────────────────────────────────
+
+// ── Burst emitter cleanup ──────────────────────────────────────────────────
+
+fn tick_burst_cleanup(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let mut expired: Vec<String> = Vec::new();
+    for (name, timer) in s.burst_emitters.iter_mut() {
+        *timer = timer.saturating_sub(1);
+        if *timer == 0 { expired.push(name.clone()); }
+    }
+    s.burst_emitters.retain(|(_, t)| *t > 0);
+    drop(s);
+
+    for name in &expired {
+        c.remove_emitter(name);
+        // The FadeOut effect on the flash light handles its own cleanup
+        // (sets enabled=false), but remove it to free the slot.
+        c.remove_light(&format!("flash_{}", name));
+    }
+}
+
+// ── Nearest hook highlight (continued) ─────────────────────────────────────
 
 fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_nearest: &mut String) {
     let s = st.lock().unwrap();

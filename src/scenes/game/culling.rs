@@ -90,6 +90,7 @@ fn cull_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3700.0, -3700.0); }
+        c.remove_light(&format!("coin_light_{}", name));
     }
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.coin_live.retain(|n| !rm.contains(n.as_str()));

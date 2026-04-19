@@ -98,7 +98,69 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             );
             if !crystalline_ready {
                 canvas.enable_crystalline();
+                canvas.enable_bloom(BloomSettings { threshold: 0.35, strength: 1.5 });
                 canvas.set_var("crystalline_ready", true);
+
+                // Give the player a persistent bright glow for bloom testing.
+                if let Some(obj) = canvas.get_game_object_mut("player") {
+                    obj.set_glow(GlowConfig {
+                        color: Color(180, 255, 220, 180),
+                        width: 14.0,
+                    });
+                }
+            }
+
+            // ── Night-mode restoration on re-enter ───────────────────────
+            // Scene objects are cloned from bootstrap (unlit=false). If night
+            // mode was active before death/scene switch, re-apply unlit and
+            // re-add player lights.
+            let night_active = matches!(
+                canvas.get_var("night_mode_active"),
+                Some(Value::Bool(true))
+            );
+            if night_active {
+                // Re-apply lighting system if it was lost
+                if !canvas.has_lighting() {
+                    canvas.enable_lighting(LightingConfig::night());
+                    canvas.enable_night_mode_shader(
+                        0.30, 1.2, 0.55, 0.45, 0.35, 2.0,
+                    );
+                }
+
+                // Mark all HUD objects as unlit
+                for name in canvas.get_names_by_tag("hud") {
+                    if let Some(obj) = canvas.get_game_object_mut(&name) {
+                        obj.unlit = true;
+                    }
+                }
+
+                // Re-add player lights (they were removed with the scene objects)
+                let has_player_light = canvas.get_light("player_light").is_some();
+                if !has_player_light {
+                    let light = LightSource::new(
+                        "player_light",
+                        (0.0, 0.0),
+                        Color(180, 255, 220, 255),
+                        1200.0,
+                        4.0,
+                    );
+                    canvas.add_light(light);
+                    canvas.attach_light("player_light", "player", (0.0, 0.0));
+
+                    let trail_light = LightSource::new(
+                        "trail_light",
+                        (0.0, 0.0),
+                        Color(170, 255, 170, 200),
+                        420.0,
+                        2.2,
+                    ).with_effect(LightEffect::Pulse {
+                        min_intensity: 1.7,
+                        max_intensity: 2.7,
+                        speed: 3.0,
+                    });
+                    canvas.add_light(trail_light);
+                    canvas.attach_light("trail_light", "player", (-60.0, 0.0));
+                }
             }
 
             // ── Player particle trail ────────────────────────────────────
@@ -138,6 +200,127 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             Some(Value::Bool(true))
                         );
                         c.set_var("bg_vivid", !vivid_now);
+                        return;
+                    }
+
+                    // Toggle bloom on/off for A/B comparison testing.
+                    if *key == Key::Character("2".into()) {
+                        if c.bloom_enabled() {
+                            c.disable_bloom();
+                        } else {
+                            c.enable_bloom(BloomSettings { threshold: 0.35, strength: 1.5 });
+                        }
+                        return;
+                    }
+
+                    // Toggle night mode — dark ambient, player light with shadows,
+                    // combined post shader (bloom + vignette + chromatic aberration).
+                    if *key == Key::Character("3".into()) {
+                        if c.has_lighting() {
+                            c.disable_lighting();
+                            c.clear_post_override();
+                            c.set_var("night_mode_active", false);
+                            // Restore HUD objects to lit pipeline
+                            for name in c.get_names_by_tag("hud") {
+                                if let Some(obj) = c.get_game_object_mut(&name) {
+                                    obj.unlit = false;
+                                }
+                            }
+                        } else {
+                            c.enable_lighting(LightingConfig::night());
+                            c.set_var("night_mode_active", true);
+
+                            // Combined night-mode post shader
+                            c.enable_night_mode_shader(
+                                0.30,   // bloom threshold
+                                1.2,    // bloom strength
+                                0.55,   // vignette strength
+                                0.45,   // vignette radius
+                                0.35,   // vignette softness
+                                2.0,    // chromatic aberration intensity
+                            );
+
+                            // Mark all HUD objects as unlit so they render at full brightness
+                            for name in c.get_names_by_tag("hud") {
+                                if let Some(obj) = c.get_game_object_mut(&name) {
+                                    obj.unlit = true;
+                                }
+                            }
+
+                            // Main player light — large radius, bright
+                            let light = LightSource::new(
+                                "player_light",
+                                (0.0, 0.0),
+                                Color(180, 255, 220, 255),
+                                1200.0,
+                                4.0,
+                            );
+                            c.add_light(light);
+                            c.attach_light("player_light", "player", (0.0, 0.0));
+
+                            // Trailing glow behind the player (proportionate to player light)
+                            let trail_light = LightSource::new(
+                                "trail_light",
+                                (0.0, 0.0),
+                                Color(170, 255, 170, 200),
+                                420.0,
+                                2.2,
+                            ).with_effect(LightEffect::Pulse {
+                                min_intensity: 1.7,
+                                max_intensity: 2.7,
+                                speed: 3.0,
+                            });
+                            c.add_light(trail_light);
+                            c.attach_light("trail_light", "player", (-60.0, 0.0));
+
+                            // Add lights to all currently visible coins
+                            for name in c.get_names_by_tag("coin") {
+                                if let Some(obj) = c.get_game_object(&name) {
+                                    if obj.visible {
+                                        let light_id = format!("coin_light_{}", name);
+                                        let coin_light = LightSource::new(
+                                            light_id.clone(),
+                                            (0.0, 0.0),
+                                            Color(255, 220, 80, 255),
+                                            300.0,
+                                            1.0,
+                                        ).with_shadows(false).with_effect(LightEffect::Pulse {
+                                            min_intensity: 0.75,
+                                            max_intensity: 1.25,
+                                            speed: 2.0,
+                                        });
+                                        c.add_light(coin_light);
+                                        c.attach_light(&light_id, &name, (0.0, 0.0));
+                                    }
+                                }
+                            }
+                        }
+                        return;
+                    }
+
+                    // Toggle vignette on/off.
+                    if *key == Key::Character("4".into()) {
+                        let vig_on = matches!(c.get_var("vignette_active"), Some(Value::Bool(true)));
+                        if vig_on {
+                            c.clear_post_override();
+                            c.set_var("vignette_active", false);
+                        } else {
+                            c.enable_vignette(0.6, 0.4, 0.35);
+                            c.set_var("vignette_active", true);
+                        }
+                        return;
+                    }
+
+                    // Toggle chromatic aberration on/off.
+                    if *key == Key::Character("5".into()) {
+                        let ca_on = matches!(c.get_var("ca_active"), Some(Value::Bool(true)));
+                        if ca_on {
+                            c.clear_post_override();
+                            c.set_var("ca_active", false);
+                        } else {
+                            c.enable_chromatic_aberration(3.0);
+                            c.set_var("ca_active", true);
+                        }
                         return;
                     }
 
@@ -347,6 +530,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 hud_last_px:           i32::MAX,
                 hud_last_flip_timer:   u32::MAX,
                 hud_last_zero_g_timer: u32::MAX,
+                burst_emitters: Vec::new(),
+                burst_counter: 0,
             };
 
             // Reuse persistent Arc across respawns.

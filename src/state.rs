@@ -140,4 +140,8 @@ pub struct State {
     pub hud_last_px:            i32,
     pub hud_last_flip_timer:    u32,
     pub hud_last_zero_g_timer:  u32,
+
+    // ── Impact burst emitters (name, remaining frames) ──────────────
+    pub burst_emitters: Vec<(String, u8)>,
+    pub burst_counter: u32,
 }

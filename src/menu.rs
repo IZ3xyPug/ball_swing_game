@@ -330,6 +330,14 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             }
 
             canvas.register_custom_event("goto_game".into(), |c| c.load_scene("game"));
+
+            // If night mode left the lighting system active, disable it for
+            // the menu — it doesn't use lighting.  Night mode will be
+            // re-activated from the var when the game scene re-enters.
+            if canvas.has_lighting() {
+                canvas.disable_lighting();
+                canvas.clear_post_override();
+            }
         })
 }
 
@@ -504,5 +512,19 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
 
             canvas.register_custom_event("go_retry".into(), |c| c.load_scene("game"));
             canvas.register_custom_event("go_menu".into(),  |c| c.load_scene("menu"));
+
+            // If night mode left the lighting system active, mark all gameover
+            // UI objects as unlit so they render at full brightness.
+            if canvas.has_lighting() {
+                for name in canvas.get_names_by_tag("ui") {
+                    if let Some(obj) = canvas.get_game_object_mut(&name) {
+                        obj.unlit = true;
+                    }
+                }
+                // The background isn't tagged "ui" — mark it explicitly
+                if let Some(obj) = canvas.get_game_object_mut("go_bg") {
+                    obj.unlit = true;
+                }
+            }
         })
 }

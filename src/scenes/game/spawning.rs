@@ -277,6 +277,24 @@ fn spawn_coins(
                     }
                 }
             }
+
+            // Attach a small gold light to the coin when lighting is active.
+            if c.has_lighting() {
+                let light_id = format!("coin_light_{}", id);
+                let coin_light = LightSource::new(
+                    light_id.clone(),
+                    (0.0, 0.0),
+                    Color(255, 220, 80, 255),
+                    300.0,
+                    1.0,
+                ).with_shadows(false).with_effect(LightEffect::Pulse {
+                    min_intensity: 0.75,
+                    max_intensity: 1.25,
+                    speed: 2.0,
+                });
+                c.add_light(coin_light);
+                c.attach_light(&light_id, id, (0.0, 0.0));
+            }
         }
 
         s = st.lock().unwrap();
