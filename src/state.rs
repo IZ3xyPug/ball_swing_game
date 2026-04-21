@@ -122,6 +122,15 @@ pub struct State {
     /// Per-well timer tracking: (id, ticks_remaining, currently_active)
     pub gwell_timers:    Vec<(String, u32, bool)>,
 
+    pub turret_live:      Vec<String>,
+    pub turret_free:      Vec<String>,
+    pub turret_rightmost: f32,
+    /// (turret_id, ticks_until_next_shot)
+    pub turret_timers:    Vec<(String, u32)>,
+    /// (bullet_id, vx, vy, ticks_remaining)
+    pub bullet_live:      Vec<(String, f32, f32, u32)>,
+    pub bullet_free:      Vec<String>,
+
     pub bounce_enabled: bool,
 
     pub dark_mode: bool,
@@ -144,4 +153,15 @@ pub struct State {
     // ── Impact burst emitters (name, remaining frames) ──────────────
     pub burst_emitters: Vec<(String, u8)>,
     pub burst_counter: u32,
+    pub hud_last_score:         u32,
+
+    // ── Mega shader VFX timers ───────────────────────────────────────────────
+    /// Frames remaining for pad-hit shockwave overlay (counts down to 0).
+    pub pad_hit_vfx_timer: u8,
+    /// World position of the most recent pad hit (used for shockwave origin).
+    pub pad_hit_pos: (f32, f32),
+    /// Frames remaining for spinner-hit explosive-sparks overlay.
+    pub spinner_hit_vfx_timer: u8,
+    /// World position of the most recent spinner hit (used for sparks origin).
+    pub spinner_hit_pos: (f32, f32),
 }

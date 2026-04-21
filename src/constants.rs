@@ -41,10 +41,15 @@ pub const PAD_GAP_MAX:    f32 = 2800.0;
 pub const PAD_W:          f32 = 750.0;
 pub const PAD_H:          f32 = 125.0;
 pub const PAD_BOUNCE_VY_START:  f32 = -46.0;
+pub const PAD_BOUNCE_VERTICAL_BOOST: f32 = 1.15;
 pub const PAD_BOUNCE_DECAY:     f32 = 0.20;
 pub const PAD_BOUNCE_MIN_FACTOR:f32 = 0.30;
 pub const PAD_MOVE_RANGE: f32 = 250.0;
 pub const PAD_MOVE_SPEED: f32 = 3.0;
+
+pub fn pad_corner_radius() -> f32 {
+	(PAD_H * 0.48).clamp(1.0, PAD_H * 0.5 - 1.0)
+}
 pub const SPINNER_POOL_SIZE: usize = 14;
 pub const SPINNER_GAP_MIN:   f32 = 3900.0;
 pub const SPINNER_GAP_MAX:   f32 = 6400.0;
@@ -73,6 +78,10 @@ pub const COIN_ARRAY_SPACING:f32 = 120.0;
 pub const COIN_CURVE_RISE:   f32 = 60.0;
 pub const COIN_ARRAY_CHANCE: f32 = 0.28;
 pub const COIN_ARRAY_HOOK_DX:f32 = 600.0;
+
+// ── Mega shader ───────────────────────────────────────────────────────────────
+/// Number of player-ball always-on cycling effects, including index 0 = "no effect".
+pub const PLAYER_EFFECT_COUNT: usize = 8;
 pub const COIN_ARRAY_HOOK_DY:f32 = -742.0;
 pub const COIN_ARRAY_Y_MIN:  f32 = -200.0;
 pub const COIN_ARRAY_Y_MAX:  f32 = -35.0;
@@ -91,7 +100,7 @@ pub const SCORE_X2_GAP_MIN:   f32 = 5600.0;
 pub const SCORE_X2_GAP_MAX:   f32 = 9800.0;
 pub const SCORE_X2_W:         f32 = 160.0;
 pub const SCORE_X2_H:         f32 = 160.0;
-pub const SCORE_X2_DURATION:  u32 = 300; // 5 seconds at 60fps
+pub const SCORE_X2_DURATION:  u32 = 600; // 10 seconds at 60fps
 pub const ZERO_G_POOL_SIZE:   usize = 14;
 pub const ZERO_G_GAP_MIN:     f32 = 6200.0;
 pub const ZERO_G_GAP_MAX:     f32 = 9800.0;
@@ -166,6 +175,14 @@ pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/co
 pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
+pub const ASSET_COIN_SFX_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_collect.mp3");
+pub const ASSET_COIN_SFX_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_up.mp3");
+pub const ASSET_COIN_SFX_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_bling.mp3");
+pub const ASSET_COIN_SFX_4: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_ambience.mp3");
+pub const ASSET_BGM_TRACK_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_1.mp3");
+pub const ASSET_BGM_TRACK_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_2.mp3");
+pub const ASSET_BGM_TRACK_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_3.mp3");
+pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
 
 // ── Gravity wells ─────────────────────────────────────────────────────────────
 pub const GWELL_POOL_SIZE:     usize = 10;
@@ -185,8 +202,31 @@ pub const GWELL_VISUAL_SCALE_MAX: f32 = 10.0;  // largest well = 10× player dia
 pub const GWELL_RING_COUNT:    u32 = 5;         // concentric alpha rings
 pub const GWELL_PULSE_MIN:     f32 = 0.7;
 pub const GWELL_PULSE_SPEED:   f32 = 0.08;
+pub const GWELL_DISCONNECT_FRAC: f32 = 0.5;  // disconnect from grab at 50% of planet_radius
 pub const C_GWELL_ACTIVE:      (u8,u8,u8) = (130, 80, 255);
 pub const C_GWELL_DORMANT:     (u8,u8,u8) = (60, 40, 110);
+
+// ── Turrets ───────────────────────────────────────────────────────────────────
+pub const TURRET_POOL_SIZE:      usize = 8;
+pub const TURRET_R:              f32 = 50.0;
+pub const TURRET_BARREL_LEN:    f32 = 50.0;
+pub const TURRET_BARREL_W:      f32 = 20.0;
+pub const TURRET_FULL_SIZE:     f32 = (TURRET_R + TURRET_BARREL_LEN) * 2.0;
+pub const TURRET_GAP_MIN:       f32 = 7000.0;
+pub const TURRET_GAP_MAX:       f32 = 12000.0;
+pub const TURRET_SHOOT_INTERVAL:u32 = 180;  // 3 seconds at 60fps
+pub const TURRET_SPAWN_BUDGET:  usize = 1;
+pub const TURRET_Y_MIN:         f32 = VH * 0.12;
+pub const TURRET_Y_MAX:         f32 = VH * 0.80;
+pub const TURRET_DETECT_RADIUS: f32 = 2800.0;
+pub const BULLET_POOL_SIZE:     usize = 32;
+pub const BULLET_W:             f32 = 36.0;
+pub const BULLET_H:             f32 = 12.0;
+pub const BULLET_SPEED:         f32 = 28.0;
+pub const BULLET_LIFETIME_TICKS:u32 = 300; // 5 seconds at 60fps
+pub const C_TURRET_BODY:        (u8,u8,u8) = (100, 100, 130);
+pub const C_TURRET_BARREL:      (u8,u8,u8) = (70, 70, 90);
+pub const C_TURRET_BULLET:      (u8,u8,u8) = (220, 40, 40);
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 350;

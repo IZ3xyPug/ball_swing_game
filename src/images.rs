@@ -138,6 +138,54 @@ pub fn circle_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     img
 }
 
+/// Cached circle: returns `Arc<RgbaImage>` keyed by (radius, r, g, b).
+/// Each unique combo is rasterized once; subsequent calls return the cached Arc.
+pub fn circle_cached(radius: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<(u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (radius, r, g, b);
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img = circle_img(radius, r, g, b);
+    let arc: Arc<image::RgbaImage> = Arc::new(img);
+    guard.insert(key, arc.clone());
+    arc
+}
+
+pub fn turret_img(
+    body_r: u32,
+    barrel_len: u32,
+    barrel_w: u32,
+    body_rgb: (u8, u8, u8),
+    barrel_rgb: (u8, u8, u8),
+) -> image::RgbaImage {
+    let size = (body_r + barrel_len) * 2;
+    let mut img = image::RgbaImage::new(size, size);
+    let cx = size / 2;
+    let cy = size / 2;
+    for py in 0..size {
+        for px in 0..size {
+            let dx = px as f32 - cx as f32 + 0.5;
+            let dy = py as f32 - cy as f32 + 0.5;
+            if dx * dx + dy * dy <= (body_r * body_r) as f32 {
+                img.put_pixel(px, py, image::Rgba([body_rgb.0, body_rgb.1, body_rgb.2, 255]));
+            }
+        }
+    }
+    let bx_start = cx;
+    let bx_end = (cx + body_r + barrel_len).min(size);
+    let by_start = cy.saturating_sub(barrel_w / 2);
+    let by_end = (cy + barrel_w / 2).min(size);
+    for py in by_start..by_end {
+        for px in bx_start..bx_end {
+            img.put_pixel(px, py, image::Rgba([barrel_rgb.0, barrel_rgb.1, barrel_rgb.2, 255]));
+        }
+    }
+    img
+}
+
 pub fn gradient_rect(w: u32, h: u32, (r0,g0,b0): (u8,u8,u8), (r1,g1,b1): (u8,u8,u8)) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
     for py in 0..h {

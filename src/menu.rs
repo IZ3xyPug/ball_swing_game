@@ -42,11 +42,12 @@ fn menu_mode_selector_img() -> image::RgbaImage {
 pub fn build_menu_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "menu_bg".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT).into(),
-            color: None,
-        }),
+        Some(load_image_sized(ASSET_BACKGROUND, VW, VH)),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    let bg_tint = GameObject::new_rect(
+        ctx, "menu_bg_tint".into(),
+        Some(tint_overlay(VW, VH, Color(70, 120, 255, 110))),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
@@ -144,6 +145,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
 
     let scene = Scene::new("menu")
         .with_object("menu_bg",             bg)
+        .with_object("menu_bg_tint",        bg_tint)
         .with_object("menu_title",          title)
         .with_object("menu_sub",            menu_sub)
         .with_object("menu_mode_selector",  menu_mode_selector)
@@ -344,11 +346,12 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
 pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "go_bg".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: gradient_rect(4, VH as u32, (30,5,5), (60,10,10)).into(),
-            color: None,
-        }),
+        Some(load_image_sized(ASSET_BACKGROUND, VW, VH)),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    let go_bg_tint = GameObject::new_rect(
+        ctx, "go_bg_tint".into(),
+        Some(tint_overlay(VW, VH, Color(230, 50, 50, 120))),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
@@ -441,6 +444,7 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
 
     Scene::new("gameover")
         .with_object("go_bg",       bg)
+        .with_object("go_bg_tint",  go_bg_tint)
         .with_object("go_title",    title)
         .with_object("go_dist_bar", dist_bar)
         .with_object("go_stats_box", go_stats_box)

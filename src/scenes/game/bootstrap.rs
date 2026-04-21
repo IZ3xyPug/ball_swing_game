@@ -17,6 +17,8 @@ pub struct PoolSets {
     pub zero_g_free:   Vec<String>,
     pub gate_free:     Vec<String>,
     pub gwell_free:    Vec<String>,
+    pub turret_free:   Vec<String>,
+    pub bullet_free:   Vec<String>,
     pub coin_static_sprite:  Image,
     pub coin_anim_template:  Option<AnimatedSprite>,
     #[allow(dead_code)]
@@ -104,6 +106,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     coin_counter.ignore_zoom = true;
+
+    let mut score_counter = GameObject::new_rect(
+        ctx, "score_counter".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
+            image: score_counter_img(0).into(),
+            color: None,
+        }),
+        (420.0, 98.0), (VW - 450.0, 40.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    score_counter.ignore_zoom = true;
 
     let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
@@ -256,6 +270,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("player",       player)
         .with_object("dist_bar",     dist_bar)
         .with_object("coin_counter", coin_counter)
+        .with_object("score_counter", score_counter)
         .with_object("momentum_counter", momentum_counter)
         .with_object("gravity_indicator", gravity_indicator)
         .with_object("y_meter", y_meter)
@@ -391,7 +406,24 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         gwell_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
+    // ── Turret pool ─────────────────────────────────────────────────────────────
+    let mut turret_free: Vec<String> = Vec::new();
+    for i in 0..TURRET_POOL_SIZE {
+        let id = format!("turret_{i}");
+        let mut obj = make_turret(ctx, &id, -4500.0, -4500.0);
+        obj.visible = false;
+        turret_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
 
+    // ── Bullet pool ──────────────────────────────────────────────────────────────
+    let mut bullet_free: Vec<String> = Vec::new();
+    for i in 0..BULLET_POOL_SIZE {
+        let id = format!("bullet_{i}");
+        let obj = make_turret_bullet(ctx, &id);
+        bullet_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
     // ── Camera flash overlay (fullscreen, driven by camera effect system) ──
     let mut camera_flash_overlay = {
         let mut img = image::RgbaImage::new(1, 1);
@@ -417,7 +449,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Pause menu buttons (above overlay) ───────────────────────────────
     let pause_btn_w: f32 = 700.0;
-    let pause_btn_h: f32 = 120.0;
+    let pause_btn_h: f32 = 170.0;
     let pause_btn_x: f32 = (VW - pause_btn_w) / 2.0;
     let pause_title_w: f32 = 650.0;
     let pause_title_h: f32 = 100.0;
@@ -454,24 +486,48 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         obj
     };
 
-    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", 50, 160, 90, "RESUME", 820.0);
-    let pause_respawn_btn = make_pause_btn(ctx, "pause_respawn_btn", 60, 120, 200, "RESPAWN", 980.0);
-    let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", 80, 80, 100, "SETTINGS", 1140.0);
-    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", 170, 65, 65, "MENU", 1300.0);
+    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", 50, 160, 90, "RESUME", 780.0);
+    let pause_restart_btn = make_pause_btn(ctx, "pause_restart_btn", 60, 120, 200, "RESTART", 1000.0);
+    let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", 80, 80, 100, "SETTINGS", 1220.0);
+    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", 170, 65, 65, "MENU", 1440.0);
+
+    // Start-prompt text ("HOLD SPACE TO BEGIN") — shown during startup pause
+    let mut start_prompt_text = GameObject::build("start_prompt_text")
+        .size(1300.0, 120.0)
+        .position(VW * 0.5 - 650.0, VH * 0.50)
+        .build(ctx);
+    start_prompt_text.visible = false;
+    start_prompt_text.layer = 10_002;
+    start_prompt_text.ignore_zoom = true;
+
+    // Settings panel text
+    let mut settings_text = GameObject::build("settings_text")
+        .size(1400.0, 800.0)
+        .position(VW * 0.5 - 700.0, VH * 0.15)
+        .build(ctx);
+    settings_text.visible = false;
+    settings_text.layer = 10_002;
+    settings_text.ignore_zoom = true;
+
+    let settings_back_btn = make_pause_btn(ctx, "settings_back_btn", 60, 80, 110, "BACK", 1660.0);
 
     scene = scene
         .with_object("pause_title", pause_title)
         .with_object("pause_resume_btn", pause_resume_btn)
-        .with_object("pause_respawn_btn", pause_respawn_btn)
+        .with_object("pause_restart_btn", pause_restart_btn)
         .with_object("pause_settings_btn", pause_settings_btn)
-        .with_object("pause_menu_btn", pause_menu_btn);
+        .with_object("pause_menu_btn", pause_menu_btn)
+        .with_object("start_prompt_text", start_prompt_text)
+        .with_object("settings_text", settings_text)
+        .with_object("settings_back_btn", settings_back_btn);
 
     // Pause button click + hover events
     for (name, click_name) in [
         ("pause_resume_btn", "pause_resume_click"),
-        ("pause_respawn_btn", "pause_respawn_click"),
+        ("pause_restart_btn", "pause_restart_click"),
         ("pause_settings_btn", "pause_settings_click"),
         ("pause_menu_btn", "pause_menu_click"),
+        ("settings_back_btn", "settings_back_click"),
     ] {
         scene = scene
             .with_event(
@@ -509,6 +565,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         zero_g_free,
         gate_free,
         gwell_free,
+        turret_free,
+        bullet_free,
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template,

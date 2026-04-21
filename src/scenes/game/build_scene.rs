@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use crate::constants::*;
 use crate::state::gen_hook_batch;
 use crate::images::*;
+use crate::objects::ui_text_spec;
 use crate::state::*;
 use super::bootstrap;
 use super::events;
@@ -20,11 +21,72 @@ use super::visuals;
 use super::hud_update;
 use super::background;
 use super::gravity_wells;
+use super::turrets;
+use super::mega_shaders;
 use super::helpers::*;
 use quartz::Timer;
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
 const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
+
+/// Apply the combined post-processing shader (bloom + vignette + chromatic
+/// aberration) based on the current state of individual fx_* canvas vars.
+/// This always writes through the night-mode combined shader so all three
+/// effects can coexist in post slot 1 simultaneously.
+/// Call whenever any of the three effects is toggled on or off.
+/// Does nothing if night mode is active — night mode manages slot 1 itself.
+fn apply_combined_post(c: &mut Canvas) {
+    // Night mode owns slot 1; let it manage its own shader.
+    if matches!(c.get_var("night_mode_active"), Some(Value::Bool(true))) {
+        return;
+    }
+    let bloom_on = matches!(c.get_var("fx_bloom_on"), Some(Value::Bool(true)));
+    let vig_on   = matches!(c.get_var("fx_vig_on"),   Some(Value::Bool(true)));
+    let ca_on    = matches!(c.get_var("fx_ca_on"),    Some(Value::Bool(true)));
+
+    if !bloom_on && !vig_on && !ca_on {
+        c.clear_post_override();
+    } else {
+        // Disabled bloom: push threshold above maximum possible brightness.
+        let bloom_thresh = if bloom_on { 0.35 } else { 10.0 };
+        let bloom_str    = if bloom_on { 1.5  } else { 0.0  };
+        let vig_str      = if vig_on   { 0.6  } else { 0.0  };
+        let ca_int       = if ca_on    { 3.0  } else { 0.0  };
+        c.enable_night_mode_shader(bloom_thresh, bloom_str, vig_str, 0.4, 0.35, ca_int);
+    }
+}
+
+fn update_settings_text(c: &mut Canvas) {
+    let pads_on     = !matches!(c.get_var("spawn_pads_on"),     Some(Value::Bool(false)));
+    let spinners_on = !matches!(c.get_var("spawn_spinners_on"), Some(Value::Bool(false)));
+    let coins_on    = !matches!(c.get_var("spawn_coins_on"),    Some(Value::Bool(false)));
+    let flips_on    = !matches!(c.get_var("spawn_flips_on"),    Some(Value::Bool(false)));
+    let x2_on       = !matches!(c.get_var("spawn_x2_on"),       Some(Value::Bool(false)));
+    let zerog_on    = !matches!(c.get_var("spawn_zerog_on"),    Some(Value::Bool(false)));
+    let gwells_on   = !matches!(c.get_var("spawn_gwells_on"),   Some(Value::Bool(false)));
+    let turrets_on  = !matches!(c.get_var("spawn_turrets_on"),  Some(Value::Bool(false)));
+
+    let text = format!(
+        "[Q] Pads:     {}\n[W] Spinners: {}\n[E] Coins:    {}\n[R] Flips:    {}\n[T] Score x2: {}\n[Y] Zero-G:   {}\n[U] GWells:   {}\n[I] Turrets:  {}",
+        if pads_on { "ON" } else { "OFF" },
+        if spinners_on { "ON" } else { "OFF" },
+        if coins_on { "ON" } else { "OFF" },
+        if flips_on { "ON" } else { "OFF" },
+        if x2_on { "ON" } else { "OFF" },
+        if zerog_on { "ON" } else { "OFF" },
+        if gwells_on { "ON" } else { "OFF" },
+        if turrets_on { "ON" } else { "OFF" },
+    );
+
+    if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+        let s = c.virtual_scale();
+        if let Some(obj) = c.get_game_object_mut("settings_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                &text, &font, 36.0 * s, Color(200, 230, 255, 255), 1400.0 * s,
+            )));
+        }
+    }
+}
 
 pub fn build_game_scene(ctx: &mut Context) -> Scene {
     // Pre-compute background gradient images (small tile, stretched by GPU).
@@ -71,6 +133,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         zero_g_free,
         gate_free,
         gwell_free,
+        turret_free,
+        bullet_free,
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template: _,
@@ -98,8 +162,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             );
             if !crystalline_ready {
                 canvas.enable_crystalline();
-                canvas.enable_bloom(BloomSettings { threshold: 0.35, strength: 1.5 });
+                // Enable bloom via the combined post shader so vignette and
+                // chromatic aberration can be layered on top without conflict.
+                canvas.set_var("fx_bloom_on", true);
+                apply_combined_post(canvas);
                 canvas.set_var("crystalline_ready", true);
+
+                // Initialise mega-shader toggle vars so get_i32 / get_var
+                // never panics on a missing key.
+                canvas.set_var("rain_state", 0i32);
+                canvas.set_var("air_shield_elec", false);
 
                 // Give the player a persistent bright glow for bloom testing.
                 if let Some(obj) = canvas.get_game_object_mut("player") {
@@ -222,13 +294,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
-                    // Toggle bloom on/off for A/B comparison testing.
+                    // Toggle bloom on/off.  Routes through the combined post
+                    // shader so bloom, vignette, and CA can all coexist.
                     if *key == Key::Character("2".into()) {
-                        if c.bloom_enabled() {
-                            c.disable_bloom();
-                        } else {
-                            c.enable_bloom(BloomSettings { threshold: 0.35, strength: 1.5 });
-                        }
+                        let bloom_on = matches!(c.get_var("fx_bloom_on"), Some(Value::Bool(true)));
+                        c.set_var("fx_bloom_on", !bloom_on);
+                        apply_combined_post(c);
                         return;
                     }
 
@@ -237,7 +308,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     if *key == Key::Character("3".into()) {
                         if c.has_lighting() {
                             c.disable_lighting();
-                            c.clear_post_override();
                             c.set_var("night_mode_active", false);
                             // Restore HUD objects to lit pipeline
                             for name in c.get_names_by_tag("hud") {
@@ -245,6 +315,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                     obj.unlit = false;
                                 }
                             }
+                            // Restore user's bloom/vignette/CA settings to slot 1.
+                            apply_combined_post(c);
                         } else {
                             c.enable_lighting(LightingConfig::night());
                             c.set_var("night_mode_active", true);
@@ -354,34 +426,121 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                     }
                                 }
                             }
+
+                            // Point lights on all currently visible turrets
+                            for name in c.get_names_by_tag("turret") {
+                                if let Some(obj) = c.get_game_object(&name) {
+                                    if obj.visible {
+                                        let light_id = format!("turret_light_{}", name);
+                                        let turret_light = LightSource::new(
+                                            light_id.clone(),
+                                            (0.0, 0.0),
+                                            Color(C_TURRET_BODY.0, C_TURRET_BODY.1, C_TURRET_BODY.2, 220),
+                                            400.0,
+                                            1.5,
+                                        ).with_shadows(false).with_effect(LightEffect::Pulse {
+                                            min_intensity: 0.9,
+                                            max_intensity: 1.6,
+                                            speed: 1.5,
+                                        });
+                                        c.add_light(turret_light);
+                                        c.attach_light(&light_id, &name, (0.0, 0.0));
+                                    }
+                                }
+                            }
                         }
                         return;
                     }
 
-                    // Toggle vignette on/off.
+                    // Toggle vignette on/off.  Routes through the combined post
+                    // shader so bloom, vignette, and CA can all coexist.
                     if *key == Key::Character("4".into()) {
-                        let vig_on = matches!(c.get_var("vignette_active"), Some(Value::Bool(true)));
-                        if vig_on {
-                            c.clear_post_override();
-                            c.set_var("vignette_active", false);
-                        } else {
-                            c.enable_vignette(0.6, 0.4, 0.35);
-                            c.set_var("vignette_active", true);
+                        let vig_on = matches!(c.get_var("fx_vig_on"), Some(Value::Bool(true)));
+                        c.set_var("fx_vig_on", !vig_on);
+                        apply_combined_post(c);
+                        return;
+                    }
+
+                    // Toggle chromatic aberration on/off.  Same combined-post logic.
+                    if *key == Key::Character("5".into()) {
+                        let ca_on = matches!(c.get_var("fx_ca_on"), Some(Value::Bool(true)));
+                        c.set_var("fx_ca_on", !ca_on);
+                        apply_combined_post(c);
+                        return;
+                    }
+
+                    // Cycle full-screen rain overlay (key 6):
+                    //   0 = off, 1 = right slant, 2 = left slant,
+                    //   3 = straight down, 4 = strong diagonal → repeats.
+                    if *key == Key::Character("6".into()) {
+                        let current = c.get_i32("rain_state").max(0) as u32;
+                        c.set_var("rain_state", ((current + 1) % 5) as i32);
+                        return;
+                    }
+
+                    // Toggle air-shield electricity mode (key 7).
+                    if *key == Key::Character("7".into()) {
+                        let on = matches!(c.get_var("air_shield_elec"), Some(Value::Bool(true)));
+                        c.set_var("air_shield_elec", !on);
+                        return;
+                    }
+
+                    // Settings-panel spawn-toggle keys (Q-I), only when settings panel is open.
+                    if matches!(c.get_var("settings_open"), Some(Value::Bool(true))) {
+                        let toggle_key = match key {
+                            k if *k == Key::Character("q".into()) => Some("spawn_pads_on"),
+                            k if *k == Key::Character("w".into()) => Some("spawn_spinners_on"),
+                            k if *k == Key::Character("e".into()) => Some("spawn_coins_on"),
+                            k if *k == Key::Character("r".into()) => Some("spawn_flips_on"),
+                            k if *k == Key::Character("t".into()) => Some("spawn_x2_on"),
+                            k if *k == Key::Character("y".into()) => Some("spawn_zerog_on"),
+                            k if *k == Key::Character("u".into()) => Some("spawn_gwells_on"),
+                            k if *k == Key::Character("i".into()) => Some("spawn_turrets_on"),
+                            _ => None,
+                        };
+                        if let Some(var_name) = toggle_key {
+                            let current = !matches!(c.get_var(var_name), Some(Value::Bool(false)));
+                            c.set_var(var_name, !current);
+                            update_settings_text(c);
+                            return;
+                        }
+                    }
+
+                    // Mega shader effect cycling — Z = previous, X = next.
+                    // Works during live gameplay (not while paused).
+                    if *key == Key::Character("x".into()) {
+                        if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) {
+                            let curr = c.get_i32("player_effect_idx").max(0) as usize;
+                            c.set_var("player_effect_idx", ((curr + 1) % PLAYER_EFFECT_COUNT) as i32);
+                        }
+                        return;
+                    }
+                    if *key == Key::Character("z".into()) {
+                        if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) {
+                            let curr = c.get_i32("player_effect_idx").max(0) as usize;
+                            let next = if curr == 0 { PLAYER_EFFECT_COUNT - 1 } else { curr - 1 };
+                            c.set_var("player_effect_idx", next as i32);
                         }
                         return;
                     }
 
-                    // Toggle chromatic aberration on/off.
-                    if *key == Key::Character("5".into()) {
-                        let ca_on = matches!(c.get_var("ca_active"), Some(Value::Bool(true)));
-                        if ca_on {
-                            c.clear_post_override();
-                            c.set_var("ca_active", false);
-                        } else {
-                            c.enable_chromatic_aberration(3.0);
-                            c.set_var("ca_active", true);
+                    // Dismiss the start prompt on the very first Space press.
+                    if *key == Key::Named(NamedKey::Space) {
+                        if matches!(c.get_var("start_prompt_active"), Some(Value::Bool(true))) {
+                            c.set_var("start_prompt_active", false);
+                            c.set_var("game_paused", false);
+                            if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
+                                obj.visible = false;
+                            }
+                            let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+                                .rate(72.0).lifetime(0.68).velocity(-2.0, 8.0)
+                                .spread(6.0, 6.0).size(9.0).color(170, 255, 170, 255)
+                                .render_layer(2).gravity_scale(0.0)
+                                .collision(CollisionResponse::None).build();
+                            c.add_emitter(trail);
+                            c.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
+                            return;
                         }
-                        return;
                     }
 
                     let is_pause = *key == Key::Character("p".into());
@@ -421,9 +580,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             obj.visible = was_hooked;
                         }
                         // Hide pause overlay and buttons
+                        c.set_var("settings_open", false);
                         for name in ["pause_overlay", "pause_title",
-                                     "pause_resume_btn", "pause_respawn_btn",
-                                     "pause_settings_btn", "pause_menu_btn"] {
+                                     "pause_resume_btn", "pause_restart_btn",
+                                     "pause_settings_btn", "pause_menu_btn",
+                                     "settings_text", "settings_back_btn"] {
                             if let Some(obj) = c.get_game_object_mut(name) {
                                 obj.visible = false;
                             }
@@ -454,11 +615,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         }
                         // Buttons also start off-screen (shifted up by VH)
                         let btn_layout: &[(&str, f32, f32)] = &[
-                            ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
-                            ("pause_resume_btn", (VW - 700.0) / 2.0, 820.0),
-                            ("pause_respawn_btn", (VW - 700.0) / 2.0, 980.0),
-                            ("pause_settings_btn", (VW - 700.0) / 2.0, 1140.0),
-                            ("pause_menu_btn", (VW - 700.0) / 2.0, 1300.0),
+                            ("pause_title",        (VW - 650.0) / 2.0, VH * 0.20),
+                            ("pause_resume_btn",   (VW - 700.0) / 2.0, 780.0),
+                            ("pause_restart_btn",  (VW - 700.0) / 2.0, 1000.0),
+                            ("pause_settings_btn", (VW - 700.0) / 2.0, 1220.0),
+                            ("pause_menu_btn",     (VW - 700.0) / 2.0, 1440.0),
                         ];
                         for &(name, bx, by) in btn_layout {
                             if let Some(obj) = c.get_game_object_mut(name) {
@@ -478,6 +639,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
             canvas.set_var("pause_animating", false);
             canvas.set_var("game_paused", false);
+            canvas.set_var("start_prompt_active", false);
+            canvas.set_var("settings_open", false);
+            canvas.set_var("pause_hover_idx", -1i32);
             canvas.set_var("mouse_grab_queued", false);
             canvas.set_var("mouse_release_queued", false);
             canvas.set_var("mouse_grab_x", 0.0f32);
@@ -485,6 +649,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("grab_from_mouse", false);
             canvas.set_var("bg_vivid", false);
             canvas.set_var("bg_force_refresh", true);
+            // Initialise mega shader effect index to 0 = no effect on first enter.
+            // The player can cycle forward with X and backward with Z.
+            if canvas.get_var("player_effect_idx").is_none() {
+                canvas.set_var("player_effect_idx", 0i32);
+            }
 
             // ── Fresh game state ─────────────────────────────────────────
             let mut seed: u64 = std::time::SystemTime::now()
@@ -575,6 +744,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 gwell_free: gwell_free.clone(),
                 gwell_rightmost: SPAWN_X + VW * 2.0,
                 gwell_timers: Vec::new(),
+                turret_live: Vec::new(),
+                turret_free: turret_free.clone(),
+                turret_rightmost: SPAWN_X + VW * 2.5,
+                turret_timers: Vec::new(),
+                bullet_live: Vec::new(),
+                bullet_free: bullet_free.clone(),
                 bounce_enabled: true,
                 dark_mode: false,
                 glow_flashes: Vec::new(),
@@ -590,8 +765,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 hud_last_px:           i32::MAX,
                 hud_last_flip_timer:   u32::MAX,
                 hud_last_zero_g_timer: u32::MAX,
+                hud_last_score:        u32::MAX,
                 burst_emitters: Vec::new(),
                 burst_counter: 0,
+                pad_hit_vfx_timer: 0,
+                pad_hit_pos: (0.0, 0.0),
+                spinner_hit_vfx_timer: 0,
+                spinner_hit_pos: (0.0, 0.0),
             };
 
             // Reuse persistent Arc across respawns.
@@ -625,6 +805,47 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
 
+            // ── Spawn toggle vars init (first enter only) ────────────────
+            if !matches!(canvas.get_var("spawn_pads_on"), Some(_)) {
+                canvas.set_var("spawn_pads_on",     true);
+                canvas.set_var("spawn_spinners_on", true);
+                canvas.set_var("spawn_coins_on",    true);
+                canvas.set_var("spawn_flips_on",    true);
+                canvas.set_var("spawn_x2_on",       true);
+                canvas.set_var("spawn_zerog_on",    true);
+                canvas.set_var("spawn_gwells_on",   true);
+                canvas.set_var("spawn_turrets_on",  true);
+            }
+
+            // ── Start-paused initialisation ──────────────────────────────
+            // Pre-render the start prompt, hide pause UI, do one spawning
+            // tick to populate the world, then gate gameplay until space.
+            {
+                let s = canvas.virtual_scale();
+                if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+                    if let Some(obj) = canvas.get_game_object_mut("start_prompt_text") {
+                        obj.set_drawable(Box::new(ui_text_spec(
+                            "HOLD SPACE TO BEGIN",
+                            &font,
+                            52.0 * s,
+                            Color(235, 245, 255, 255),
+                            1300.0 * s,
+                        )));
+                        obj.visible = true;
+                    }
+                }
+            }
+            if let Some(obj) = canvas.get_game_object_mut("pause_overlay") {
+                obj.visible = false;
+            }
+            for name in ["pause_title", "pause_resume_btn", "pause_restart_btn",
+                         "pause_settings_btn", "pause_menu_btn",
+                         "settings_text", "settings_back_btn"] {
+                if let Some(obj) = canvas.get_game_object_mut(name) { obj.visible = false; }
+            }
+            canvas.set_var("start_prompt_active", true);
+            canvas.set_var("game_paused", true);
+
             // ── Pause menu button handlers (register once) ───────────────
             let pause_btns_registered = matches!(
                 canvas.get_var("pause_btns_registered"),
@@ -634,11 +855,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 // Click handlers
                 canvas.register_custom_event("pause_resume_click".into(), |c| {
                     if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
-                    // Trigger resume via synthetic "p" press logic
                     c.resume();
                     c.set_var("pause_animating", false);
                     c.set_var("pause_anim_frames", 0);
                     c.set_var("game_paused", false);
+                    c.set_var("settings_open", false);
                     let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
                         .rate(72.0).lifetime(0.68).velocity(-2.0, 8.0)
                         .spread(6.0, 6.0).size(9.0).color(170, 255, 170, 255)
@@ -650,12 +871,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
                     if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
                     for name in ["pause_overlay", "pause_title",
-                                 "pause_resume_btn", "pause_respawn_btn",
-                                 "pause_settings_btn", "pause_menu_btn"] {
+                                 "pause_resume_btn", "pause_restart_btn",
+                                 "pause_settings_btn", "pause_menu_btn",
+                                 "settings_text", "settings_back_btn"] {
                         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
                     }
                 });
-                canvas.register_custom_event("pause_respawn_click".into(), |c| {
+                canvas.register_custom_event("pause_restart_click".into(), |c| {
                     if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
                     c.resume();
                     c.set_var("game_paused", false);
@@ -667,46 +889,108 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.set_var("game_paused", false);
                     c.load_scene("menu");
                 });
-                canvas.register_custom_event("pause_settings_click".into(), |_c| {
-                    // Settings: no-op for now
+                canvas.register_custom_event("pause_settings_click".into(), |c| {
+                    if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
+                    for name in ["pause_title", "pause_resume_btn", "pause_restart_btn",
+                                 "pause_settings_btn", "pause_menu_btn"] {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                    }
+                    c.set_var("settings_open", true);
+                    update_settings_text(c);
+                    if let Some(obj) = c.get_game_object_mut("settings_text") { obj.visible = true; }
+                    if let Some(obj) = c.get_game_object_mut("settings_back_btn") {
+                        obj.position = ((VW - 700.0) / 2.0, 1660.0);
+                        obj.visible = true;
+                    }
+                });
+                canvas.register_custom_event("settings_back_click".into(), |c| {
+                    c.set_var("settings_open", false);
+                    if let Some(obj) = c.get_game_object_mut("settings_text") { obj.visible = false; }
+                    if let Some(obj) = c.get_game_object_mut("settings_back_btn") { obj.visible = false; }
+                    let btn_layout: &[(&str, f32, f32)] = &[
+                        ("pause_title",        (VW - 650.0) / 2.0, VH * 0.20),
+                        ("pause_resume_btn",   (VW - 700.0) / 2.0, 780.0),
+                        ("pause_restart_btn",  (VW - 700.0) / 2.0, 1000.0),
+                        ("pause_settings_btn", (VW - 700.0) / 2.0, 1220.0),
+                        ("pause_menu_btn",     (VW - 700.0) / 2.0, 1440.0),
+                    ];
+                    for &(name, bx, by) in btn_layout {
+                        if let Some(obj) = c.get_game_object_mut(name) {
+                            obj.position = (bx, by);
+                            obj.visible = true;
+                        }
+                    }
                 });
 
-                // Hover highlight handlers
-                struct BtnStyle { name: &'static str, r: u8, g: u8, b: u8, label: &'static str }
-                let styles: &[BtnStyle] = &[
-                    BtnStyle { name: "pause_resume_btn",   r: 50,  g: 160, b: 90,  label: "RESUME" },
-                    BtnStyle { name: "pause_respawn_btn",  r: 60,  g: 120, b: 200, label: "RESPAWN" },
-                    BtnStyle { name: "pause_settings_btn", r: 80,  g: 80,  b: 100, label: "SETTINGS" },
-                    BtnStyle { name: "pause_menu_btn",     r: 170, g: 65,  b: 65,  label: "MENU" },
-                ];
-                for s in styles {
-                    let btn_name: String = s.name.into();
-                    let (hr, hg, hb) = (s.r.saturating_add(40), s.g.saturating_add(40), s.b.saturating_add(40));
-                    let hover_img = pause_btn_img(700, 120, hr, hg, hb, s.label);
-                    let normal_img = pause_btn_img(700, 120, s.r, s.g, s.b, s.label);
-                    let enter_name = format!("{}_enter", s.name);
-                    let leave_name = format!("{}_leave", s.name);
+                // Mouse hover/click handlers for pause menu (tint-based, zoom-compensated)
+                let pause_ui_mouse_registered = matches!(
+                    canvas.get_var("pause_ui_mouse_registered"),
+                    Some(Value::Bool(true))
+                );
+                if !pause_ui_mouse_registered {
+                    canvas.on_mouse_move({
+                        move |c, pos| {
+                            if !c.is_scene("game") { return; }
+                            if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
 
-                    let btn_enter = btn_name.clone();
-                    canvas.register_custom_event(enter_name, move |c| {
-                        if let Some(obj) = c.get_game_object_mut(&btn_enter) {
-                            obj.set_image(Image {
-                                shape: ShapeType::Rectangle(0.0, (700.0, 120.0), 0.0),
-                                image: hover_img.clone().into(),
-                                color: None,
-                            });
+                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                            let ux = pos.0 * zoom;
+                            let uy = pos.1 * zoom;
+                            let bx = (VW - 700.0) / 2.0;
+
+                            let over_resume   = ux >= bx && ux <= bx + 700.0 && uy >= 780.0  && uy <= 950.0;
+                            let over_restart  = ux >= bx && ux <= bx + 700.0 && uy >= 1000.0 && uy <= 1170.0;
+                            let over_settings = ux >= bx && ux <= bx + 700.0 && uy >= 1220.0 && uy <= 1390.0;
+                            let over_menu     = ux >= bx && ux <= bx + 700.0 && uy >= 1440.0 && uy <= 1610.0;
+                            let over_back     = ux >= bx && ux <= bx + 700.0 && uy >= 1660.0 && uy <= 1830.0;
+
+                            let hover_idx = if over_resume { 0 } else if over_restart { 1 }
+                                else if over_settings { 2 } else if over_menu { 3 }
+                                else if over_back { 4 } else { -1 };
+
+                            let prev_idx = c.get_i32("pause_hover_idx");
+                            if hover_idx == prev_idx { return; }
+                            c.set_var("pause_hover_idx", hover_idx);
+
+                            let hover_tint = Color(255, 255, 255, 92);
+                            if let Some(obj) = c.get_game_object_mut("pause_resume_btn") {
+                                if over_resume   { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("pause_restart_btn") {
+                                if over_restart  { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("pause_settings_btn") {
+                                if over_settings { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("pause_menu_btn") {
+                                if over_menu     { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("settings_back_btn") {
+                                if over_back     { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
                         }
                     });
-                    let btn_leave = btn_name.clone();
-                    canvas.register_custom_event(leave_name, move |c| {
-                        if let Some(obj) = c.get_game_object_mut(&btn_leave) {
-                            obj.set_image(Image {
-                                shape: ShapeType::Rectangle(0.0, (700.0, 120.0), 0.0),
-                                image: normal_img.clone().into(),
-                                color: None,
-                            });
+
+                    canvas.on_mouse_press(move |c, btn, pos| {
+                        if btn != MouseButton::Left { return; }
+                        if !c.is_scene("game") { return; }
+                        if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
+
+                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                        let ux = pos.0 * zoom;
+                        let uy = pos.1 * zoom;
+                        let bx = (VW - 700.0) / 2.0;
+
+                        if ux >= bx && ux <= bx + 700.0 {
+                            if      uy >= 780.0  && uy <= 950.0  { c.run(Action::Custom { name: "pause_resume_click".into() }); }
+                            else if uy >= 1000.0 && uy <= 1170.0 { c.run(Action::Custom { name: "pause_restart_click".into() }); }
+                            else if uy >= 1220.0 && uy <= 1390.0 { c.run(Action::Custom { name: "pause_settings_click".into() }); }
+                            else if uy >= 1440.0 && uy <= 1610.0 { c.run(Action::Custom { name: "pause_menu_click".into() }); }
+                            else if uy >= 1660.0 && uy <= 1830.0 { c.run(Action::Custom { name: "settings_back_click".into() }); }
                         }
                     });
+
+                    canvas.set_var("pause_ui_mouse_registered", true);
                 }
                 canvas.set_var("pause_btns_registered", true);
             }
@@ -725,6 +1009,21 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let mut prev_bg_theme: Option<(bool, usize, bool, bool)> = None;
                 let mut prev_palette_zone: usize = usize::MAX;
                 let mut frame_counter: u32 = 0;
+
+                // ── Mega shader images (computed once, captured by closure) ──
+                // White circles are used as sprite textures; the shader effects
+                // create all the visual interest on top of these base shapes.
+                let player_mega_img: std::sync::Arc<image::RgbaImage> =
+                    std::sync::Arc::new(circle_img(PLAYER_R as u32, 255, 255, 255));
+                let comet_mega_img: std::sync::Arc<image::RgbaImage> =
+                    std::sync::Arc::new(circle_img(70, 255, 180, 60));
+
+                // Comet positions relative to the camera's left edge (world pixels).
+                // Three comets are staggered across the screen so the sky always feels alive.
+                let mut comets = mega_shaders::CometState::init_comets();
+
+                // Window droplets: 5 independent droplets that appear while rain is on.
+                let mut droplets = mega_shaders::DropletState::init_droplets();
 
                 let bg_s = bg_zone_start.clone();
                 let bg_p = bg_zone_purple.clone();
@@ -753,6 +1052,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         .camera()
                         .map(|cam| cam.position.0)
                         .unwrap_or(0.0);
+
+                    // ── Start-prompt gate (player hasn't pressed space yet) ──
+                    if matches!(c.get_var("start_prompt_active"), Some(Value::Bool(true))) {
+                        if let Some(obj) = c.get_game_object_mut("bg") {
+                            obj.position = (0.0, 0.0);
+                        }
+                        return;
+                    }
                     if let Some(obj) = c.get_game_object_mut("bg") {
                         obj.position = (0.0, 0.0);
                     }
@@ -788,11 +1095,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             }
                             // Animate buttons alongside the overlay
                             let btn_layout: &[(&str, f32, f32)] = &[
-                                ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
-                                ("pause_resume_btn", (VW - 700.0) / 2.0, 820.0),
-                                ("pause_respawn_btn", (VW - 700.0) / 2.0, 980.0),
-                                ("pause_settings_btn", (VW - 700.0) / 2.0, 1140.0),
-                                ("pause_menu_btn", (VW - 700.0) / 2.0, 1300.0),
+                                ("pause_title",        (VW - 650.0) / 2.0, VH * 0.20),
+                                ("pause_resume_btn",   (VW - 700.0) / 2.0, 780.0),
+                                ("pause_restart_btn",  (VW - 700.0) / 2.0, 1000.0),
+                                ("pause_settings_btn", (VW - 700.0) / 2.0, 1220.0),
+                                ("pause_menu_btn",     (VW - 700.0) / 2.0, 1440.0),
                             ];
                             for &(name, bx, by) in btn_layout {
                                 if let Some(obj) = c.get_game_object_mut(name) {
@@ -953,6 +1260,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         frame_counter,
                     );
 
+                    // ── Turrets ──────────────────────────────────────────
+                    turrets::tick_turrets(c, &st);
+
                     // ── Distance tracking ────────────────────────────────
                     {
                         let mut s = st.lock().unwrap();
@@ -976,12 +1286,26 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         frame_counter,
                     );
 
+                    // ── Mega shader VFX overlays ─────────────────────────
+                    mega_shaders::tick_mega_shaders(
+                        c,
+                        &st,
+                        &player_mega_img,
+                        &comet_mega_img,
+                        &mut comets,
+                        &mut droplets,
+                    );
+
                     // ── Coin magnet radius debug visual ──────────────────
                     {
-                        let s = st.lock().unwrap();
-                        let (px, py, debug) =
-                            (s.px, s.py, s.magnet_debug);
-                        drop(s);
+                        let debug = st.lock().unwrap().magnet_debug;
+                        // Use crystalline-corrected position from engine object.
+                        let (px, py) = c.get_game_object("player")
+                            .map(|obj| (obj.position.0 + PLAYER_R, obj.position.1 + PLAYER_R))
+                            .unwrap_or_else(|| {
+                                let s = st.lock().unwrap();
+                                (s.px, s.py)
+                            });
                         if let Some(obj) =
                             c.get_game_object_mut("coin_magnet_radius")
                         {
@@ -1050,7 +1374,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         || (s.gravity_dir < 0.0 && s.py < -150.0);
                     if dead_now {
                         c.set_var("last_distance", s.distance);
-                        c.set_var("last_coins", s.coin_count as i32);
+                        c.set_var("last_coins",    s.coin_count as i32);
+                        c.set_var("last_score",    s.score as i32);
                         s.dead = true;
                         drop(s);
                         if let Some(cam) = c.camera_mut() {

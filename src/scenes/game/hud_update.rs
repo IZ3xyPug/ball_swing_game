@@ -15,6 +15,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dist_fill = ((distance - zone_start) / ZONE_DISTANCE_STEP).clamp(0.0, 1.0);
     let coins = s.coin_count;
     let momentum = (s.vx * s.vx + s.vy * s.vy).sqrt();
+    let score = s.score;
     let gravity_flipped = s.gravity_dir < 0.0;
     let py = s.py;
     let px = s.px;
@@ -36,6 +37,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dirty_px       = q_px            != s.hud_last_px;
     let dirty_flip     = flip_timer_val  != s.hud_last_flip_timer;
     let dirty_zero_g   = zero_g_timer_val != s.hud_last_zero_g_timer;
+    let dirty_score    = score           != s.hud_last_score;
 
     // Update tracking
     s.hud_last_dist_fill    = q_dist_fill;
@@ -46,6 +48,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.hud_last_px           = q_px;
     s.hud_last_flip_timer   = flip_timer_val;
     s.hud_last_zero_g_timer = zero_g_timer_val;
+    s.hud_last_score        = score;
     drop(s);
 
     // Distance progress bar
@@ -67,6 +70,18 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
                 image: coin_counter_img(coins).into(),
+                color: None,
+            });
+        }
+    }
+
+    // Score counter (top-right)
+    if let Some(obj) = c.get_game_object_mut("score_counter") {
+        obj.position = (VW - 450.0, 40.0);
+        if dirty_score {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
+                image: score_counter_img(score).into(),
                 color: None,
             });
         }

@@ -94,6 +94,9 @@ fn tick_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 let burst_id = format!("burst_{}", s.burst_counter);
                 s.burst_counter = s.burst_counter.wrapping_add(1);
                 s.burst_emitters.push((burst_id.clone(), 4));
+                // Trigger mega shader explosive-sparks overlay.
+                s.spinner_hit_vfx_timer = 24;
+                s.spinner_hit_pos = hit_pos;
 
                 let unhook_ops = begin_unhook(&mut s);
                 let can_shake = s.shake_cooldown.is_finished();
@@ -101,6 +104,12 @@ fn tick_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     s.shake_cooldown = Timer::new(0.5);
                 }
                 drop(s);
+
+                // Kill air-barrier immediately so it's already off before the
+                // camera starts moving, preventing UV-position drift.
+                if can_shake {
+                    c.disable_air_barrier();
+                }
 
                 if let Some(obj) = c.get_game_object_mut(&name) {
                     obj.set_glow(GlowConfig { color: Color(255, 100, 80, 220), width: 8.0 });
@@ -195,6 +204,11 @@ fn tick_gate_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     apply_unhook(c, ops);
                 }
 
+                // Kill air-barrier immediately before camera flash activates.
+                if can_flash {
+                    c.disable_air_barrier();
+                }
+
                 // Red flash on gate hit (cooldown prevents spam).
                 if can_flash {
                     if let Some(cam) = c.camera_mut() {
@@ -258,6 +272,9 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let burst_id = format!("burst_{}", s.burst_counter);
         s.burst_counter = s.burst_counter.wrapping_add(1);
         s.burst_emitters.push((burst_id.clone(), 4));
+        // Trigger mega shader shockwave overlay.
+        s.pad_hit_vfx_timer = 24;
+        s.pad_hit_pos = hit_pos;
         drop(s);
 
         if let Some(ref ops) = unhook_ops {

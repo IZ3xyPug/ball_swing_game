@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::constants::*;
 use crate::gameplay::*;
 use crate::images::*;
+use crate::objects::make_turret;
 use crate::state::*;
 use super::helpers::*;
 
@@ -22,6 +23,7 @@ pub fn tick_spawning(
     spawn_zero_g(c, st);
     spawn_gates(c, st);
     spawn_gravity_wells(c, st);
+    spawn_turrets(c, st);
 }
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -536,6 +538,52 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 200),
                 width: 14.0,
             });
+        }
+
+        s = st.lock().unwrap();
+    }
+}
+
+fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let mut spawned = 0usize;
+    while spawned < TURRET_SPAWN_BUDGET
+        && s.turret_rightmost < s.px + GEN_AHEAD
+        && !s.turret_free.is_empty()
+    {
+        let gap = lcg_range(&mut s.seed, TURRET_GAP_MIN, TURRET_GAP_MAX);
+        let x = s.turret_rightmost + gap;
+        let y = lcg_range(&mut s.seed, TURRET_Y_MIN, TURRET_Y_MAX);
+        let Some(id) = s.turret_free.pop() else { break; };
+        s.turret_live.push(id.clone());
+        s.turret_rightmost = x;
+        s.turret_timers.push((id.clone(), TURRET_SHOOT_INTERVAL));
+        spawned += 1;
+        drop(s);
+
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            let half = TURRET_FULL_SIZE * 0.5;
+            obj.position = (x - half, y - half);
+            obj.size = (TURRET_FULL_SIZE, TURRET_FULL_SIZE);
+            obj.visible = true;
+        }
+
+        // Attach a dim red point light to the turret when lighting is active.
+        if c.has_lighting() {
+            let light_id = format!("turret_light_{}", id);
+            let turret_light = LightSource::new(
+                light_id.clone(),
+                (0.0, 0.0),
+                Color(C_TURRET_BODY.0, C_TURRET_BODY.1, C_TURRET_BODY.2, 220),
+                400.0,
+                1.5,
+            ).with_shadows(false).with_effect(LightEffect::Pulse {
+                min_intensity: 0.9,
+                max_intensity: 1.6,
+                speed: 1.5,
+            });
+            c.add_light(turret_light);
+            c.attach_light(&light_id, &id, (0.0, 0.0));
         }
 
         s = st.lock().unwrap();
