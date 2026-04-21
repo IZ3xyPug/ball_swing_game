@@ -176,6 +176,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 cam.zoom_anchor = None;
             }
             canvas.set_var("coin_sfx_index", 0);
+            canvas.set_var("space_zoom_mode", 3);
 
             // ── Background music (looped, switchable) ───────────────────
             if let Ok(mut slot) = bgm_handle_on_enter.lock() {
@@ -197,15 +198,31 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             );
             if !pause_key_registered {
                 let bgm_handle_key = Arc::clone(&bgm_handle_on_enter);
+                let persistent_state_key = Arc::clone(&persistent_state);
                 canvas.on_key_press(move |c, key| {
                     if !c.is_scene("game") { return; }
 
                     if *key == Key::Character("1".into()) {
-                        let vivid_now = matches!(
-                            c.get_var("bg_vivid"),
-                            Some(Value::Bool(true))
-                        );
-                        c.set_var("bg_vivid", !vivid_now);
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused {
+                            return;
+                        }
+
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let mut s = state_arc.lock().unwrap();
+                            s.zero_g_timer = ZERO_G_DURATION;
+                            let gdir = s.gravity_dir;
+                            let hooked = s.hooked;
+                            drop(s);
+
+                            if !hooked {
+                                if let Some(obj) = c.get_game_object_mut("player") {
+                                    obj.gravity = GRAVITY * ZERO_G_GRAVITY_SCALE * gdir;
+                                }
+                            }
+                        }
                         return;
                     }
 
@@ -219,19 +236,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     if *key == Key::Character("3".into()) {
-                        c.set_var("coin_sfx_index", 0);
+                        // Default space background zoom amount.
+                        c.set_var("space_zoom_mode", 3);
                         return;
                     }
                     if *key == Key::Character("4".into()) {
-                        c.set_var("coin_sfx_index", 1);
-                        return;
-                    }
-                    if *key == Key::Character("5".into()) {
-                        c.set_var("coin_sfx_index", 2);
-                        return;
-                    }
-                    if *key == Key::Character("6".into()) {
-                        c.set_var("coin_sfx_index", 3);
+                        // Reduced space background zoom amount.
+                        c.set_var("space_zoom_mode", 4);
                         return;
                     }
 
@@ -265,6 +276,38 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 *slot = Some(handle);
                             }
                             c.set_var("bgm_track_index", 2);
+                        }
+                        return;
+                    }
+
+                    // ── God mode toggle (key '0') ────────────────────────
+                    if *key == Key::Character("0".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let mut s = state_arc.lock().unwrap();
+                            s.god_mode = !s.god_mode;
+                            let gm = s.god_mode;
+                            if gm {
+                                s.hooked = false;
+                                s.vx = 0.0;
+                                s.vy = 0.0;
+                            }
+                            drop(s);
+                            if gm {
+                                if let Some(obj) = c.get_game_object_mut("player") {
+                                    obj.momentum = (0.0, 0.0);
+                                    obj.gravity = 0.0;
+                                }
+                                if let Some(obj) = c.get_game_object_mut("rope") {
+                                    obj.visible = false;
+                                }
+                                if let Some(cam) = c.camera_mut() {
+                                    cam.flash_with(Color(255, 220, 0, 160), 0.3, FlashMode::Pulse, FlashEase::Sharp, 0.7, 0.02);
+                                }
+                            }
                         }
                         return;
                     }
@@ -520,6 +563,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 bullet_free: bullet_free.clone(),
                 bounce_enabled: true,
                 dark_mode: false,
+                god_mode: false,
                 glow_flashes: Vec::new(),
 
                 hud_last_dist_fill:    u32::MAX,
@@ -824,9 +868,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let mut mouse_was_down = false;
                 let mut prev_nearest_hook = String::new();
                 let mut dark_mode_prev = false;
-                let mut prev_bg_theme: Option<(bool, usize, bool, bool, bool)> = None;
+                let mut prev_bg_theme: Option<(bool, usize, bool, bool)> = None;
                 let mut prev_palette_zone: usize = usize::MAX;
                 let mut frame_counter: u32 = 0;
+                let mut bg_scale_smooth: f32 = 1.0;
+                let mut prev_god_mode: bool = false;
 
                 let bg_s = bg_zone_start.clone();
                 let bg_p = bg_zone_purple.clone();
@@ -867,9 +913,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         .camera()
                         .map(|cam| cam.position.0)
                         .unwrap_or(0.0);
-                    if let Some(obj) = c.get_game_object_mut("bg") {
-                        obj.position = (0.0, 0.0);
-                    }
                     let floor_y = {
                         let s = st.lock().unwrap();
                         if s.gravity_dir < 0.0 { 0.0 } else { VH - 28.0 }
@@ -1038,7 +1081,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     // ── Rope constraint (before spawning/collision) ──────
-                    physics::tick_rope_constraint(c, &st);
+                    if !st.lock().unwrap().god_mode {
+                        physics::tick_rope_constraint(c, &st);
+                    }
 
                     // ── Spawning ─────────────────────────────────────────
                     spawning::tick_spawning(
@@ -1115,7 +1160,52 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Write physics back to engine ─────────────────────
                     physics::cap_momentum_and_write_back(c, &st);
-                    physics::sync_engine_gravity(c, &st);
+
+                    // ── God mode: free-fly override ───────────────────────
+                    {
+                        let gm = st.lock().unwrap().god_mode;
+                        if gm {
+                            const GOD_SPEED: f32 = 30.0;
+                            let dx = if c.key("d") { GOD_SPEED } else if c.key("a") { -GOD_SPEED } else { 0.0 };
+                            let dy = if c.key("s") { GOD_SPEED } else if c.key("w") { -GOD_SPEED } else { 0.0 };
+                            let mut s = st.lock().unwrap();
+                            s.px += dx;
+                            s.py += dy;
+                            s.vx = 0.0;
+                            s.vy = 0.0;
+                            s.hooked = false;
+                            let (px, py) = (s.px, s.py);
+                            drop(s);
+                            if let Some(obj) = c.get_game_object_mut("player") {
+                                obj.position = (px - PLAYER_R, py - PLAYER_R);
+                                obj.momentum = (0.0, 0.0);
+                                obj.gravity = 0.0;
+                            }
+                            if let Some(obj) = c.get_game_object_mut("rope") {
+                                obj.visible = false;
+                            }
+                        } else if prev_god_mode {
+                            // God mode just turned OFF — restore engine physics immediately
+                            // so the player doesn't stay frozen for an extra frame.
+                            let s = st.lock().unwrap();
+                            let gdir = s.gravity_dir;
+                            let hooked = s.hooked;
+                            drop(s);
+                            let target_g = if hooked { 0.0 } else { GRAVITY * gdir };
+                            if let Some(obj) = c.get_game_object_mut("player") {
+                                obj.gravity = target_g;
+                                // Give a tiny nudge so the engine's momentum integrator
+                                // picks up on the change immediately.
+                                obj.momentum = (0.0, GRAVITY * gdir * 0.5);
+                            }
+                        }
+                        prev_god_mode = gm;
+                    }
+
+                    // ── Sync engine gravity ───────────────────────────────
+                    if !st.lock().unwrap().god_mode {
+                        physics::sync_engine_gravity(c, &st);
+                    }
 
                     // ── Visuals ──────────────────────────────────────────
                     visuals::tick_visuals(
@@ -1158,6 +1248,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         c,
                         &st,
                         &mut prev_bg_theme,
+                        &mut bg_scale_smooth,
                         &bg_s,
                         &bg_p,
                         &bg_b,
@@ -1186,9 +1277,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Death check ──────────────────────────────────────
                     let mut s = st.lock().unwrap();
-                    let dead_now = (s.gravity_dir > 0.0
+                    let dead_now = !s.god_mode && ((s.gravity_dir > 0.0
                         && s.py > VH + 150.0)
-                        || (s.gravity_dir < 0.0 && s.py < -150.0);
+                        || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {
                         c.set_var("last_distance", s.distance);
                         c.set_var("last_coins", s.coin_count as i32);

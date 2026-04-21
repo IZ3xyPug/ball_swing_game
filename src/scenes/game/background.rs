@@ -9,7 +9,8 @@ use crate::state::*;
 pub fn tick_background(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
-    prev_bg_theme: &mut Option<(bool, usize, bool, bool, bool)>,
+    prev_bg_theme: &mut Option<(bool, usize, bool, bool)>,
+    bg_scale_smooth: &mut f32,
     bg_zone_start: &image::RgbaImage,
     bg_zone_purple: &image::RgbaImage,
     bg_zone_black: &image::RgbaImage,
@@ -22,62 +23,95 @@ pub fn tick_background(
     bg_zone_start_vivid_flip: &image::RgbaImage,
     bg_zone_purple_vivid_flip: &image::RgbaImage,
     bg_zone_black_vivid_flip: &image::RgbaImage,
-    bg_zone_start_space: &image::RgbaImage,
-    bg_zone_purple_space: &image::RgbaImage,
-    bg_zone_black_space: &image::RgbaImage,
-    bg_zone_start_vivid_space: &image::RgbaImage,
-    bg_zone_purple_vivid_space: &image::RgbaImage,
-    bg_zone_black_vivid_space: &image::RgbaImage,
-    bg_zone_start_space_flip: &image::RgbaImage,
-    bg_zone_purple_space_flip: &image::RgbaImage,
-    bg_zone_black_space_flip: &image::RgbaImage,
-    bg_zone_start_vivid_space_flip: &image::RgbaImage,
-    bg_zone_purple_vivid_space_flip: &image::RgbaImage,
-    bg_zone_black_vivid_space_flip: &image::RgbaImage,
+    _bg_zone_start_space: &image::RgbaImage,
+    _bg_zone_purple_space: &image::RgbaImage,
+    _bg_zone_black_space: &image::RgbaImage,
+    _bg_zone_start_vivid_space: &image::RgbaImage,
+    _bg_zone_purple_vivid_space: &image::RgbaImage,
+    _bg_zone_black_vivid_space: &image::RgbaImage,
+    _bg_zone_start_space_flip: &image::RgbaImage,
+    _bg_zone_purple_space_flip: &image::RgbaImage,
+    _bg_zone_black_space_flip: &image::RgbaImage,
+    _bg_zone_start_vivid_space_flip: &image::RgbaImage,
+    _bg_zone_purple_vivid_space_flip: &image::RgbaImage,
+    _bg_zone_black_vivid_space_flip: &image::RgbaImage,
 ) {
     let s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
     let dark = s.dark_mode;
     let flipped = s.gravity_dir < 0.0;
+    let py = s.py;
     drop(s);
     let vivid = matches!(c.get_var("bg_vivid"), Some(Value::Bool(true)));
-    let space_zoomed = c.camera().map(|cam| cam.zoom < 0.72).unwrap_or(false);
 
-    let key = (dark, zone_idx, vivid, flipped, space_zoomed);
+    // Smoothly scale background once player rises above py = 500.
+    // Starts at py = 500 (upper area of screen), reaches full effect at py = 500 - 1400 = -900.
+    let up_t = if flipped {
+        ((py - (VH - 500.0)) / 1400.0).clamp(0.0, 1.0)
+    } else {
+        ((500.0 - py) / 1400.0).clamp(0.0, 1.0)
+    };
+    let zoom_strength = match c.get_i32("space_zoom_mode") {
+        4 => 0.44, // reduced version
+        _ => 0.60, // default/current version
+    };
+    let target_scale = 1.0 + zoom_strength * up_t;
+    // Lerp toward target so the transition eases rather than snapping each frame.
+    *bg_scale_smooth = *bg_scale_smooth + (*bg_scale_smooth - target_scale).abs().min(1.0) * if target_scale > *bg_scale_smooth { 0.06 } else { 0.04 } * (target_scale - *bg_scale_smooth).signum();
+    let bg_scale = *bg_scale_smooth;
+
+    if let Some(obj) = c.get_game_object_mut("bg") {
+        const OVERSCAN: f32 = 200.0;
+        let w = VW * bg_scale + OVERSCAN * 2.0;
+        let h = VH * bg_scale;
+        obj.size = (w, h);
+        let cx = -(w - VW) / 2.0;
+        if flipped {
+            obj.position = (cx, VH - h);
+        } else {
+            obj.position = (cx, 0.0);
+        }
+        obj.update_image_shape();
+    }
+
+    // Disable overlay layer to avoid tint/whitening artifacts.
+    if let Some(obj) = c.get_game_object_mut("bg_space") {
+        obj.visible = false;
+    }
+
+    let key = (dark, zone_idx, vivid, flipped);
     if *prev_bg_theme == Some(key) { return; }
     *prev_bg_theme = Some(key);
 
     let image_data: image::RgbaImage = if dark {
-        // Dark mode: solid near-black
         let mut img = image::RgbaImage::new(4, 4);
         for py in 0..4 { for px in 0..4 { img.put_pixel(px, py, image::Rgba([4, 4, 8, 255])); } }
         img
     } else if flipped {
-        // Gravity inverted — use vertically flipped backgrounds
         if vivid {
             match zone_idx {
-                0 => if space_zoomed { bg_zone_start_vivid_space_flip.clone() } else { bg_zone_start_vivid_flip.clone() },
-                1 => if space_zoomed { bg_zone_purple_vivid_space_flip.clone() } else { bg_zone_purple_vivid_flip.clone() },
-                _ => if space_zoomed { bg_zone_black_vivid_space_flip.clone() } else { bg_zone_black_vivid_flip.clone() },
+                0 => bg_zone_start_vivid_flip.clone(),
+                1 => bg_zone_purple_vivid_flip.clone(),
+                _ => bg_zone_black_vivid_flip.clone(),
             }
         } else {
             match zone_idx {
-                0 => if space_zoomed { bg_zone_start_space_flip.clone() } else { bg_zone_start_flip.clone() },
-                1 => if space_zoomed { bg_zone_purple_space_flip.clone() } else { bg_zone_purple_flip.clone() },
-                _ => if space_zoomed { bg_zone_black_space_flip.clone() } else { bg_zone_black_flip.clone() },
+                0 => bg_zone_start_flip.clone(),
+                1 => bg_zone_purple_flip.clone(),
+                _ => bg_zone_black_flip.clone(),
             }
         }
     } else if vivid {
         match zone_idx {
-            0 => if space_zoomed { bg_zone_start_vivid_space.clone() } else { bg_zone_start_vivid.clone() },
-            1 => if space_zoomed { bg_zone_purple_vivid_space.clone() } else { bg_zone_purple_vivid.clone() },
-            _ => if space_zoomed { bg_zone_black_vivid_space.clone() } else { bg_zone_black_vivid.clone() },
+            0 => bg_zone_start_vivid.clone(),
+            1 => bg_zone_purple_vivid.clone(),
+            _ => bg_zone_black_vivid.clone(),
         }
     } else {
         match zone_idx {
-            0 => if space_zoomed { bg_zone_start_space.clone() } else { bg_zone_start.clone() },
-            1 => if space_zoomed { bg_zone_purple_space.clone() } else { bg_zone_purple.clone() },
-            _ => if space_zoomed { bg_zone_black_space.clone() } else { bg_zone_black.clone() },
+            0 => bg_zone_start.clone(),
+            1 => bg_zone_purple.clone(),
+            _ => bg_zone_black.clone(),
         }
     };
 
@@ -87,5 +121,17 @@ pub fn tick_background(
             image: image_data.into(),
             color: None,
         });
+        const OVERSCAN: f32 = 200.0;
+        let w = VW * bg_scale + OVERSCAN * 2.0;
+        let h = VH * bg_scale;
+        obj.size = (w, h);
+        let cx = -(w - VW) / 2.0;
+        if flipped {
+            obj.position = (cx, VH - h);
+        } else {
+            obj.position = (cx, 0.0);
+        }
+        obj.update_image_shape();
     }
+
 }

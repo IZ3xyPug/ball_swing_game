@@ -81,7 +81,7 @@ pub fn composite_starfield_gradient(
     out_h: u32,
     blend_h: u32,
 ) -> image::RgbaImage {
-    composite_starfield_gradient_with_ratio(starfield, gradient, out_w, out_h, blend_h, 0.62)
+    composite_starfield_gradient_with_ratio(starfield, gradient, out_w, out_h, blend_h, 0.56)
 }
 
 pub fn composite_starfield_gradient_with_ratio(

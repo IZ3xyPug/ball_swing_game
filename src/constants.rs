@@ -14,12 +14,12 @@ pub const GRAB_SURGE:     f32 = 4.2;
 pub const GRAB_TANGENT_SURGE_SCALE: f32 = 0.12;
 pub const GRAB_TANGENT_SURGE_MAX:   f32 = 4.0;
 pub const GRAB_SURGE_MULT: f32 = 2.6;
-pub const GRAB_VERTICAL_BOOST: f32 = 1.15;
+pub const GRAB_VERTICAL_BOOST: f32 = 1.22;
 pub const GRAB_SPIN_DISABLE_SPEED: f32 = 50.0;
 pub const RELEASE_MIN_SWING_SPEED: f32 = 3.2;
 pub const RELEASE_SURGE_SCALE: f32 = 0.42;
 pub const RELEASE_SURGE_MAX: f32 = 14.0;
-pub const RELEASE_VERTICAL_BOOST: f32 = 1.25;
+pub const RELEASE_VERTICAL_BOOST: f32 = 1.33;
 
 // ── Object sizes ──────────────────────────────────────────────────────────────
 pub const PLAYER_R:       f32 = 40.0;
@@ -124,8 +124,8 @@ pub const TEST_HOOK_GAP: f32 = 760.0;
 // ── Zoom ──────────────────────────────────────────────────────────────────────
 pub const ZOOM_TOP_MARGIN:  f32 = VH * 0.14;
 pub const ZOOM_MAX:         f32 = 3.2;
-pub const ZOOM_OUT_LERP:    f32 = 0.22;
-pub const ZOOM_IN_LERP:     f32 = 0.05;
+pub const ZOOM_OUT_LERP:    f32 = 0.10;
+pub const ZOOM_IN_LERP:     f32 = 0.02;
 pub const ZOOM_LOOKAHEAD_T: f32 = 12.0;
 
 // ── Colours ───────────────────────────────────────────────────────────────────

@@ -135,6 +135,7 @@ pub struct State {
     pub bounce_enabled: bool,
 
     pub dark_mode: bool,
+    pub god_mode: bool,
     pub glow_flashes: Vec<(String, u8)>,
 
     // ── HUD dirty-tracking ──────────────────────────────────────────────

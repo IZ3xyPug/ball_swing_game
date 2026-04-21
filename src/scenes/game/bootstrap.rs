@@ -39,6 +39,19 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     bg.ignore_zoom = true;
 
+    let mut bg_space = GameObject::new_rect(
+        ctx, "bg_space".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+            image: gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT).into(),
+            color: None,
+        }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    bg_space.ignore_zoom = true;
+    bg_space.visible = false;
+    bg_space.set_tint(Color(255, 255, 255, 0));
+
     // ── Player — engine-native gravity ───────────────────────────────────
     let mut player = GameObject::new_rect(
         ctx, "player".into(),
@@ -265,6 +278,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     let mut scene = Scene::new("game")
         .with_object("bg",           bg)
+        .with_object("bg_space",     bg_space)
         .with_object("danger_floor", floor)
         .with_object("rope",         rope)
         .with_object("player",       player)
