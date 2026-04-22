@@ -581,7 +581,9 @@ cached_image!(gate_top_image_cached, gate_img(GATE_W as u32, GATE_TOP_SEG_H as u
 cached_image!(gate_bot_image_cached, gate_img(GATE_W as u32, GATE_BOT_SEG_H as u32));
 
 pub fn pause_overlay_img() -> image::RgbaImage {
-    let w = VW as u32;
+    // Add horizontal overscan so the tint covers any safe-area padding.
+    const OVERSCAN: u32 = 400;
+    let w = VW as u32 + OVERSCAN * 2;
     let h = VH as u32;
     let mut img = image::RgbaImage::new(w, h);
     draw_rect(&mut img, 0, 0, w, h, [0, 0, 0, 170]);
@@ -619,6 +621,22 @@ fn draw_word(img: &mut image::RgbaImage, x: u32, y: u32, scale: u32, text: &str,
         draw_block_char(img, cx, y, scale, ch, color);
         cx += 6 * scale;
     }
+}
+
+/// Cached asteroid image resized to hook dimensions (HOOK_R*2 × HOOK_R*2).
+/// Loaded from disk once; subsequent calls return the same Arc.
+pub fn asteroid_hook_image_cached() -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let d = (HOOK_R * 2.0) as u32;
+        match image::open(ASSET_ASTEROID) {
+            Ok(img) => Arc::new(image::imageops::resize(
+                &img.into_rgba8(), d, d,
+                image::imageops::FilterType::Lanczos3,
+            )),
+            Err(_) => Arc::new(circle_img(HOOK_R as u32, 128, 128, 128)),
+        }
+    }).clone()
 }
 
 fn draw_block_char(img: &mut image::RgbaImage, x: u32, y: u32, s: u32, ch: u8, c: [u8; 4]) {

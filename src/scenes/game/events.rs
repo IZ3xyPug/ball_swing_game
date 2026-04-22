@@ -37,9 +37,14 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         c.run(Action::Hide { target: Target::name("rope") });
 
         if !prev.is_empty() {
+            let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&prev) {
-                let (r, g, b) = hook_base_for_zone(zone_idx);
-                obj.set_image(hook_img(r, g, b));
+                if asteroid_mode {
+                    obj.set_image(hook_asteroid_img());
+                } else {
+                    let (r, g, b) = hook_base_for_zone(zone_idx);
+                    obj.set_image(hook_img(r, g, b));
+                }
                 obj.clear_glow();
             }
         }
@@ -121,9 +126,14 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 obj.gravity = 0.0;
             }
 
+            let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
-                let (r, g, b) = hook_on_for_zone(zone_idx);
-                obj.set_image(hook_img(r, g, b));
+                if asteroid_mode {
+                    obj.set_image(hook_asteroid_img());
+                } else {
+                    let (r, g, b) = hook_on_for_zone(zone_idx);
+                    obj.set_image(hook_img(r, g, b));
+                }
                 obj.set_glow(GlowConfig { color: Color(255, 200, 80, 255), width: 18.0 });
             }
 

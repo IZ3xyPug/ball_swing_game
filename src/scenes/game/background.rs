@@ -57,7 +57,7 @@ pub fn tick_background(
     };
     let target_scale = 1.0 + zoom_strength * up_t;
     // Lerp toward target so the transition eases rather than snapping each frame.
-    *bg_scale_smooth = *bg_scale_smooth + (*bg_scale_smooth - target_scale).abs().min(1.0) * if target_scale > *bg_scale_smooth { 0.06 } else { 0.04 } * (target_scale - *bg_scale_smooth).signum();
+    *bg_scale_smooth = *bg_scale_smooth + (*bg_scale_smooth - target_scale).abs().min(1.0) * if target_scale > *bg_scale_smooth { 0.06 } else { 0.02 } * (target_scale - *bg_scale_smooth).signum();
     let bg_scale = *bg_scale_smooth;
 
     if let Some(obj) = c.get_game_object_mut("bg") {
@@ -72,6 +72,18 @@ pub fn tick_background(
             obj.position = (cx, 0.0);
         }
         obj.update_image_shape();
+    }
+
+    // Asteroid: fixed size, anchored to top-right corner (does not scale with bg zoom).
+    {
+        const BASE_W: f32 = 480.0;
+        const BASE_H: f32 = 480.0;
+        const MARGIN: f32 = 80.0;
+        if let Some(obj) = c.get_game_object_mut("asteroid") {
+            obj.size = (BASE_W, BASE_H);
+            obj.position = (VW - BASE_W - MARGIN, MARGIN);
+            obj.update_image_shape();
+        }
     }
 
     // Disable overlay layer to avoid tint/whitening artifacts.

@@ -155,12 +155,17 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let zone_idx = zone_index_for_distance(s.distance);
         drop(s);
 
+        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         if let Some(obj) = c.get_game_object_mut(&id) {
-            let (r, g, b) = hook_base_for_zone(zone_idx);
             obj.position = (hx - HOOK_R, hy - HOOK_R);
             obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible = true;
-            obj.set_image(hook_img(r, g, b));
+            if asteroid_mode {
+                obj.set_image(hook_asteroid_img());
+            } else {
+                let (r, g, b) = hook_base_for_zone(zone_idx);
+                obj.set_image(hook_img(r, g, b));
+            }
             obj.clear_highlight();
         }
 

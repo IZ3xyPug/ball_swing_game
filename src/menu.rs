@@ -42,7 +42,7 @@ fn menu_mode_selector_img() -> image::RgbaImage {
 pub fn build_menu_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "menu_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND, VW, VH)),
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW, VH)),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
@@ -338,7 +338,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
 pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "go_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND, VW, VH)),
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW, VH)),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(

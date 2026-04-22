@@ -6,6 +6,7 @@ use quartz::*;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
+use crate::gameplay::zone_index_for_distance;
 use crate::state::gen_hook_batch;
 use crate::images::*;
 use crate::objects::ui_text_spec;
@@ -235,11 +236,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
-                    if *key == Key::Character("3".into()) {
-                        // Default space background zoom amount.
-                        c.set_var("space_zoom_mode", 3);
-                        return;
-                    }
                     if *key == Key::Character("4".into()) {
                         // Reduced space background zoom amount.
                         c.set_var("space_zoom_mode", 4);
@@ -306,6 +302,35 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 }
                                 if let Some(cam) = c.camera_mut() {
                                     cam.flash_with(Color(255, 220, 0, 160), 0.3, FlashMode::Pulse, FlashEase::Sharp, 0.7, 0.02);
+                                }
+                            }
+                        }
+                        return;
+                    }
+
+                    // ── Asteroid hooks toggle (key '3') ─────────────────────────
+                    if *key == Key::Character("3".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+                        let cur = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+                        let next = !cur;
+                        c.set_var("asteroid_hooks_on", next);
+                        // Immediately repaint all live hooks.
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let s = state_arc.lock().unwrap();
+                            let hooks = s.live_hooks.clone();
+                            let zone_idx = zone_index_for_distance(s.distance);
+                            drop(s);
+                            for hid in &hooks {
+                                if let Some(obj) = c.get_game_object_mut(hid) {
+                                    if next {
+                                        obj.set_image(hook_asteroid_img());
+                                    } else {
+                                        let (r, g, b) = hook_base_for_zone(zone_idx);
+                                        obj.set_image(hook_img(r, g, b));
+                                    }
                                 }
                             }
                         }

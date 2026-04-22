@@ -41,6 +41,7 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.glow_flashes.retain(|(_, t)| *t > 0);
     drop(s);
 
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     for name in &expired {
         if let Some(obj) = c.get_game_object_mut(name) {
             if obj.tags.iter().any(|t| t == "pad") {
@@ -51,6 +52,13 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
                     color: None,
                 });
+            } else if obj.tags.iter().any(|t| t == "hook") {
+                if asteroid_mode {
+                    obj.set_image(hook_asteroid_img());
+                } else {
+                    let (r, g, b) = hook_base_for_zone(zone_idx);
+                    obj.set_image(hook_img(r, g, b));
+                }
             }
             obj.clear_glow();
         }
@@ -88,20 +96,29 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
 
     let nearest = best_id.unwrap_or_default();
     if nearest != *prev_nearest {
+        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         // Remove glow from old nearest.
         if !prev_nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(prev_nearest) {
-                let (r, g, b) = hook_base_for_zone(zone_idx);
-                obj.set_image(hook_img(r, g, b));
+                if asteroid_mode {
+                    obj.set_image(hook_asteroid_img());
+                } else {
+                    let (r, g, b) = hook_base_for_zone(zone_idx);
+                    obj.set_image(hook_img(r, g, b));
+                }
                 obj.clear_glow();
             }
         }
         // Glow new nearest.
         if !nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(&nearest) {
-                let (r, g, b) = hook_near_for_zone(zone_idx);
-                obj.set_image(hook_img(r, g, b));
-                obj.set_glow(GlowConfig { color: Color(r, g, b, 140), width: 10.0 });
+                if asteroid_mode {
+                    obj.set_image(hook_asteroid_img());
+                } else {
+                    let (r, g, b) = hook_near_for_zone(zone_idx);
+                    obj.set_image(hook_img(r, g, b));
+                }
+                obj.set_glow(GlowConfig { color: Color(255, 220, 120, 140), width: 10.0 });
             }
         }
         *prev_nearest = nearest;
@@ -121,10 +138,15 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
 
     *prev_zone = zone_idx;
 
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     for hid in &hooks {
         if let Some(obj) = c.get_game_object_mut(hid) {
-            let (r, g, b) = hook_base_for_zone(zone_idx);
-            obj.set_image(hook_img(r, g, b));
+            if asteroid_mode {
+                obj.set_image(hook_asteroid_img());
+            } else {
+                let (r, g, b) = hook_base_for_zone(zone_idx);
+                obj.set_image(hook_img(r, g, b));
+            }
         }
     }
     for pid in &pads {

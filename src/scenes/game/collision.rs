@@ -38,11 +38,16 @@ fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
     if let Some(obj) = c.get_game_object_mut("player") {
         obj.gravity = ops.gravity_val;
     }
-    // Restore hook to base colour.
+    // Restore hook to base colour (or asteroid skin if mode is on).
     if !ops.prev_hook.is_empty() {
+        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         if let Some(hobj) = c.get_game_object_mut(&ops.prev_hook) {
-            let (r, g, b) = hook_base_for_zone(ops.zone_idx);
-            hobj.set_image(hook_img(r, g, b));
+            if asteroid_mode {
+                hobj.set_image(hook_asteroid_img());
+            } else {
+                let (r, g, b) = hook_base_for_zone(ops.zone_idx);
+                hobj.set_image(hook_img(r, g, b));
+            }
             hobj.clear_glow();
         }
     }

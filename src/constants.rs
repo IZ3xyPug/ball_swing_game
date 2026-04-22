@@ -14,12 +14,12 @@ pub const GRAB_SURGE:     f32 = 4.2;
 pub const GRAB_TANGENT_SURGE_SCALE: f32 = 0.12;
 pub const GRAB_TANGENT_SURGE_MAX:   f32 = 4.0;
 pub const GRAB_SURGE_MULT: f32 = 2.6;
-pub const GRAB_VERTICAL_BOOST: f32 = 1.22;
+pub const GRAB_VERTICAL_BOOST: f32 = 1.28;
 pub const GRAB_SPIN_DISABLE_SPEED: f32 = 50.0;
 pub const RELEASE_MIN_SWING_SPEED: f32 = 3.2;
 pub const RELEASE_SURGE_SCALE: f32 = 0.42;
 pub const RELEASE_SURGE_MAX: f32 = 14.0;
-pub const RELEASE_VERTICAL_BOOST: f32 = 1.33;
+pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
 
 // ── Object sizes ──────────────────────────────────────────────────────────────
 pub const PLAYER_R:       f32 = 40.0;
@@ -181,6 +181,8 @@ pub const ASSET_BGM_TRACK_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets
 pub const ASSET_BGM_TRACK_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_2.mp3");
 pub const ASSET_BGM_TRACK_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_3.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
+pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background_2.webp");
+pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
 
 // ── Gravity wells ─────────────────────────────────────────────────────────────
 pub const GWELL_POOL_SIZE:     usize = 10;

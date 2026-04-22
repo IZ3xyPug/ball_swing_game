@@ -52,6 +52,34 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     bg_space.visible = false;
     bg_space.set_tint(Color(255, 255, 255, 0));
 
+    // ── Asteroid (top-right of space background) ─────────────────────────
+    const ASTEROID_W: f32 = 480.0;
+    const ASTEROID_H: f32 = 480.0;
+    let asteroid_decoded = image::open(ASSET_ASTEROID)
+        .or_else(|_| image::open(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.png")));
+    let asteroid_img = if let Ok(decoded) = asteroid_decoded {
+        Image {
+            shape: ShapeType::Rectangle(0.0, (ASTEROID_W, ASTEROID_H), 0.0),
+            image: decoded.into_rgba8().into(),
+            color: None,
+        }
+    } else {
+        // Fallback keeps the game bootable if the external asset is malformed.
+        Image {
+            shape: ShapeType::Rectangle(0.0, (ASTEROID_W, ASTEROID_H), 0.0),
+            image: solid(120, 120, 132, 255).into(),
+            color: None,
+        }
+    };
+    let mut asteroid = GameObject::new_rect(
+        ctx, "asteroid".into(),
+        Some(asteroid_img),
+        (ASTEROID_W, ASTEROID_H),
+        (VW - ASTEROID_W - 80.0, 80.0),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    asteroid.ignore_zoom = true;
+
     // ── Player — engine-native gravity ───────────────────────────────────
     let mut player = GameObject::new_rect(
         ctx, "player".into(),
@@ -196,16 +224,21 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     combo_flash.visible = false;
     combo_flash.ignore_zoom = true;
 
-    let mut pause_overlay = GameObject::new_rect(
-        ctx, "pause_overlay".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: pause_overlay_img().into(),
-            color: None,
-        }),
-        (VW, VH), (0.0, 0.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut pause_overlay = {
+        const PO_OVERSCAN: f32 = 400.0;
+        let po_w = VW + PO_OVERSCAN * 2.0;
+        let mut obj = GameObject::new_rect(
+            ctx, "pause_overlay".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (po_w, VH), 0.0),
+                image: pause_overlay_img().into(),
+                color: None,
+            }),
+            (po_w, VH), (-PO_OVERSCAN, 0.0),
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        obj
+    };
     pause_overlay.visible = false;
     pause_overlay.layer = 10_000;
     pause_overlay.ignore_zoom = true;
@@ -279,6 +312,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut scene = Scene::new("game")
         .with_object("bg",           bg)
         .with_object("bg_space",     bg_space)
+        .with_object("asteroid",     asteroid)
         .with_object("danger_floor", floor)
         .with_object("rope",         rope)
         .with_object("player",       player)
