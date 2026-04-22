@@ -13,6 +13,9 @@ mod gravity_wells;
 mod turrets;
 mod ui;
 mod math;
+mod rocket_pads;
+mod planets;
+mod black_holes;
 
 pub use hooks::*;
 pub use pads::*;
@@ -24,3 +27,6 @@ pub use gravity_wells::*;
 pub use turrets::*;
 pub use ui::*;
 pub use math::*;
+pub use rocket_pads::*;
+pub use planets::*;
+pub use black_holes::*;

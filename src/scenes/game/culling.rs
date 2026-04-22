@@ -18,6 +18,8 @@ pub fn tick_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     cull_gravity_wells(c, st);
     cull_turrets(c, st);
     cull_bullets(c, st);
+    cull_rocket_pads(c, st);
+    // Space zone culling is handled inside space_zone::tick_space_zone
 }
 
 fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -215,3 +217,22 @@ fn cull_bullets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.bullet_live.retain(|(n, _, _, _)| !rm.contains(n.as_str()));
     for name in to_remove { s.bullet_free.push(name); }
 }
+
+// ── Rocket pad culling ───────────────────────────────────────────────────────
+
+fn cull_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let cutoff = s.px - VW * 1.5;
+    let to_remove: Vec<String> = s.rocket_pad_live.iter()
+        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + ROCKET_PAD_W < cutoff).unwrap_or(true))
+        .cloned().collect();
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible = false;
+            obj.position = (-5200.0, -5200.0);
+        }
+    }
+    s.rocket_pad_live.retain(|n| !to_remove.contains(n));
+    for name in to_remove { s.rocket_pad_free.push(name); }
+}
+

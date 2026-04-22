@@ -220,6 +220,8 @@ fn tick_pad_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 
 fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let s = st.lock().unwrap();
+    // Space mode and rocket ascent manage their own camera/zoom — don't interfere.
+    if s.in_space_mode || s.space_launch_active { return; }
     let flipped = s.gravity_dir < 0.0;
     let anchor_y = if flipped { 0.0 } else { VH };
 

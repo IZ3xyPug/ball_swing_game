@@ -23,6 +23,12 @@ pub struct PoolSets {
     pub coin_anim_template:  Option<AnimatedSprite>,
     #[allow(dead_code)]
     pub score_x2_anim_template: Option<AnimatedSprite>,
+    // ── Space zone pools
+    pub rocket_pad_free:   Vec<String>,
+    pub space_planet_free: Vec<String>,
+    pub space_hook_free:   Vec<String>,
+    pub space_coin_free:   Vec<String>,
+    pub space_bh_free:     Vec<String>,
 }
 pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Background images ────────────────────────────────────────────────
@@ -475,6 +481,91 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object(id, obj);
     }
 
+    // ── Rocket pad pool ───────────────────────────────────────────────────
+    let mut rocket_pad_free: Vec<String> = Vec::new();
+    for i in 0..ROCKET_PAD_POOL_SIZE {
+        let id = format!("rocket_pad_{i}");
+        let mut obj = make_rocket_pad(ctx, &id, -5200.0, -5200.0);
+        obj.visible = false;
+        rocket_pad_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Space planet pool ─────────────────────────────────────────────────
+    let mut space_planet_free: Vec<String> = Vec::new();
+    for i in 0..SPACE_PLANET_POOL_SIZE {
+        let id = format!("space_planet_{i}");
+        let mut obj = make_planet(ctx, &id, -5500.0, -5500.0,
+            SPACE_PLANET_RADIUS_SM_MIN, SPACE_PLANET_RADIUS_SM_MIN * SPACE_PLANET_GRAV_R_MULT, 0);
+        obj.visible = false;
+        obj.planet_radius = None;
+        space_planet_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Space hook pool ───────────────────────────────────────────────────
+    let mut space_hook_free: Vec<String> = Vec::new();
+    for i in 0..SPACE_HOOK_POOL_SIZE {
+        let id = format!("space_hook_{i}");
+        let mut obj = make_hook(ctx, &id, -5700.0, -5700.0);
+        obj.visible = false;
+        space_hook_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Space coin pool ───────────────────────────────────────────────────
+    let mut space_coin_free: Vec<String> = Vec::new();
+    for i in 0..SPACE_COIN_POOL_SIZE {
+        let id = format!("space_coin_{i}");
+        let mut obj = make_coin(ctx, &id, -5900.0, -5900.0);
+        obj.set_image(Image {
+            shape: ShapeType::Ellipse(0.0, (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0), 0.0),
+            image: space_coin_img_cached(SPACE_COIN_R as u32),
+            color: None,
+        });
+        obj.visible = false;
+        space_coin_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Space black hole pool ─────────────────────────────────────────────
+    let mut space_bh_free: Vec<String> = Vec::new();
+    for i in 0..SPACE_BLACKHOLE_POOL_SIZE {
+        let id = format!("space_bh_{i}");
+        let mut obj = make_black_hole(ctx, &id, -6100.0, -6100.0, SPACE_BLACKHOLE_RADIUS_MIN);
+        obj.visible = false;
+        obj.planet_radius = None;
+        space_bh_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Space HUD objects ─────────────────────────────────────────────────
+    // Oxygen bar (replaces dist_bar while in space)
+    let mut oxygen_bar_obj = GameObject::new_rect(
+        ctx, "oxygen_bar".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (OXYGEN_BAR_W, OXYGEN_BAR_H), 0.0),
+            image: oxygen_bar_img(1.0, OXYGEN_BAR_W as u32, OXYGEN_BAR_H as u32).into(),
+            color: None,
+        }),
+        (OXYGEN_BAR_W, OXYGEN_BAR_H), (VW * 0.5 - OXYGEN_BAR_W * 0.5, 30.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    oxygen_bar_obj.visible = false;
+    oxygen_bar_obj.ignore_zoom = true;
+    scene = scene.with_object("oxygen_bar", oxygen_bar_obj);
+
+    // Welcome text
+    let mut space_welcome_text = GameObject::build("space_welcome_text")
+        .size(1100.0, 140.0)
+        .position((VW - 1100.0) * 0.5, VH * 0.32)
+        .tag("hud")
+        .build(ctx);
+    space_welcome_text.visible = false;
+    space_welcome_text.ignore_zoom = true;
+    space_welcome_text.layer = 200;
+    scene = scene.with_object("space_welcome_text", space_welcome_text);
+
     // Pause overlay last so it renders above everything.
     scene = scene.with_object("pause_overlay", pause_overlay);
 
@@ -569,6 +660,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template,
+        rocket_pad_free,
+        space_planet_free,
+        space_hook_free,
+        space_coin_free,
+        space_bh_free,
     };
 
     (scene, pools)

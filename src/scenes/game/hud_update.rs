@@ -49,17 +49,21 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.hud_last_flip_timer   = flip_timer_val;
     s.hud_last_zero_g_timer = zero_g_timer_val;
     s.hud_last_score        = score;
+    let in_space = s.in_space_mode;
     drop(s);
 
-    // Distance progress bar
-    if let Some(obj) = c.get_game_object_mut("dist_bar") {
-        obj.position = (VW * 0.5 - 460.0, 30.0);
-        if dirty_dist {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
-                image: bar_img(920, 48, dist_fill, 80, 220, 160).into(),
-                color: None,
-            });
+    // Distance progress bar (hidden while in space; oxygen bar takes its slot)
+    if !in_space {
+        if let Some(obj) = c.get_game_object_mut("dist_bar") {
+            obj.position = (VW * 0.5 - 460.0, 30.0);
+            obj.visible = true;
+            if dirty_dist {
+                obj.set_image(Image {
+                    shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
+                    image: bar_img(920, 48, dist_fill, 80, 220, 160).into(),
+                    color: None,
+                });
+            }
         }
     }
 

@@ -63,10 +63,14 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 /// Manage engine gravity. When hooked: gravity = 0 (rope handles it).
 /// When free: gravity = GRAVITY * direction * zero-g scale.
+/// During rocket launch (space_launch_active) and while in space: near-zero gravity.
 pub fn sync_engine_gravity(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let s = st.lock().unwrap();
     let target_gravity = if s.hooked {
         0.0
+    } else if s.in_space_mode || s.space_launch_active {
+        // Space / ascent: effectively no global gravity — planet wells do the work.
+        GRAVITY * SPACE_GRAVITY_SCALE * s.gravity_dir
     } else {
         let g_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
         GRAVITY * g_scale * s.gravity_dir
@@ -79,13 +83,17 @@ pub fn sync_engine_gravity(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 /// Clamp player momentum to MOMENTUM_CAP and write state back to engine.
+/// The cap is bypassed while `space_launch_active` is true — the rocket pad
+/// intentionally launches the player far beyond normal play speeds.
 pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
 
-    let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
-    if speed > MOMENTUM_CAP {
-        s.vx = s.vx / speed * MOMENTUM_CAP;
-        s.vy = s.vy / speed * MOMENTUM_CAP;
+    if !s.space_launch_active {
+        let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
+        if speed > MOMENTUM_CAP {
+            s.vx = s.vx / speed * MOMENTUM_CAP;
+            s.vy = s.vy / speed * MOMENTUM_CAP;
+        }
     }
 
     let (px, py, vx, vy) = (s.px, s.py, s.vx, s.vy);

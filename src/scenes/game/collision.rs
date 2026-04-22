@@ -12,6 +12,7 @@ pub fn tick_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_spinner_collision(c, st);
     tick_gate_collision(c, st);
     tick_pad_bounce(c, st);
+    tick_rocket_pad_collision(c, st);
 }
 
 /// Sets state fields for unhook + queues canvas ops (rope hide, gravity restore).
@@ -210,6 +211,69 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.set_glow(GlowConfig {
                 color: Color(pr, pg, pb, 220),
                 width: 10.0,
+            });
+        }
+    }
+}
+
+// ── Rocket pad launch ─────────────────────────────────────────────────────────
+// Circle-AABB hit test: player ball landing on top of a rocket pad launches
+// the player upward with a big velocity boost and unhooks them.
+
+pub fn tick_rocket_pad_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    // Rocket pads only work in normal mode (not in space already)
+    if s.in_space_mode { return; }
+
+    let player_bottom = s.py + PLAYER_R;
+    let player_left   = s.px - PLAYER_R;
+    let player_right  = s.px + PLAYER_R;
+    let approaching   = s.gravity_dir > 0.0 && s.vy > 0.0;
+
+    if !approaching { return; }
+
+    let live = s.rocket_pad_live.clone();
+    let mut hit_pad: Option<String> = None;
+    for name in &live {
+        if let Some(obj) = c.get_game_object(name) {
+            let pad_top   = obj.position.1;
+            let pad_left  = obj.position.0;
+            let pad_right = obj.position.0 + ROCKET_PAD_W;
+            let overlap_x = player_right > pad_left && player_left < pad_right;
+            if overlap_x && player_bottom >= pad_top && player_bottom <= pad_top + ROCKET_PAD_H + s.vy.abs() {
+                hit_pad = Some(name.clone());
+                break;
+            }
+        }
+    }
+
+    if let Some(ref pad_name) = hit_pad {
+        // Apply launch velocity — strong enough to clear the entire normal zone
+        s.vy = ROCKET_PAD_LAUNCH_VY;  // large negative = upward
+        s.vx += ROCKET_PAD_LAUNCH_VX;
+        s.py = s.py - PLAYER_R * 0.5; // nudge up to avoid re-trigger
+        // This is the ONLY place that unlocks the space zone entry check.
+        s.space_launch_active = true;
+
+        let unhook_ops = begin_unhook(&mut s);
+        drop(s);
+
+        if let Some(ref ops) = unhook_ops {
+            apply_unhook(c, ops);
+        }
+
+        // Camera shake + flash
+        if let Some(cam) = c.camera_mut() {
+            cam.shake(55.0, 0.5);
+            cam.flash_with(Color(C_ROCKET_PAD_GLOW.0, C_ROCKET_PAD_GLOW.1, C_ROCKET_PAD_GLOW.2, 160),
+                0.5, FlashMode::Pulse, FlashEase::Sharp, 0.85, 0.0);
+        }
+
+        // Glowing highlight on the pad
+        if let Some(obj) = c.get_game_object_mut(pad_name) {
+            obj.set_glow(GlowConfig {
+                color: Color(C_ROCKET_PAD.0, C_ROCKET_PAD.1, C_ROCKET_PAD.2, 240),
+                width: 18.0,
             });
         }
     }

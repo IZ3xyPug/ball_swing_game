@@ -148,4 +148,52 @@ pub struct State {
     pub hud_last_flip_timer:    u32,
     pub hud_last_zero_g_timer:  u32,
     pub hud_last_score:         u32,
+
+    // ── Space zone ──────────────────────────────────────────────────────
+    /// True while player is in the space zone.
+    pub in_space_mode:           bool,
+    /// Set ONLY by rocket pad collision. Guards the space entry threshold so
+    /// no amount of swinging or zero-g can accidentally cross into space.
+    pub space_launch_active:     bool,
+    /// True once momentum has been zeroed at the settle depth; prevents re-trigger.
+    pub space_settle_done:       bool,
+    /// Ticks since entering space (used for welcome text).
+    pub space_welcome_ticks:     u32,
+    /// Oxygen remaining in ticks.
+    pub space_oxygen:            u32,
+    /// Ticks before forced return after oxygen hits 0 (grace countdown).
+    pub space_return_delay:      u32,
+    /// Current manually-managed camera Y when in space (world coords).
+    pub space_cam_y:             f32,
+    /// Background scale frozen at space entry (for parallax starfield effect).
+    pub space_entry_bg_scale:    f32,
+
+    // Rocket pads (rare in normal game)
+    pub rocket_pad_live:         Vec<String>,
+    pub rocket_pad_free:         Vec<String>,
+    pub rocket_pad_rightmost:    f32,
+
+    // Space objects (live only while in_space_mode)
+    pub space_planet_live:       Vec<String>,
+    pub space_planet_free:       Vec<String>,
+    pub space_planet_rightmost:  f32,
+    /// Per-planet gravity config: (id, gravity_radius, strength)
+    pub space_planet_data:       Vec<(String, f32, f32)>,
+
+    pub space_hook_live:         Vec<String>,
+    pub space_hook_free:         Vec<String>,
+    pub space_hook_rightmost:    f32,
+
+    pub space_coin_live:         Vec<String>,
+    pub space_coin_free:         Vec<String>,
+    pub space_coin_rightmost:    f32,
+
+    pub space_blackhole_live:    Vec<String>,
+    pub space_blackhole_free:    Vec<String>,
+    pub space_blackhole_rightmost: f32,
+    /// Per-black-hole gravity config: (id, gravity_radius, strength)
+    pub space_blackhole_data:    Vec<(String, f32, f32)>,
+
+    // HUD dirty for oxygen
+    pub hud_last_oxygen:         u32,
 }

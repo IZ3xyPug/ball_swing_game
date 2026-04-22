@@ -119,6 +119,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template: _,
+        rocket_pad_free,
+        space_planet_free,
+        space_hook_free,
+        space_coin_free,
+        space_bh_free,
     } = pools;
 
     // Starter hook positions (must match bootstrap.rs).
@@ -239,6 +244,28 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     if *key == Key::Character("4".into()) {
                         // Reduced space background zoom amount.
                         c.set_var("space_zoom_mode", 4);
+                        return;
+                    }
+
+                    // Key '5': spawn a rocket pad just ahead of the player for testing.
+                    if *key == Key::Character("5".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let mut s = state_arc.lock().unwrap();
+                            if let Some(id) = s.rocket_pad_free.pop() {
+                                let spawn_x = s.px + VW * 0.28;
+                                let spawn_y = s.py + PLAYER_R * 2.0 + 10.0;
+                                s.rocket_pad_live.push(id.clone());
+                                drop(s);
+                                if let Some(obj) = c.get_game_object_mut(&id) {
+                                    obj.position = (spawn_x - ROCKET_PAD_W * 0.5, spawn_y);
+                                    obj.visible = true;
+                                }
+                            }
+                        }
                         return;
                     }
 
@@ -600,6 +627,40 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 hud_last_flip_timer:   u32::MAX,
                 hud_last_zero_g_timer: u32::MAX,
                 hud_last_score:        u32::MAX,
+
+                // Space zone
+                in_space_mode:            false,
+                space_launch_active:      false,
+                space_settle_done:        false,
+                space_welcome_ticks:      0,
+                space_oxygen:             SPACE_OXYGEN_TICKS,
+                space_return_delay:       0,
+                space_cam_y:              0.0,
+                space_entry_bg_scale:     1.0,
+
+                rocket_pad_live:          Vec::new(),
+                rocket_pad_free:          rocket_pad_free.clone(),
+                rocket_pad_rightmost:     SPAWN_X,
+
+                space_planet_live:        Vec::new(),
+                space_planet_free:        space_planet_free.clone(),
+                space_planet_rightmost:   SPAWN_X,
+                space_planet_data:        Vec::new(),
+
+                space_hook_live:          Vec::new(),
+                space_hook_free:          space_hook_free.clone(),
+                space_hook_rightmost:     SPAWN_X,
+
+                space_coin_live:          Vec::new(),
+                space_coin_free:          space_coin_free.clone(),
+                space_coin_rightmost:     SPAWN_X,
+
+                space_blackhole_live:     Vec::new(),
+                space_blackhole_free:     space_bh_free.clone(),
+                space_blackhole_rightmost: SPAWN_X,
+                space_blackhole_data:     Vec::new(),
+
+                hud_last_oxygen:          u32::MAX,
             };
 
             // Reuse persistent Arc across respawns.
@@ -1153,6 +1214,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Turrets ──────────────────────────────────────────
                     turrets::tick_turrets(c, &st);
+
+                    // ── Space zone ────────────────────────────────────────
+                    super::space_zone::tick_space_zone(c, &st, frame_counter);
 
                     // ── Distance tracking ────────────────────────────────
                     {

@@ -39,6 +39,7 @@ pub fn tick_spawning(
     if matches!(c.get_var("spawn_turrets_on"), Some(Value::Bool(true)) | None) {
         spawn_turrets(c, st);
     }
+    spawn_rocket_pads(c, st);
 }
 
 fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -642,3 +643,40 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s = st.lock().unwrap();
     }
 }
+
+// ── Rocket pads ───────────────────────────────────────────────────────────────
+// Very rare: only spawn one if the RNG roll passes ROCKET_PAD_SPAWN_CHANCE,
+// so they feel special. Rocket pads do NOT spawn while inside space mode.
+
+fn spawn_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if s.in_space_mode { return; }
+
+    let mut spawned = 0usize;
+    while spawned < 1
+        && s.rocket_pad_rightmost < s.px + GEN_AHEAD
+        && !s.rocket_pad_free.is_empty()
+    {
+        let gap = lcg_range(&mut s.seed, ROCKET_PAD_GAP_MIN, ROCKET_PAD_GAP_MAX);
+        let x = s.rocket_pad_rightmost + gap;
+        let raw_y = lcg_range(&mut s.seed, VH * 0.42, VH - ROCKET_PAD_H - 60.0);
+        let y = if s.gravity_dir < 0.0 { VH - raw_y - ROCKET_PAD_H } else { raw_y };
+        // Advance the rightmost regardless of spawn so the window keeps moving
+        s.rocket_pad_rightmost = x;
+
+        if lcg(&mut s.seed) < ROCKET_PAD_SPAWN_CHANCE {
+            let Some(id) = s.rocket_pad_free.pop() else { break; };
+            s.rocket_pad_live.push(id.clone());
+            spawned += 1;
+            drop(s);
+
+            if let Some(obj) = c.get_game_object_mut(&id) {
+                obj.position = (x, y);
+                obj.visible = true;
+            }
+
+            s = st.lock().unwrap();
+        }
+    }
+}
+

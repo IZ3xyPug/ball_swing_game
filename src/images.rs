@@ -665,3 +665,292 @@ fn draw_block_char(img: &mut image::RgbaImage, x: u32, y: u32, s: u32, ch: u8, c
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Space zone images
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Rocket pad image: teal/cyan panel with three upward-pointing arrow chevrons.
+/// The image is (w × h) pixels, tinted by (r, g, b).
+pub fn rocket_pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+    let mut img = image::RgbaImage::new(w, h);
+    // Background fill — semi-transparent dark panel
+    draw_rect(&mut img, 0, 0, w, h, [12, 12, 18, 240]);
+    // Top and bottom glow edge
+    draw_rect(&mut img, 0, 0, w, 5, [r, g, b, 240]);
+    draw_rect(&mut img, 0, h.saturating_sub(5), w, 5, [r, g, b, 180]);
+    draw_rect(&mut img, 0, 0, 4, h, [r, g, b, 120]);
+    draw_rect(&mut img, w.saturating_sub(4), 0, 4, h, [r, g, b, 120]);
+
+    // Bright center stripe
+    let mid_h = h / 2;
+    draw_rect(&mut img, 0, mid_h.saturating_sub(3), w, 6, [r, g, b, 60]);
+
+    // Three chevron arrows pointing upward
+    let arrow_count = 3u32;
+    let arrow_w = w / (arrow_count * 2 + 1);
+    let arrow_h = (h as f32 * 0.55) as u32;
+    let gap = arrow_w;
+    let total_arrow_w = arrow_count * arrow_w + (arrow_count - 1) * gap;
+    let start_x = (w - total_arrow_w) / 2;
+
+    for i in 0..arrow_count {
+        let ax = start_x + i * (arrow_w + gap);
+        let ay = (h - arrow_h) / 2;
+        // Chevron: draw from bottom-left to tip, then tip to bottom-right
+        let mid_x = ax + arrow_w / 2;
+        let tip_y = ay;
+        let base_y = ay + arrow_h;
+        // Left side of chevron
+        for t in 0..arrow_h {
+            let tx = ax + (t * (arrow_w / 2)) / arrow_h.max(1);
+            let ty = base_y - t;
+            if tx < w && ty < h {
+                let bright = (r as f32 * 1.4).min(255.0) as u8;
+                let bg_val = (g as f32 * 1.4).min(255.0) as u8;
+                let bb_val = (b as f32 * 1.4).min(255.0) as u8;
+                draw_rect(&mut img, tx, ty, 4, 4, [bright, bg_val, bb_val, 240]);
+            }
+        }
+        // Right side of chevron
+        for t in 0..arrow_h {
+            let tx = mid_x + (t * (arrow_w / 2)) / arrow_h.max(1);
+            let ty = tip_y + t;
+            if tx < w && ty < h {
+                let bright = (r as f32 * 1.4).min(255.0) as u8;
+                let bg_val = (g as f32 * 1.4).min(255.0) as u8;
+                let bb_val = (b as f32 * 1.4).min(255.0) as u8;
+                draw_rect(&mut img, tx, ty, 4, 4, [bright, bg_val, bb_val, 240]);
+            }
+        }
+        let _ = (mid_x, tip_y);
+    }
+
+    img
+}
+
+/// Cached rocket pad image. Returns `Arc<RgbaImage>` keyed by (w, h, r, g, b).
+pub fn rocket_pad_image_cached() -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        Arc::new(rocket_pad_img(
+            ROCKET_PAD_W as u32,
+            ROCKET_PAD_H as u32,
+            C_ROCKET_PAD.0,
+            C_ROCKET_PAD.1,
+            C_ROCKET_PAD.2,
+        ))
+    }).clone()
+}
+
+/// Planet image: a filled body circle (radius `visual_r`) centered inside a
+/// larger image of radius `gravity_r`, with a faint ring at the gravity boundary.
+/// The image dimensions are `(gravity_r * 2) × (gravity_r * 2)`.
+pub fn planet_img(visual_r: f32, gravity_r: f32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+    let d = (gravity_r * 2.0).ceil().max(2.0) as u32;
+    let mut img = image::RgbaImage::new(d, d);
+    let ctr = gravity_r;
+
+    // Gravity field ring: very subtle, just a thin semi-transparent outline
+    let ring_thickness = 3.0f32;
+    let ring_r = gravity_r - ring_thickness * 0.5;
+
+    // Planet body with radial gradient (brighter core, darker limb)
+    let vis_r_sq = visual_r * visual_r;
+    let grav_r_sq = gravity_r * gravity_r;
+    let _ = grav_r_sq;
+
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 + 0.5 - ctr;
+            let dy = py as f32 + 0.5 - ctr;
+            let dist_sq = dx * dx + dy * dy;
+            let dist = dist_sq.sqrt();
+
+            if dist_sq <= vis_r_sq {
+                // Inside planet body — radial gradient (bright center → dark edge)
+                let t = (dist / visual_r).clamp(0.0, 1.0);
+                // Quadratic falloff: bright at center, atmospheric haze at limb
+                let luma = 1.0 - t * t * 0.62;
+                // Subtle color variation: cooler top, warmer bottom
+                let latitude = 1.0 - (dy / visual_r + 1.0) * 0.5; // 0 = south, 1 = north
+                let band_shift = (latitude * std::f32::consts::PI * 3.0).sin() * 0.08;
+                let pr = ((r as f32 * (luma + band_shift)).clamp(0.0, 255.0)) as u8;
+                let pg = ((g as f32 * luma).clamp(0.0, 255.0)) as u8;
+                let pb = ((b as f32 * (luma - band_shift * 0.5)).clamp(0.0, 255.0)) as u8;
+                // Atmosphere edge: thin bright fringe just inside limb
+                let atmos = if t > 0.88 { ((t - 0.88) / 0.12 * 60.0) as u8 } else { 0 };
+                let fr = pr.saturating_add(atmos / 3);
+                let fg = pg.saturating_add(atmos / 2);
+                let fb = pb.saturating_add(atmos);
+                img.put_pixel(px, py, image::Rgba([fr, fg, fb, 255]));
+            } else if (dist - ring_r).abs() < ring_thickness {
+                // Gravity field ring: very faint outline
+                let t = 1.0 - (dist - ring_r).abs() / ring_thickness;
+                let alpha = (t * 38.0) as u8;
+                img.put_pixel(px, py, image::Rgba([r, g, b, alpha]));
+            }
+        }
+    }
+    img
+}
+
+/// Cached planet image. Returns `Arc<RgbaImage>` keyed by (visual_r_bits, gravity_r_bits, r, g, b).
+pub fn planet_img_cached(visual_r: f32, gravity_r: f32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<(u32, u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (visual_r.to_bits(), gravity_r.to_bits(), r, g, b);
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img: Arc<image::RgbaImage> = planet_img(visual_r, gravity_r, r, g, b).into();
+    guard.insert(key, img.clone());
+    img
+}
+
+/// Black hole image: deeply dark concentric fade-rings.
+/// `radius` = total image half-size. Gravity extent = full radius.
+pub fn black_hole_img(radius: f32) -> image::RgbaImage {
+    let d = (radius * 2.0).ceil().max(2.0) as u32;
+    let mut img = image::RgbaImage::new(d, d);
+    let ctr = radius;
+    let event_horizon_r = radius * 0.22;
+    let inner_halo_r    = radius * 0.44;
+
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 + 0.5 - ctr;
+            let dy = py as f32 + 0.5 - ctr;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > radius { continue; }
+
+            let t = dist / radius; // 0=center, 1=edge
+
+            // Deep event horizon: near-black with barely-visible dark purple tinge
+            let alpha = if dist <= event_horizon_r {
+                // Solid dark core
+                let t_core = dist / event_horizon_r;
+                // Slight visibility so it's not invisible on space bg
+                (20.0 + t_core * 18.0) as u8
+            } else if dist <= inner_halo_r {
+                // Dim accretion fringe
+                let t_halo = (dist - event_horizon_r) / (inner_halo_r - event_horizon_r);
+                (38.0 - t_halo * 22.0) as u8
+            } else {
+                // Outer subtle gradient ring
+                let t_outer = (dist - inner_halo_r) / (radius - inner_halo_r);
+                (16.0 * (1.0 - t_outer * t_outer)) as u8
+            };
+
+            let pr = (C_BLACKHOLE.0 as f32 * (1.0 - t * 0.5)) as u8;
+            let pg = (C_BLACKHOLE.1 as f32) as u8;
+            let pb = ((C_BLACKHOLE.2 as f32) + t * 20.0).min(60.0) as u8;
+            img.put_pixel(px, py, image::Rgba([pr, pg, pb, alpha]));
+        }
+    }
+    img
+}
+
+/// Cached black hole image keyed by radius bits.
+pub fn black_hole_img_cached(radius: f32) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<u32, Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = radius.to_bits();
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&key) {
+        return cached.clone();
+    }
+    let img: Arc<image::RgbaImage> = black_hole_img(radius).into();
+    guard.insert(key, img.clone());
+    img
+}
+
+/// Space coin image: bright golden star shape for high-value space collectibles.
+pub fn space_coin_img(radius: u32) -> image::RgbaImage {
+    let d = radius * 2;
+    let mut img = image::RgbaImage::new(d, d);
+    let ctr = radius as f32;
+    let r = radius as f32;
+    let inner_r = r * 0.42;
+    let outer_r = r * 0.90;
+    let points = 6u32;
+
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 + 0.5 - ctr;
+            let dy = py as f32 + 0.5 - ctr;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > r { continue; }
+
+            // Star mask: interpolate between inner and outer radius by angle
+            let angle = dy.atan2(dx);
+            let sector = (angle / (std::f32::consts::TAU / points as f32)) * 2.0;
+            let frac = sector - sector.floor();
+            let star_r = inner_r + (outer_r - inner_r) * (1.0 - (frac - 0.5).abs() * 2.0);
+
+            if dist <= star_r {
+                let t = dist / star_r;
+                // Gold gradient: bright center → warm edge
+                let luma = 1.0 - t * 0.45;
+                let gold_r = (C_SPACE_COIN.0 as f32 * luma).min(255.0) as u8;
+                let gold_g = (C_SPACE_COIN.1 as f32 * luma).min(255.0) as u8;
+                let gold_b = (C_SPACE_COIN.2 as f32 * luma * 0.4).min(255.0) as u8;
+                img.put_pixel(px, py, image::Rgba([gold_r, gold_g, gold_b, 255]));
+            }
+        }
+    }
+    img
+}
+
+/// Cached space coin image keyed by radius.
+pub fn space_coin_img_cached(radius: u32) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<u32, Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&radius) {
+        return cached.clone();
+    }
+    let img: Arc<image::RgbaImage> = space_coin_img(radius).into();
+    guard.insert(radius, img.clone());
+    img
+}
+
+/// Oxygen bar image. `fill` is 0.0 (empty) to 1.0 (full).
+/// Color blends green → yellow → red as fill decreases.
+pub fn oxygen_bar_img(fill: f32, w: u32, h: u32) -> image::RgbaImage {
+    let fill = fill.clamp(0.0, 1.0);
+    let mut img = image::RgbaImage::new(w, h);
+    draw_rect(&mut img, 0, 0, w, h, [15, 18, 28, 210]);
+    draw_rect(&mut img, 0, 0, w, 2, [180, 180, 200, 255]);
+    draw_rect(&mut img, 0, h.saturating_sub(2), w, 2, [180, 180, 200, 255]);
+    draw_rect(&mut img, 0, 0, 2, h, [180, 180, 200, 255]);
+    draw_rect(&mut img, w.saturating_sub(2), 0, 2, h, [180, 180, 200, 255]);
+
+    let bar_color = if fill > 0.50 {
+        let t = (fill - 0.50) * 2.0; // 0..1 (1 = full green)
+        let r = (C_OXY_FULL.0 as f32 * t + C_OXY_MID.0 as f32 * (1.0 - t)) as u8;
+        let g = (C_OXY_FULL.1 as f32 * t + C_OXY_MID.1 as f32 * (1.0 - t)) as u8;
+        let b = (C_OXY_FULL.2 as f32 * t + C_OXY_MID.2 as f32 * (1.0 - t)) as u8;
+        [r, g, b, 255]
+    } else {
+        let t = fill * 2.0; // 0..1 (1 = yellow)
+        let r = (C_OXY_MID.0 as f32 * t + C_OXY_LOW.0 as f32 * (1.0 - t)) as u8;
+        let g = (C_OXY_MID.1 as f32 * t + C_OXY_LOW.1 as f32 * (1.0 - t)) as u8;
+        let b = (C_OXY_MID.2 as f32 * t + C_OXY_LOW.2 as f32 * (1.0 - t)) as u8;
+        [r, g, b, 255]
+    };
+
+    let inner_w = w.saturating_sub(4);
+    let inner_h = h.saturating_sub(4);
+    let filled_w = ((inner_w as f32 * fill) as u32).min(inner_w);
+    draw_rect(&mut img, 2, 2, filled_w, inner_h, bar_color);
+
+    // "O2" label on the left
+    let scale = (h / 6).max(2);
+    let label_x = 8u32;
+    let label_y = h / 2 - scale * 2;
+    draw_block_char(&mut img, label_x, label_y, scale, b'O', [220, 220, 240, 220]);
+
+    img
+}

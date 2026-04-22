@@ -230,3 +230,122 @@ pub const C_TURRET_BULLET:      (u8,u8,u8) = (220, 40, 40);
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 350;
+
+// ── Rocket pad (rare special pad that launches player into space) ─────────────
+pub const ROCKET_PAD_GAP_MIN:      f32   = 12000.0; // very wide gap → rare
+pub const ROCKET_PAD_GAP_MAX:      f32   = 28000.0;
+pub const ROCKET_PAD_POOL_SIZE:    usize = 8;
+/// Probability that a normal pad spawn slot produces a rocket pad instead.
+pub const ROCKET_PAD_SPAWN_CHANCE: f32   = 0.028;
+pub const ROCKET_PAD_W:            f32   = 600.0;
+pub const ROCKET_PAD_H:            f32   = 125.0;
+/// Velocity applied to the player on rocket pad contact.
+/// Must be large enough to clear the normal game zone entirely and reach
+/// SPACE_ENTRY_Y. No natural swing + zero-g can match this force.
+pub const ROCKET_PAD_LAUNCH_VY:    f32   = -130.0;
+pub const ROCKET_PAD_LAUNCH_VX:    f32   = 22.0;
+pub const C_ROCKET_PAD:            (u8,u8,u8) = (60, 220, 255);
+pub const C_ROCKET_PAD_GLOW:       (u8,u8,u8) = (120, 240, 255);
+
+// ── Space zone ────────────────────────────────────────────────────────────────
+/// Player py must drop below this (negative y) to enter space mode.
+pub const SPACE_ENTRY_Y:           f32 = -(VH * 0.35);
+/// Depth at which the entry catch planet is centered and momentum is zeroed.
+/// Must be below (more negative than) SPACE_ENTRY_Y by enough that the player
+/// reaches it while still moving upward. Planet radius + gravity_influence_mult
+/// together ensure gravity pulls from here all the way back to SPACE_ENTRY_Y.
+pub const SPACE_SETTLE_Y:          f32 = -(VH * 1.1);  // ~-2376 at VH=2160
+/// Player py rising back above this (less negative) while in space triggers return.
+pub const SPACE_RETURN_Y:          f32 = -(VH * 0.05);
+/// Global gravity scale while in space — effectively zero. Planet and
+/// black hole gravity wells supply all meaningful attraction in space.
+pub const SPACE_GRAVITY_SCALE:     f32 = 0.002;
+/// Oxygen timer in ticks (70 seconds at 60 fps).
+pub const SPACE_OXYGEN_TICKS:      u32 = 4200;
+/// Return boost applied when oxygen hits zero (strong downward push).
+pub const SPACE_RETURN_FORCE_VY:   f32 = 55.0;
+/// Welcome text display duration in ticks.
+pub const SPACE_WELCOME_TICKS:     u32 = 200;
+/// Ticks after oxygen depletion before forced return (grace period for "hold on").
+pub const SPACE_RETURN_DELAY_TICKS: u32 = 90;
+
+// Space object pool sizes
+pub const SPACE_PLANET_POOL_SIZE:    usize = 12;
+pub const SPACE_HOOK_POOL_SIZE:      usize = 64;
+pub const SPACE_COIN_POOL_SIZE:      usize = 40;
+pub const SPACE_BLACKHOLE_POOL_SIZE: usize = 8;
+
+// Space object spawn budgets per tick
+pub const SPACE_PLANET_SPAWN_BUDGET:    usize = 1;
+pub const SPACE_HOOK_SPAWN_BUDGET:      usize = 3;  // one per Y-band per spawn tick
+pub const SPACE_COIN_SPAWN_BUDGET:      usize = 2;
+pub const SPACE_BLACKHOLE_SPAWN_BUDGET: usize = 1;
+
+// Space planet parameters
+pub const SPACE_PLANET_GAP_MIN:         f32 = 2400.0;
+pub const SPACE_PLANET_GAP_MAX:         f32 = 5200.0;
+pub const SPACE_PLANET_Y_MIN:           f32 = -(VH * 4.0);
+pub const SPACE_PLANET_Y_MAX:           f32 = -(VH * 0.55);
+pub const SPACE_PLANET_RADIUS_SM_MIN:   f32 = 120.0;
+pub const SPACE_PLANET_RADIUS_SM_MAX:   f32 = 220.0;
+pub const SPACE_PLANET_RADIUS_LG_MIN:   f32 = 280.0;
+pub const SPACE_PLANET_RADIUS_LG_MAX:   f32 = 460.0;
+/// Gravity field extends this many times the visual radius.
+pub const SPACE_PLANET_GRAV_R_MULT:     f32 = 1.3;
+pub const SPACE_PLANET_GRAV_STRENGTH:   f32 = 0.5;
+
+// Space hook parameters
+pub const SPACE_HOOK_GAP_MIN:  f32 = 420.0;   // denser coverage
+pub const SPACE_HOOK_GAP_MAX:  f32 = 920.0;
+// Three vertical bands — shallow (entry), mid, and deep space.
+// Each hook spawn tick picks one band randomly, ensuring recovery
+// points are available even if the player flies deep into space.
+pub const SPACE_HOOK_Y_SHALLOW_MIN: f32 = -(VH * 3.2);
+pub const SPACE_HOOK_Y_SHALLOW_MAX: f32 = -(VH * 0.42);
+pub const SPACE_HOOK_Y_MID_MIN:     f32 = -(VH * 5.5);
+pub const SPACE_HOOK_Y_MID_MAX:     f32 = -(VH * 3.0);
+pub const SPACE_HOOK_Y_DEEP_MIN:    f32 = -(VH * 9.0);
+pub const SPACE_HOOK_Y_DEEP_MAX:    f32 = -(VH * 5.0);
+// Keep old names as aliases so nothing else breaks
+pub const SPACE_HOOK_Y_MIN: f32 = SPACE_HOOK_Y_SHALLOW_MIN;
+pub const SPACE_HOOK_Y_MAX: f32 = SPACE_HOOK_Y_SHALLOW_MAX;
+
+// Space coin parameters
+pub const SPACE_COIN_GAP_MIN:  f32 = 580.0;
+pub const SPACE_COIN_GAP_MAX:  f32 = 1200.0;
+pub const SPACE_COIN_SCORE:    u32 = 1000;
+pub const SPACE_COIN_R:        f32 = 56.0;
+
+// Black hole parameters
+pub const SPACE_BLACKHOLE_GAP_MIN:       f32 = 5000.0;
+pub const SPACE_BLACKHOLE_GAP_MAX:       f32 = 9000.0;
+pub const SPACE_BLACKHOLE_RADIUS_MIN:    f32 = 100.0;
+pub const SPACE_BLACKHOLE_RADIUS_MAX:    f32 = 200.0;
+pub const SPACE_BLACKHOLE_GRAV_STRENGTH: f32 = 0.7;
+pub const SPACE_BLACKHOLE_Y_MIN:         f32 = -(VH * 2.8);
+pub const SPACE_BLACKHOLE_Y_MAX:         f32 = -(VH * 0.55);
+
+// Camera behavior during space transition
+pub const SPACE_CAM_LERP_IN:    f32 = 0.048;  // slower lerp (dramatic ascent)
+pub const SPACE_CAM_ZOOM_IN:    f32 = 1.05;   // slight zoom toward player in space
+pub const SPACE_CAM_Y_LEAD:     f32 = VH * 0.12; // lead camera above player
+
+// Space color palette
+pub const C_SPACE_PLANET: [(u8,u8,u8); 5] = [
+    (215, 115, 55),  // Rust/Mars
+    (75, 155, 235),  // Ice-blue
+    (175, 75, 215),  // Purple gas giant
+    (95, 215, 155),  // Green-teal
+    (235, 210, 90),  // Sandy/yellow
+];
+pub const C_SPACE_COIN:  (u8,u8,u8) = (255, 230, 100);
+pub const C_SPACE_HOOK:  (u8,u8,u8) = (155, 115, 255);
+pub const C_SPACE_HOOK_ON: (u8,u8,u8) = (210, 185, 255);
+pub const C_BLACKHOLE:   (u8,u8,u8) = (18,  8,   26);
+
+// Oxygen HUD bar
+pub const OXYGEN_BAR_W:  f32 = 700.0;
+pub const OXYGEN_BAR_H:  f32 = 42.0;
+pub const C_OXY_FULL:    (u8,u8,u8) = (80,  220, 160);
+pub const C_OXY_MID:     (u8,u8,u8) = (240, 200, 55);
+pub const C_OXY_LOW:     (u8,u8,u8) = (220, 55,  55);
