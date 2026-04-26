@@ -32,13 +32,24 @@ pub struct PoolSets {
 }
 pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Background images ────────────────────────────────────────────────
-    let bg_zone_start = gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT);
+    let bg_texture_w = VW as u32;
+    let bg_texture_h = VH as u32;
+    let bg_zone_start = image::open(ASSET_AURORA_EARTH_GIF)
+        .map(|img| {
+            image::imageops::resize(
+                &img.to_rgba8(),
+                bg_texture_w,
+                bg_texture_h,
+                image::imageops::FilterType::CatmullRom,
+            )
+        })
+        .unwrap_or_else(|_| gradient_rect(bg_texture_w, bg_texture_h, C_SKY_TOP, C_SKY_BOT));
 
     let mut bg = GameObject::new_rect(
         ctx, "bg".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: bg_zone_start.into(),
+            image: bg_zone_start.clone().into(),
             color: None,
         }),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
@@ -49,7 +60,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         ctx, "bg_space".into(),
         Some(Image {
             shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: gradient_rect(4, VH as u32, C_SKY_TOP, C_SKY_BOT).into(),
+            image: bg_zone_start.clone().into(),
             color: None,
         }),
         (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
@@ -308,11 +319,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Starter hooks ────────────────────────────────────────────────────
     let starter_hooks: &[(f32, f32)] = &[
-        (START_HOOK_X,       START_HOOK_Y),
-        (SPAWN_X + 1060.0,   VH * 0.30),
-        (SPAWN_X + 1860.0,  VH * 0.46),
-        (SPAWN_X + 2760.0,  VH * 0.34),
-        (SPAWN_X + 3720.0,  VH * 0.52),
+        (START_HOOK_X,                              START_HOOK_Y),
+        (START_HOOK_X + HOOK_FIXED_X_GAP,           VH * 0.30),
+        (START_HOOK_X + HOOK_FIXED_X_GAP * 2.0,    VH * 0.46),
+        (START_HOOK_X + HOOK_FIXED_X_GAP * 3.0,    VH * 0.34),
+        (START_HOOK_X + HOOK_FIXED_X_GAP * 4.0,    VH * 0.52),
     ];
 
     let mut scene = Scene::new("game")

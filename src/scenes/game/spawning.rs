@@ -13,6 +13,12 @@ pub fn tick_spawning(
     coin_spawn_image: &Image,
     coin_spawn_anim: &Option<AnimatedSprite>,
 ) {
+    // Evict Poisson-disk points that have scrolled far behind the player.
+    {
+        let mut s = st.lock().unwrap();
+        let evict_x = s.px - 15_000.0;
+        s.world_sampler.evict_before(evict_x);
+    }
     spawn_hooks(c, st);
     if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
         spawn_pads(c, st);
@@ -89,23 +95,23 @@ fn hook_overlaps_hazards(c: &Canvas, s: &State, hx: f32, hy: f32) -> bool {
 fn find_safe_hook_position(c: &Canvas, s: &State, base_x: f32, base_y: f32) -> Option<(f32, f32)> {
     let candidates: &[(f32, f32)] = &[
         (0.0, 0.0),
+        (0.0, -100.0),
+        (0.0, 100.0),
         (0.0, -220.0),
         (0.0, 220.0),
-        (260.0, 0.0),
-        (-260.0, 0.0),
-        (260.0, -220.0),
-        (260.0, 220.0),
-        (-260.0, -220.0),
-        (-260.0, 220.0),
-        (520.0, 0.0),
-        (-520.0, 0.0),
+        (0.0, -300.0),
+        (0.0, 300.0),
         (0.0, -420.0),
         (0.0, 420.0),
+        (0.0, -500.0),
+        (0.0, 500.0),
+        (0.0, -620.0),
+        (0.0, 620.0),
     ];
 
     for (dx, dy) in candidates {
         let hx = base_x + dx;
-        let hy = (base_y + dy).clamp(HOOK_R + 8.0, VH - HOOK_R - 8.0);
+        let hy = (base_y + dy).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
         if !hook_overlaps_hazards(c, s, hx, hy) {
             return Some((hx, hy));
         }
@@ -129,29 +135,61 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let mut hx = spec.x;
         let mut hy = spec.y;
 
-        // Push away from nearby spinners.
-        let hook_spinner_min_x_gap = HOOK_SPINNER_MIN_X_GAP;
-        for spinner_name in &s.spinner_live {
-            if let Some(spinner_obj) = c.get_game_object(spinner_name) {
-                let scx = spinner_obj.position.0 + SPINNER_W * 0.5;
-                let dx = hx - scx;
-                if dx.abs() < hook_spinner_min_x_gap {
-                    let dir = if dx >= 0.0 { 1.0 } else { -1.0 };
-                    hx += dir * HOOK_SPINNER_PUSH_X;
-                }
+        // Collect spinner and pad positions before the relocation loops so we
+        // can draw from s.seed (mut) without holding borrow conflicts.
+        let spinner_positions: Vec<(f32, f32)> = s.spinner_live.iter()
+            .filter_map(|name| c.get_game_object(name)
+                .map(|o| (o.position.0 + SPINNER_W * 0.5,
+                          o.position.1 + SPINNER_H * 0.5)))  // (cx, center_y)
+            .collect();
+
+        let pad_positions: Vec<(f32, f32)> = s.pad_live.iter()
+            .filter_map(|name| c.get_game_object(name)
+                .map(|o| (o.position.0 + PAD_W * 0.5,   // pad centre x
+                          o.position.1)))               // pad top y
+            .collect();
+
+        // If a grab node falls within 2x the spinner proximity radius,
+        // push it above the spinner centre. This applies from any direction
+        // (left/right/above/below) because the check is Euclidean.
+        for (scx, scenter_y) in &spinner_positions {
+            let dx = hx - scx;
+            let dy = hy - scenter_y;
+            let prox_r = HOOK_SPINNER_PROX_R * 2.0;
+            if dx * dx + dy * dy < prox_r * prox_r {
+                hy = (scenter_y - HOOK_SPINNER_Y_OFFSET).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
             }
         }
 
-        let Some((safe_hx, safe_hy)) = find_safe_hook_position(c, &s, hx, hy) else {
-            s.pool_free.push(id);
-            continue;
-        };
-        hx = safe_hx;
-        hy = safe_hy;
+        // If a grab node is too close to a bounce pad, push it HOOK_PAD_CLEAR_Y (800 px)
+        // above the pad's top edge.
+        for (pad_cx, pad_top) in &pad_positions {
+            if (hx - pad_cx).abs() < PAD_W && hy > pad_top - HOOK_PAD_CLEAR_Y {
+                hy = (pad_top - HOOK_PAD_CLEAR_Y).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+            }
+        }
 
+        if let Some((safe_hx, safe_hy)) = find_safe_hook_position(c, &s, hx, hy) {
+            hx = safe_hx;
+            hy = safe_hy;
+        }
+
+        // Hard rule: no gap between grab nodes. Instead of discarding a hook
+        // that lands too close in Y to the previous, push its Y far enough away.
+        if (hy - s.last_hook_y).abs() < HOOK_CLOSE_Y_THRESHOLD {
+            let above = s.last_hook_y - HOOK_CLOSE_Y_THRESHOLD;
+            let below = s.last_hook_y + HOOK_CLOSE_Y_THRESHOLD;
+            hy = if above >= HOOK_Y_MIN { above } else { below.min(HOOK_Y_MAX) };
+        }
+        hy = hy.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+
+        s.last_hook_y = hy;
         s.live_hooks.push(id.clone());
         if hx > s.rightmost_x { s.rightmost_x = hx; }
         hooks_spawned += 1;
+        // Register hook centre in the Poisson sampler so future pads/spinners
+        // naturally avoid this Y position.
+        s.world_sampler.add(hx, hy);
 
         let zone_idx = zone_index_for_distance(s.distance);
         drop(s);
@@ -174,13 +212,15 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         // Generate more hooks when pending queue runs low.
         if s.pending.len() < 3 {
-            let from_x = s.rightmost_x + 620.0;
-            let difficulty = (s.distance / 10000.0).min(3.0);
+            let from_x = s.rightmost_x;
+            let distance = s.distance;
             let mut seed = s.seed;
-            let mut gen_y = s.gen_y;
-            let batch = gen_hook_batch(&mut seed, from_x, &mut gen_y, difficulty);
+            let mut gen_head_x = s.gen_head_x;
+            let mut gen_head_y = s.gen_head_y;
+            let batch = gen_hook_batch(&mut seed, from_x, &mut gen_head_x, &mut gen_head_y, distance);
             s.seed = seed;
-            s.gen_y = gen_y;
+            s.gen_head_x = gen_head_x;
+            s.gen_head_y = gen_head_y;
             s.pending.extend(batch);
         }
     }
@@ -197,8 +237,42 @@ fn spawn_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let gap = lcg_range(&mut s.seed, PAD_GAP_MIN, PAD_GAP_MAX);
         let x = s.pad_rightmost + gap;
-        let raw_y = lcg_range(&mut s.seed, VH * 0.38, VH - PAD_H - 40.0);
-        let y = if s.gravity_dir < 0.0 { VH - raw_y - PAD_H } else { raw_y };
+        let raw_y = {
+            let mut seed = s.seed;
+            let y = s.world_sampler.sample_y(&mut seed, x, PAD_Y_MIN, 1850.0, 20);
+            s.seed = seed;
+            y
+        };
+        let mut y = if s.gravity_dir < 0.0 { VH - raw_y - PAD_H } else { raw_y };
+
+        // Pads must be at least PAD_BELOW_HOOK_Y_GAP below any nearby grab node.
+        // The critical check is against s.pending (hooks queued but not yet
+        // placed) because pads are generated far ahead — live_hooks only holds
+        // hooks near the player's current position, which are too far behind to
+        // be spatially relevant here.  We check both just to be safe.
+        let pad_cx = x + PAD_W * 0.5;
+        let mut min_pad_top: Option<f32> = None;
+
+        for hook_name in &s.live_hooks {
+            if let Some(hook_obj) = c.get_game_object(hook_name) {
+                let hook_cx = hook_obj.position.0 + HOOK_R;
+                if (pad_cx - hook_cx).abs() <= PAD_HOOK_NEAR_X {
+                    let hook_cy = hook_obj.position.1 + HOOK_R;
+                    let req = hook_cy + PAD_BELOW_HOOK_Y_GAP;
+                    min_pad_top = Some(min_pad_top.map_or(req, |m: f32| m.max(req)));
+                }
+            }
+        }
+        for spec in &s.pending {
+            if (pad_cx - spec.x).abs() <= PAD_HOOK_NEAR_X {
+                let req = spec.y + PAD_BELOW_HOOK_Y_GAP;
+                min_pad_top = Some(min_pad_top.map_or(req, |m: f32| m.max(req)));
+            }
+        }
+        if let Some(req_top) = min_pad_top {
+            y = y.max(req_top);
+        }
+
         let Some(id) = s.pad_free.pop() else { break; };
         s.pad_live.push(id.clone());
         s.pad_rightmost = x;
@@ -245,7 +319,12 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let gap = lcg_range(&mut s.seed, SPINNER_GAP_MIN, SPINNER_GAP_MAX);
         let x = s.spinner_rightmost + gap;
-        let y = lcg_range(&mut s.seed, VH * 0.12, VH - SPINNER_H - 60.0);
+        let y = {
+            let mut seed = s.seed;
+            let sampled = s.world_sampler.sample_y(&mut seed, x, -50.0, 1300.0, 20);
+            s.seed = seed;
+            sampled
+        };
         let Some(id) = s.spinner_free.pop() else { break; };
         s.spinner_live.push(id.clone());
         s.spinner_rightmost = x;
@@ -301,7 +380,8 @@ fn spawn_coins(
     {
         let gap = lcg_range(&mut s.seed, COIN_GAP_MIN, COIN_GAP_MAX);
         let desired_start_x = s.coin_rightmost + gap;
-        let spawn_array = s.coin_free.len() >= COIN_ARRAY_COUNT && lcg(&mut s.seed) < COIN_ARRAY_CHANCE;
+        let spawn_array = s.coin_free.len() >= COIN_ARRAY_COUNT
+            && lcg(&mut s.seed) < COIN_ARRAY_CHANCE;
         let mut spawn_batch: Vec<(String, f32, f32, usize)> = Vec::new();
         let mut spawned_start_x = desired_start_x;
         let coin_anim_frames = coin_spawn_anim.as_ref().map(|a| a.frame_count().max(1)).unwrap_or(1);
@@ -317,6 +397,9 @@ fn spawn_coins(
                     let hcy = hook_obj.position.1 + HOOK_R;
                     let raw_y = if s.gravity_dir < 0.0 { VH - hcy } else { hcy };
                     let candidate_x = hcx + COIN_ARRAY_HOOK_DX;
+                    if candidate_x < desired_start_x {
+                        continue;
+                    }
                     let score = (candidate_x - desired_start_x).abs();
                     if score < best_score {
                         best_score = score;
@@ -326,7 +409,7 @@ fn spawn_coins(
             }
 
             let center_raw_y = if let Some((hook_cx, raw_y)) = best_anchor {
-                spawned_start_x = hook_cx + COIN_ARRAY_HOOK_DX;
+                spawned_start_x = (hook_cx + COIN_ARRAY_HOOK_DX).max(desired_start_x);
                 raw_y + COIN_ARRAY_HOOK_DY
             } else {
                 let center_min = (COIN_ARRAY_Y_MIN + COIN_CURVE_RISE).min(COIN_ARRAY_Y_MAX);
@@ -348,11 +431,9 @@ fn spawn_coins(
         } else {
             let raw_y = lcg_range(&mut s.seed, COIN_SINGLE_Y_MIN, COIN_SINGLE_Y_MAX);
             let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
-            if let Some(id) = s.coin_free.pop() {
-                s.coin_live.push(id.clone());
-                let single_phase = ((lcg(&mut s.seed) * coin_anim_frames as f32) as usize).min(coin_anim_frames - 1);
-                spawn_batch.push((id, desired_start_x, y, single_phase));
-            }
+            let Some(id) = s.coin_free.pop() else { break; };
+            s.coin_live.push(id.clone());
+            spawn_batch.push((id, desired_start_x, y, array_phase_frame.min(coin_anim_frames - 1)));
         }
 
         if spawn_batch.is_empty() { break; }
@@ -395,8 +476,10 @@ fn spawn_flips(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.flip_free.is_empty()
     {
         let gap = lcg_range(&mut s.seed, FLIP_GAP_MIN, FLIP_GAP_MAX);
-        let x = s.flip_rightmost + gap;
-        let raw_y = lcg_range(&mut s.seed, VH * 0.12, VH * 0.70);
+        let x = (s.flip_rightmost + gap)
+            .max(s.score_x2_rightmost + 3000.0)
+            .max(s.zero_g_rightmost + 3000.0);
+        let raw_y = lcg_range(&mut s.seed, -750.0, 850.0);
         let y = if s.gravity_dir < 0.0 { VH - raw_y - FLIP_H } else { raw_y };
         let Some(id) = s.flip_free.pop() else { break; };
         s.flip_live.push(id.clone());
@@ -423,8 +506,10 @@ fn spawn_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.score_x2_free.is_empty()
     {
         let gap = lcg_range(&mut s.seed, SCORE_X2_GAP_MIN, SCORE_X2_GAP_MAX);
-        let x = s.score_x2_rightmost + gap;
-        let raw_y = lcg_range(&mut s.seed, VH * 0.15, VH * 0.65);
+        let x = (s.score_x2_rightmost + gap)
+            .max(s.flip_rightmost + 3000.0)
+            .max(s.zero_g_rightmost + 3000.0);
+        let raw_y = lcg_range(&mut s.seed, -750.0, 850.0);
         let y = if s.gravity_dir < 0.0 { VH - raw_y - SCORE_X2_H } else { raw_y };
         let Some(id) = s.score_x2_free.pop() else { break; };
         s.score_x2_live.push(id.clone());
@@ -451,8 +536,10 @@ fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.zero_g_free.is_empty()
     {
         let gap = lcg_range(&mut s.seed, ZERO_G_GAP_MIN, ZERO_G_GAP_MAX);
-        let x = s.zero_g_rightmost + gap;
-        let raw_y = lcg_range(&mut s.seed, VH * 0.15, VH * 0.65);
+        let x = (s.zero_g_rightmost + gap)
+            .max(s.flip_rightmost + 3000.0)
+            .max(s.score_x2_rightmost + 3000.0);
+        let raw_y = lcg_range(&mut s.seed, -750.0, 850.0);
         let y = if s.gravity_dir < 0.0 { VH - raw_y - ZERO_G_H } else { raw_y };
         let Some(id) = s.zero_g_free.pop() else { break; };
         s.zero_g_live.push(id.clone());
@@ -566,6 +653,12 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
+    // Gravity wells only appear in zone 2 (the hardest difficulty band).
+    if zone_index_for_distance(s.distance) < 2 {
+        let z2_start_x = SPAWN_X + 2.0 * ZONE_DISTANCE_STEP;
+        if s.gwell_rightmost < z2_start_x { s.gwell_rightmost = z2_start_x; }
+        return;
+    }
     let mut spawned = 0usize;
     while spawned < GWELL_SPAWN_BUDGET
         && s.gwell_rightmost < s.px + GEN_AHEAD
@@ -573,7 +666,12 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let gap = lcg_range(&mut s.seed, GWELL_GAP_MIN, GWELL_GAP_MAX);
         let x = s.gwell_rightmost + gap;
-        let y = lcg_range(&mut s.seed, GWELL_Y_MIN, GWELL_Y_MAX);
+        // Dual Y-band: 0–500 (top) or 1000–1500 (bottom).
+        let y = if lcg(&mut s.seed) < 0.5 {
+            lcg_range(&mut s.seed, 0.0, 500.0)
+        } else {
+            lcg_range(&mut s.seed, 1000.0, 1500.0)
+        };
         let radius = lcg_range(&mut s.seed, GWELL_RADIUS_MIN, GWELL_RADIUS_MAX);
         let strength = lcg_range(&mut s.seed, GWELL_STRENGTH_MIN, GWELL_STRENGTH_MAX);
         let visual_scale = lcg_range(&mut s.seed, GWELL_VISUAL_SCALE_MIN, GWELL_VISUAL_SCALE_MAX);
@@ -618,6 +716,12 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
+    // Turrets only appear in zone 2 (the third difficulty band).
+    if zone_index_for_distance(s.distance) < 2 {
+        let z2_start_x = SPAWN_X + 2.0 * ZONE_DISTANCE_STEP;
+        if s.turret_rightmost < z2_start_x { s.turret_rightmost = z2_start_x; }
+        return;
+    }
     let mut spawned = 0usize;
     while spawned < TURRET_SPAWN_BUDGET
         && s.turret_rightmost < s.px + GEN_AHEAD
@@ -625,7 +729,12 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let gap = lcg_range(&mut s.seed, TURRET_GAP_MIN, TURRET_GAP_MAX);
         let x = s.turret_rightmost + gap;
-        let y = lcg_range(&mut s.seed, TURRET_Y_MIN, TURRET_Y_MAX);
+        // Dual Y-band: 100–250 (top) or 1400–1850 (bottom).
+        let y = if lcg(&mut s.seed) < 0.5 {
+            lcg_range(&mut s.seed, 100.0, 250.0)
+        } else {
+            lcg_range(&mut s.seed, 1400.0, 1850.0)
+        };
         let Some(id) = s.turret_free.pop() else { break; };
         s.turret_live.push(id.clone());
         s.turret_rightmost = x;

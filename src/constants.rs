@@ -8,7 +8,7 @@ pub const GRAVITY:        f32 = 0.9;
 pub const SWING_TENSION:  f32 = 1.08;
 pub const MOMENTUM_CAP:   f32 = 56.0;
 pub const ROPE_LEN_MIN:   f32 = 200.0;
-pub const ROPE_LEN_MAX:   f32 = 600.0;
+pub const ROPE_LEN_MAX:   f32 = 720.0;
 pub const SWING_DRAG:     f32 = 0.999;
 pub const GRAB_SURGE:     f32 = 4.2;
 pub const GRAB_TANGENT_SURGE_SCALE: f32 = 0.12;
@@ -26,8 +26,15 @@ pub const PLAYER_R:       f32 = 40.0;
 pub const HOOK_R:         f32 = 38.0;
 pub const ROPE_THICKNESS: f32 = 10.0;
 
-// ── Generation ────────────────────────────────────────────────────────────────
+// ── Generation — General ──────────────────────────────────────────────────────
+
+/// How far ahead of the player world objects are pre-generated (px).
+/// Increase → more objects buffered ahead (smoother at high speed, more memory).
+/// Decrease → objects may pop in visibly when moving fast.
 pub const GEN_AHEAD:      f32 = VW * 2.5;
+
+/// Max hooks the generator places per game tick (frame).
+/// Higher = faster queue fill but more CPU per frame.
 pub const HOOKS_SPAWN_BUDGET_PER_TICK:    usize = 2;
 pub const PADS_SPAWN_BUDGET_PER_TICK:     usize = 2;
 pub const SPINNERS_SPAWN_BUDGET_PER_TICK: usize = 2;
@@ -35,77 +42,210 @@ pub const FLIPS_SPAWN_BUDGET_PER_TICK:    usize = 1;
 pub const ZERO_G_SPAWN_BUDGET_PER_TICK:   usize = 1;
 pub const GATES_SPAWN_BUDGET_PER_TICK:    usize = 1;
 pub const COIN_BATCHES_BUDGET_PER_TICK:   usize = 1;
+
+// ── Generation — Grab Points (Hooks) ─────────────────────────────────────────
+
+/// How many hooks the pending queue is filled to per batch call.
+/// Increase → longer lookahead, smoother streaming.
 pub const MAX_HOOKS_LIVE: usize = 10;
+
+/// Object pool size. Must be ≥ (MAX_HOOKS_LIVE + starter hooks).
+/// Increasing this is safe; decreasing below ~20 will cause pool starvation.
 pub const HOOK_POOL_SIZE: usize = 68;
+
+/// Horizontal distance between consecutive grab points (px).
+/// This is the single most impactful spacing constant.
+/// Increase → harder (longer reach required). Decrease → easier.
+pub const HOOK_FIXED_X_GAP: f32 = 1250.0;
+
+/// World Y bounds for grab points.
+/// HOOK_Y_MIN is the top of the playable zone (negative = above the horizon).
+/// HOOK_Y_MAX is the bottom of the playable zone.
+/// Narrowing this range makes hooks appear in a tighter band.
+pub const HOOK_Y_MIN:      f32 = -200.0;
+pub const HOOK_Y_MAX:      f32 = 750.0;
+
+/// Unused by the feature generator (retained for API compatibility).
+pub const HOOK_BATCH_MIN_Y_GAP: f32 = 80.0;
+
+/// When placing a new hook, any previously placed hook within this vertical
+/// distance is rejected (bottom hook discarded, top hook kept).
+/// Increase to force more Y separation between consecutive hooks.
+/// Set to 0.0 to disable the anti-stacking check entirely.
+pub const HOOK_CLOSE_Y_THRESHOLD: f32 = 220.0;
+
+// ── Generation — Rope Reach Rules ────────────────────────────────────────────
+
+/// Hard minimum Euclidean distance between consecutive hook nodes.
+/// = ROPE_LEN_MAX / 2 (300 px). No two successive hooks will be closer than this.
+/// Hooks closer than this are too clustered to be interesting to swing between.
+pub const HOOK_MIN_REACH: f32 = ROPE_LEN_MAX * 0.5; // 300.0
+
+/// Hard maximum Euclidean distance between consecutive hook nodes.
+/// = ROPE_LEN_MAX (600 px). Every hook must be reachable from the previous one.
+/// Hooks farther than this create unreachable gaps — forbidden.
+pub const HOOK_MAX_REACH: f32 = ROPE_LEN_MAX; // 600.0
+
+/// Horizontal stride range per hop (px).
+/// Intentionally set large to create long gaps between hooks.
+/// This can exceed HOOK_MAX_REACH and break strict reachability by design.
+pub const HOOK_X_STRIDE_MIN: f32 = 1160.0;
+pub const HOOK_X_STRIDE_MAX: f32 = 1340.0;
+
+// ── Generation — Bounce Pads ──────────────────────────────────────────────────
+
 pub const PAD_POOL_SIZE:  usize = 32;
-pub const PAD_GAP_MIN:    f32 = 1200.0;
-pub const PAD_GAP_MAX:    f32 = 2800.0;
+
+/// X gap between consecutive bounce pads (px). Wide range for variety.
+/// Increase both to make pads rarer. Decrease for more frequent pads.
+pub const PAD_GAP_MIN:    f32 = 5000.0;
+pub const PAD_GAP_MAX:    f32 = 9000.0;
+
 pub const PAD_W:          f32 = 750.0;
 pub const PAD_H:          f32 = 125.0;
+
+/// How close (px) in X a pad must be to a hook before the Y floor is applied.
+pub const PAD_HOOK_NEAR_X:      f32 = 2200.0;
+
+/// Minimum Y clearance below a nearby hook before a pad is allowed.
+/// Increase to push pads further below hooks.
+pub const PAD_BELOW_HOOK_Y_GAP: f32 = 400.0;
+
+/// Hard world Y floor for pad spawning. Pads never appear above this.
+/// Set to HOOK_Y_MAX + N to keep pads visually below all grab points.
+pub const PAD_Y_MIN: f32 = HOOK_Y_MAX + 150.0; // ≈ 1200.0
+
+/// Bounce physics — how the ball launches upward off a pad.
 pub const PAD_BOUNCE_VY_START:  f32 = -46.0;
 pub const PAD_BOUNCE_VERTICAL_BOOST: f32 = 1.15;
 pub const PAD_BOUNCE_DECAY:     f32 = 0.20;
 pub const PAD_BOUNCE_MIN_FACTOR:f32 = 0.30;
+
+/// How far a moving pad travels from its origin (px). 0 = static.
 pub const PAD_MOVE_RANGE: f32 = 250.0;
+/// Speed of pad oscillation (px/tick).
 pub const PAD_MOVE_SPEED: f32 = 3.0;
 
 pub fn pad_corner_radius() -> f32 {
 	(PAD_H * 0.48).clamp(1.0, PAD_H * 0.5 - 1.0)
 }
+
+// ── Generation — Spinners ─────────────────────────────────────────────────────
+
 pub const SPINNER_POOL_SIZE: usize = 14;
-pub const SPINNER_GAP_MIN:   f32 = 3900.0;
-pub const SPINNER_GAP_MAX:   f32 = 6400.0;
+
+/// X gap between consecutive spinners (px).
+/// Increase both to make spinners rarer.
+pub const SPINNER_GAP_MIN:   f32 = 7000.0;
+pub const SPINNER_GAP_MAX:   f32 = 11000.0;
+
 pub const SPINNER_W:         f32 = 620.0;
 pub const SPINNER_H:         f32 = 70.0;
+/// Base rotation speed (deg/tick). Scaled per zone in level_gen.rs.
 pub const SPINNER_ROT_SPEED: f32 = 6.4;
-pub const HOOK_SPINNER_MIN_X_GAP: f32 = 460.0;
-pub const HOOK_SPINNER_PUSH_X:    f32 = 150.0;
+
+/// A hook is only considered for spinner Y-relocation if it falls within this
+/// horizontal distance of the spinner's centre. (Half spinner width = 310 px.)
+/// Set lower to reduce spinner influence on hook placement.
+/// Legacy X-only proximity threshold (superseded by HOOK_SPINNER_PROX_R).
+pub const HOOK_SPINNER_MIN_X_GAP: f32 = 200.0;
+pub const HOOK_SPINNER_PUSH_X:    f32 = 300.0;
+
+/// Euclidean proximity radius for the spinner-avoidance check.
+/// = SPINNER_W / 2 × 1.5 (one and a half spinner half-widths).
+/// Any grab node within this distance of a spinner centre is relocated.
+pub const HOOK_SPINNER_PROX_R: f32 = SPINNER_W * 0.75; // 465.0
+
+/// How far (px) above a spinner centre a relocated hook is placed.
+/// Always pushes upward (never below) to keep grabs clear of the hazard.
+pub const HOOK_SPINNER_Y_OFFSET:  f32 = 950.0;
+
+/// How far (px) a grab node is pushed above a bounce pad's top edge when
+/// it lands too close to one.
+pub const HOOK_PAD_CLEAR_Y: f32 = 800.0;
+
+/// Zone multipliers for spinner rotation speed.
 pub const SPINNER_BLACK_MOVE_AMP_MIN: f32 = 120.0;
 pub const SPINNER_BLACK_MOVE_AMP_MAX: f32 = 260.0;
 pub const SPINNER_BLACK_MOVE_SPEED_MIN: f32 = 1.1;
 pub const SPINNER_BLACK_MOVE_SPEED_MAX: f32 = 2.1;
+
+// ── Generation — Zones ────────────────────────────────────────────────────────
+
+/// Distance (px) at which the zone advances (Normal → Purple → Black → repeat).
+/// Increase for longer zone stretches. Decrease to cycle zones faster.
 pub const ZONE_DISTANCE_STEP:f32 = 20000.0;
+
+/// Spinner speed multipliers per zone. BLACK_ZONE > PURPLE_ZONE > START_ZONE.
 pub const START_ZONE_SPINNER_MULT:f32 = 0.50;
 pub const PURPLE_ZONE_SPINNER_MULT:f32 = 1.00;
 pub const BLACK_ZONE_SPINNER_MULT:f32 = 1.50;
+
 pub const SPINNER_HIT_PUSH_X:f32 = 11.0;
 pub const SPINNER_HIT_PUSH_Y:f32 = -28.0;
+
+// ── Generation — Coins ────────────────────────────────────────────────────────
+
 pub const COIN_POOL_SIZE:    usize = 30;
-pub const COIN_GAP_MIN:      f32 = 1200.0;
-pub const COIN_GAP_MAX:      f32 = 2400.0;
+
+/// X gap between coin spawns (px). Narrower = more coins.
+pub const COIN_GAP_MIN:      f32 = 2200.0;
+pub const COIN_GAP_MAX:      f32 = 4200.0;
+
 pub const COIN_R:            f32 = 48.0;
 pub const COIN_SCORE:        u32 = 125;
 pub const COIN_ARRAY_COUNT:  usize = 5;
 pub const COIN_ARRAY_SPACING:f32 = 120.0;
 pub const COIN_CURVE_RISE:   f32 = 60.0;
+/// Probability (0–1) that a coin spawn is an array rather than single coin.
 pub const COIN_ARRAY_CHANCE: f32 = 0.28;
 pub const COIN_ARRAY_HOOK_DX:f32 = 600.0;
 pub const COIN_ARRAY_HOOK_DY:f32 = -742.0;
-pub const COIN_ARRAY_Y_MIN:  f32 = -200.0;
-pub const COIN_ARRAY_Y_MAX:  f32 = -35.0;
-pub const COIN_SINGLE_Y_MIN: f32 = -35.0;
-pub const COIN_SINGLE_Y_MAX: f32 = 1650.0;
+pub const COIN_ARRAY_Y_MIN:  f32 = -400.0;
+pub const COIN_ARRAY_Y_MAX:  f32 = 200.0;
+pub const COIN_SINGLE_Y_MIN: f32 = -750.0;
+pub const COIN_SINGLE_Y_MAX: f32 = 380.0;
+/// Radius of the coin magnet pickup effect (px).
 pub const COIN_MAGNET_RADIUS:f32 = 180.0;
 pub const COIN_MAGNET_PULL:  f32 = 0.37;
+
+// ── Generation — Flip Pickups ─────────────────────────────────────────────────
+
 pub const FLIP_POOL_SIZE:    usize = 16;
-pub const FLIP_GAP_MIN:      f32 = 7000.0;
-pub const FLIP_GAP_MAX:      f32 = 12000.0;
+/// X gap between gravity-flip pickups (px). Increase = rarer flips.
+pub const FLIP_GAP_MIN:      f32 = 14000.0;
+pub const FLIP_GAP_MAX:      f32 = 24000.0;
 pub const FLIP_W:            f32 = 110.0;
 pub const FLIP_H:            f32 = 110.0;
-pub const FLIP_DURATION:     u32 = 300;  // 5 seconds at 60fps
+/// How long a gravity flip lasts (ticks). 300 = 5 s at 60 fps.
+pub const FLIP_DURATION:     u32 = 300;
+
+// ── Generation — Score ×2 Pickups ────────────────────────────────────────────
+
 pub const SCORE_X2_POOL_SIZE: usize = 16;
-pub const SCORE_X2_GAP_MIN:   f32 = 5600.0;
-pub const SCORE_X2_GAP_MAX:   f32 = 9800.0;
+/// X gap between score-doubler pickups (px).
+pub const SCORE_X2_GAP_MIN:   f32 = 12000.0;
+pub const SCORE_X2_GAP_MAX:   f32 = 20000.0;
 pub const SCORE_X2_W:         f32 = 160.0;
 pub const SCORE_X2_H:         f32 = 160.0;
-pub const SCORE_X2_DURATION:  u32 = 600; // 10 seconds at 60fps
+/// How long score×2 lasts (ticks). 600 = 10 s at 60 fps.
+pub const SCORE_X2_DURATION:  u32 = 600;
+
+// ── Generation — Zero-G Pickups ───────────────────────────────────────────────
+
 pub const ZERO_G_POOL_SIZE:   usize = 14;
-pub const ZERO_G_GAP_MIN:     f32 = 6200.0;
-pub const ZERO_G_GAP_MAX:     f32 = 9800.0;
+/// X gap between zero-gravity pickups (px).
+pub const ZERO_G_GAP_MIN:     f32 = 13000.0;
+pub const ZERO_G_GAP_MAX:     f32 = 22000.0;
 pub const ZERO_G_W:           f32 = 120.0;
 pub const ZERO_G_H:           f32 = 120.0;
-pub const ZERO_G_DURATION:    u32 = 480; // 8 seconds at 60fps
+/// How long zero-G lasts (ticks). 480 = 8 s at 60 fps.
+pub const ZERO_G_DURATION:    u32 = 480;
+/// Fraction of normal gravity applied during zero-G (0 = weightless, 1 = full).
 pub const ZERO_G_GRAVITY_SCALE: f32 = 0.55;
+
+// ── Generation — Gates ────────────────────────────────────────────────────────
+
 pub const GATE_POOL_SIZE:    usize = 10;
 pub const GATE_GAP_MIN:      f32 = 7600.0;
 pub const GATE_GAP_MAX:      f32 = 12000.0;
@@ -118,6 +258,10 @@ pub const GATE_TOP_BASE_H:   f32 = (VH - GATE_GAP_H) * (2.0 / 3.0);
 pub const GATE_BOT_BASE_H:   f32 = (VH - GATE_GAP_H) - GATE_TOP_BASE_H;
 pub const GATE_TOP_SEG_H:    f32 = GATE_TOP_BASE_H + GATE_VERTICAL_OVERFLOW;
 pub const GATE_BOT_SEG_H:    f32 = GATE_BOT_BASE_H + GATE_VERTICAL_OVERFLOW;
+
+// ── Dev / Testing ─────────────────────────────────────────────────────────────
+
+/// Set to true to force the test lane layout for visual inspection.
 pub const TEST_LAYOUT_MODE: bool = false;
 pub const TEST_HOOK_GAP: f32 = 760.0;
 
@@ -182,27 +326,51 @@ pub const ASSET_BGM_TRACK_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets
 pub const ASSET_BGM_TRACK_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_3.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
 pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background_2.webp");
+pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
 
-// ── Gravity wells ─────────────────────────────────────────────────────────────
+// ── Generation — Gravity Wells ────────────────────────────────────────────────
+
 pub const GWELL_POOL_SIZE:     usize = 10;
-pub const GWELL_GAP_MIN:       f32 = 5400.0;
-pub const GWELL_GAP_MAX:       f32 = 9200.0;
+
+/// X gap between consecutive gravity wells (px).
+/// Increase both to make wells rarer. Decrease for more aggressive well density.
+pub const GWELL_GAP_MIN:       f32 = 9000.0;
+pub const GWELL_GAP_MAX:       f32 = 15000.0;
+
+/// Pull radius range (px). Larger = well affects a wider area.
+/// Min is reached for easy wells; max for hard wells.
 pub const GWELL_RADIUS_MIN:    f32 = 540.0;
 pub const GWELL_RADIUS_MAX:    f32 = 1080.0;
+
+/// Pull force range. 0 = no pull, 1 = full gravity override.
+/// Increase GWELL_STRENGTH_MAX to make wells harder to escape.
 pub const GWELL_STRENGTH_MIN:  f32 = 0.75;
 pub const GWELL_STRENGTH_MAX:  f32 = 1.0;
-pub const GWELL_ON_TICKS:      u32 = 240;   // 4 seconds at 60fps
-pub const GWELL_OFF_TICKS:     u32 = 180;   // 3 seconds at 60fps
+
+/// How long the well is active before going dormant (ticks). 240 = 4 s @ 60 fps.
+pub const GWELL_ON_TICKS:      u32 = 240;
+/// How long the well stays dormant before reactivating (ticks). 180 = 3 s @ 60 fps.
+pub const GWELL_OFF_TICKS:     u32 = 180;
+
+/// World Y range for well spawning. Expressed as a fraction of VH.
+/// Adjust these to keep wells away from the very top or bottom of the screen.
 pub const GWELL_Y_MIN:         f32 = VH * 0.15;
 pub const GWELL_Y_MAX:         f32 = VH * 0.80;
+
 pub const GWELL_SPAWN_BUDGET:  usize = 1;
-pub const GWELL_VISUAL_SCALE_MIN: f32 = 3.0;   // smallest well = 3× player diameter
-pub const GWELL_VISUAL_SCALE_MAX: f32 = 10.0;  // largest well = 10× player diameter
-pub const GWELL_RING_COUNT:    u32 = 5;         // concentric alpha rings
+
+/// Visual ring scale relative to player diameter.
+/// 3× = smallest well looks 3× the player. 10× = largest looks much bigger.
+pub const GWELL_VISUAL_SCALE_MIN: f32 = 3.0;
+pub const GWELL_VISUAL_SCALE_MAX: f32 = 10.0;
+/// Number of concentric alpha rings rendered per well. More = richer visual.
+pub const GWELL_RING_COUNT:    u32 = 5;
 pub const GWELL_PULSE_MIN:     f32 = 0.7;
 pub const GWELL_PULSE_SPEED:   f32 = 0.08;
-pub const GWELL_DISCONNECT_FRAC: f32 = 0.5;  // disconnect from grab at 50% of planet_radius
+/// The rope disconnects from a grab point when the player enters this fraction
+/// of the well's radius. 0.5 = disconnect at half-radius.
+pub const GWELL_DISCONNECT_FRAC: f32 = 0.5;
 pub const C_GWELL_ACTIVE:      (u8,u8,u8) = (130, 80, 255);
 pub const C_GWELL_DORMANT:     (u8,u8,u8) = (60, 40, 110);
 

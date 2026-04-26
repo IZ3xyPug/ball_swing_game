@@ -14,40 +14,50 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let zone_start = zone_idx as f32 * ZONE_DISTANCE_STEP;
     let dist_fill = ((distance - zone_start) / ZONE_DISTANCE_STEP).clamp(0.0, 1.0);
     let coins = s.coin_count;
-    let momentum = (s.vx * s.vx + s.vy * s.vy).sqrt();
     let score = s.score;
-    let gravity_flipped = s.gravity_dir < 0.0;
     let py = s.py;
     let px = s.px;
-    let flip_timer_val = s.flip_timer;
-    let zero_g_timer_val = s.zero_g_timer;
     let ticks = s.ticks;
 
     // Quantize for dirty checks
     let q_dist_fill = (dist_fill * 1000.0) as u32;
-    let q_momentum  = (momentum * 10.0) as u32;
     let q_py        = py as i32;
     let q_px        = px as i32;
 
     let dirty_dist     = q_dist_fill     != s.hud_last_dist_fill;
     let dirty_coins    = coins           != s.hud_last_coins;
-    let dirty_momentum = q_momentum      != s.hud_last_momentum;
-    let dirty_gravity  = gravity_flipped != s.hud_last_gravity_flip;
     let dirty_py       = q_py            != s.hud_last_py;
     let dirty_px       = q_px            != s.hud_last_px;
-    let dirty_flip     = flip_timer_val  != s.hud_last_flip_timer;
-    let dirty_zero_g   = zero_g_timer_val != s.hud_last_zero_g_timer;
     let dirty_score    = score           != s.hud_last_score;
+
+    let previous_coins = s.hud_last_coins;
+    let coin_gained = previous_coins != u32::MAX && coins > previous_coins;
+    if coin_gained {
+        s.hud_coin_fade_ticks = 0;
+        s.hud_coin_alpha = 255;
+    } else {
+        s.hud_coin_fade_ticks = s.hud_coin_fade_ticks.saturating_add(1);
+        const COIN_HUD_HOLD_TICKS: u32 = 45;
+        const COIN_HUD_FADE_TICKS: u32 = 300;
+        const COIN_HUD_ALPHA_MIN: u8 = 0;
+
+        let target_alpha = if s.hud_coin_fade_ticks <= COIN_HUD_HOLD_TICKS {
+            255
+        } else {
+            let t = (s.hud_coin_fade_ticks - COIN_HUD_HOLD_TICKS).min(COIN_HUD_FADE_TICKS);
+            let k = 1.0 - (t as f32 / COIN_HUD_FADE_TICKS as f32);
+            let min_a = COIN_HUD_ALPHA_MIN as f32;
+            (min_a + (255.0 - min_a) * k).round() as u8
+        };
+        s.hud_coin_alpha = target_alpha;
+    }
+    let coin_alpha = s.hud_coin_alpha;
 
     // Update tracking
     s.hud_last_dist_fill    = q_dist_fill;
     s.hud_last_coins        = coins;
-    s.hud_last_momentum     = q_momentum;
-    s.hud_last_gravity_flip = gravity_flipped;
     s.hud_last_py           = q_py;
     s.hud_last_px           = q_px;
-    s.hud_last_flip_timer   = flip_timer_val;
-    s.hud_last_zero_g_timer = zero_g_timer_val;
     s.hud_last_score        = score;
     let in_space = s.in_space_mode;
     drop(s);
@@ -70,6 +80,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Coin counter
     if let Some(obj) = c.get_game_object_mut("coin_counter") {
         obj.position = (30.0, 40.0);
+        obj.visible = true;
         if dirty_coins {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
@@ -77,6 +88,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 color: None,
             });
         }
+        obj.set_tint(Color(255, 255, 255, coin_alpha));
     }
 
     // Score counter (top-right)
@@ -91,28 +103,12 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    // Momentum counter
     if let Some(obj) = c.get_game_object_mut("momentum_counter") {
-        obj.position = (30.0, 150.0);
-        if dirty_momentum {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
-                image: momentum_counter_img(momentum).into(),
-                color: None,
-            });
-        }
+        obj.visible = false;
     }
 
-    // Gravity indicator
     if let Some(obj) = c.get_game_object_mut("gravity_indicator") {
-        obj.position = (30.0, 248.0);
-        if dirty_gravity {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (308.0, 84.0), 0.0),
-                image: gravity_indicator_img(gravity_flipped, true).into(),
-                color: None,
-            });
-        }
+        obj.visible = false;
     }
 
     // Y meter
@@ -139,38 +135,12 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    // Flip timer HUD
     if let Some(obj) = c.get_game_object_mut("flip_timer") {
-        if flip_timer_val > 0 {
-            obj.position = (VW * 0.5 - 252.0, 96.0);
-            obj.visible = true;
-            if dirty_flip {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: flip_timer_img(flip_timer_val, FLIP_DURATION).into(),
-                    color: None,
-                });
-            }
-        } else {
-            obj.visible = false;
-        }
+        obj.visible = false;
     }
 
-    // Zero-g timer HUD
     if let Some(obj) = c.get_game_object_mut("zero_g_timer") {
-        if zero_g_timer_val > 0 {
-            obj.position = (VW * 0.5 - 252.0, 226.0);
-            obj.visible = true;
-            if dirty_zero_g {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: flip_timer_img(zero_g_timer_val, ZERO_G_DURATION).into(),
-                    color: None,
-                });
-            }
-        } else {
-            obj.visible = false;
-        }
+        obj.visible = false;
     }
 
     // Hide combo flash periodically

@@ -199,12 +199,13 @@
 
     // Pre-place a handful of close hooks so there's something to grab immediately.
     // The full hook pool is preallocated here (with ctx available), then recycled.
+    // Positions must match build_scene.rs (uses HOOK_FIXED_X_GAP, same spacing as proc-gen).
     let starter_hooks: &[(f32, f32)] = &[
-        (START_HOOK_X,     START_HOOK_Y),
-        (SPAWN_X + 1060.0,  VH * 0.30),
-        (SPAWN_X + 1860.0, VH * 0.46),
-        (SPAWN_X + 2760.0, VH * 0.34),
-        (SPAWN_X + 3720.0, VH * 0.52),
+        (START_HOOK_X,                              START_HOOK_Y),
+        (START_HOOK_X + HOOK_FIXED_X_GAP,           VH * 0.30),
+        (START_HOOK_X + HOOK_FIXED_X_GAP * 2.0,    VH * 0.46),
+        (START_HOOK_X + HOOK_FIXED_X_GAP * 3.0,    VH * 0.34),
+        (START_HOOK_X + HOOK_FIXED_X_GAP * 4.0,    VH * 0.52),
     ];
 
     let mut scene = Scene::new("game")

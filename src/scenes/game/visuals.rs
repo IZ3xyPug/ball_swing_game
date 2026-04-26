@@ -118,7 +118,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
                     let (r, g, b) = hook_near_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
                 }
-                obj.set_glow(GlowConfig { color: Color(255, 220, 120, 140), width: 10.0 });
+                obj.set_glow(GlowConfig { color: Color(255, 230, 140, 190), width: 13.0 });
             }
         }
         *prev_nearest = nearest;

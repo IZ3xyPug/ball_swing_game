@@ -133,17 +133,6 @@ pub fn tick_background(
             image: image_data.into(),
             color: None,
         });
-        const OVERSCAN: f32 = 200.0;
-        let w = VW * bg_scale + OVERSCAN * 2.0;
-        let h = VH * bg_scale;
-        obj.size = (w, h);
-        let cx = -(w - VW) / 2.0;
-        if flipped {
-            obj.position = (cx, VH - h);
-        } else {
-            obj.position = (cx, 0.0);
-        }
-        obj.update_image_shape();
     }
 
 }

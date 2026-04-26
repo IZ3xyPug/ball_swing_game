@@ -37,22 +37,22 @@ fn gate_cluster_count_stays_in_1_to_3() {
 #[test]
 fn hook_generation_stays_reachable_and_bounded() {
     let mut seed = 42_u64;
-    let mut y = SPAWN_Y;
-    let batch = gen_hook_batch(&mut seed, SPAWN_X + 800.0, &mut y, 0.6);
+    let mut _gen_head_x = SPAWN_X + 800.0;
+    let mut _gen_head_y = (HOOK_Y_MIN + HOOK_Y_MAX) * 0.5;
+    let batch = gen_hook_batch(&mut seed, SPAWN_X + 800.0, &mut _gen_head_x, &mut _gen_head_y, 60_000.0);
 
     assert_eq!(batch.len(), MAX_HOOKS_LIVE);
 
-    let mut prev_x = 0.0;
-    let mut first = true;
+    let mut prev = None::<(f32, f32)>;
     for hook in &batch {
-        if !first {
-            assert!(hook.x > prev_x, "hook x must increase");
-            let dx = hook.x - prev_x;
-            assert!(dx >= 680.0, "hook gap too small: {dx}");
+        assert!((HOOK_Y_MIN..=HOOK_Y_MAX).contains(&hook.y), "hook y out of bounds: {}", hook.y);
+        if let Some((px, py)) = prev {
+            assert!(hook.x > px, "hook x must increase");
+            let dist = ((hook.x - px).powi(2) + (hook.y - py).powi(2)).sqrt();
+            assert!(dist >= HOOK_MIN_REACH * 0.95, "hooks too close: {dist:.1} px");
+            assert!(dist <= HOOK_MAX_REACH * 1.05, "hooks too far: {dist:.1} px");
         }
-        assert!((VH * 0.14..=VH * 0.76).contains(&hook.y), "hook y out of bounds: {}", hook.y);
-        prev_x = hook.x;
-        first = false;
+        prev = Some((hook.x, hook.y));
     }
 }
 

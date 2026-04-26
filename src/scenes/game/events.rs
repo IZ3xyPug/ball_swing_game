@@ -134,7 +134,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     let (r, g, b) = hook_on_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
                 }
-                obj.set_glow(GlowConfig { color: Color(255, 200, 80, 255), width: 18.0 });
+                obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
             }
 
             c.run(Action::Show { target: Target::name("rope") });

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use crate::constants::*;
+use crate::poisson::PoissonSampler;
 
 pub fn lcg(s: &mut u64) -> f32 {
     *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -12,41 +13,23 @@ pub fn lcg_range(s: &mut u64, lo: f32, hi: f32) -> f32 { lo + lcg(s) * (hi - lo)
 #[derive(Clone)]
 pub struct HookSpec { pub x: f32, pub y: f32 }
 
-pub fn gen_hook_batch(seed: &mut u64, from_x: f32, start_y: &mut f32, difficulty: f32) -> VecDeque<HookSpec> {
-    let mut hooks = VecDeque::new();
-    let mut x = from_x;
-    let mut y = *start_y;
+pub fn gen_hook_batch(seed: &mut u64, from_x: f32, gen_head_x: &mut f32, gen_head_y: &mut f32, distance_px: f32) -> VecDeque<HookSpec> {
+    use crate::level_gen::generate_next_hook;
 
-    if TEST_LAYOUT_MODE {
-        let lanes = [VH*0.24, VH*0.36, VH*0.50, VH*0.64, VH*0.52, VH*0.38];
-        for i in 0..MAX_HOOKS_LIVE {
-            x += TEST_HOOK_GAP + difficulty * 20.0;
-            let lane_idx = ((x / TEST_HOOK_GAP) as usize + i) % lanes.len();
-            let target = lanes[lane_idx];
-            let blend = 0.58;
-            let wobble = lcg_range(seed, -20.0, 20.0);
-            y = (y * (1.0 - blend) + target * blend + wobble).clamp(VH*0.12, VH*0.80);
-            hooks.push_back(HookSpec { x, y });
-        }
-        *start_y = y;
-        return hooks;
+    // Ensure the generation head starts at least at from_x.
+    if *gen_head_x < from_x {
+        *gen_head_x = from_x;
     }
 
-    for _ in 0..MAX_HOOKS_LIVE {
-        let gap = lcg_range(seed, (780.0 - difficulty*50.0).max(680.0), 1200.0 + difficulty*160.0);
-        let target_y = lcg_range(seed, VH*0.18, VH*0.72);
-        let blend = 0.30 + difficulty * 0.12;
-        let wobble = lcg_range(seed, -140.0 - difficulty*80.0, 140.0 + difficulty*80.0);
-        let mut next_y = y * (1.0 - blend) + target_y * blend + wobble;
-        let max_step = 200.0 + difficulty * 100.0;
-        next_y = y + (next_y - y).clamp(-max_step, max_step);
+    let mut all_hooks: VecDeque<HookSpec> = VecDeque::new();
 
-        x += gap;
-        y = next_y.clamp(VH*0.14, VH*0.76);
-        hooks.push_back(HookSpec { x, y });
+    // Hop-by-hop: each call produces exactly one hook guaranteed within rope reach.
+    while all_hooks.len() < MAX_HOOKS_LIVE {
+        let hook = generate_next_hook(seed, gen_head_x, gen_head_y, distance_px);
+        all_hooks.push_back(hook);
     }
-    *start_y = y;
-    hooks
+
+    all_hooks
 }
 
 #[derive(Clone)]
@@ -71,8 +54,22 @@ pub struct State {
     pub pending:     VecDeque<HookSpec>,
     pub live_hooks:  Vec<String>,
     pub pool_free:   Vec<String>,
-    pub gen_y:       f32,
+    pub gen_y:       f32,  // kept for API compatibility; unused by level_gen
     pub rightmost_x: f32,
+    /// Tracks how far ahead features have been generated (may be well ahead of
+    /// rightmost_x).  Passed in/out of gen_hook_batch so features are not
+    /// regenerated over the same X range.
+    pub gen_head_x:  f32,
+    /// Y cursor for the hop-based generator. Tracks the Y of the last generated
+    /// hook so the next batch continues from the correct position.
+    pub gen_head_y:  f32,
+    /// Y-position of the most recently placed grab point. Used as a safety net
+    /// to nudge hooks that land too close vertically after Y clamping.
+    pub last_hook_y: f32,
+
+    /// Shared Poisson-disk sampler — tracks all placed pad/spinner centres so
+    /// that new placements are organically spaced from existing objects.
+    pub world_sampler: PoissonSampler,
 
     pub dead:  bool,
     pub ticks: u32,
@@ -148,6 +145,8 @@ pub struct State {
     pub hud_last_flip_timer:    u32,
     pub hud_last_zero_g_timer:  u32,
     pub hud_last_score:         u32,
+    pub hud_coin_fade_ticks:    u32,
+    pub hud_coin_alpha:         u8,
 
     // ── Space zone ──────────────────────────────────────────────────────
     /// True while player is in the space zone.

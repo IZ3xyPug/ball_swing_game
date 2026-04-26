@@ -151,7 +151,6 @@
             spinners_enabled: true,
             spinner_spin_enabled: true,
             spinner_hit_cooldown: 0,
-            coin_live:      Vec::new(),
             coin_free:      coin_free.clone(),
             coin_rightmost: SPAWN_X,
             coin_magnet_locked: Vec::new(),
