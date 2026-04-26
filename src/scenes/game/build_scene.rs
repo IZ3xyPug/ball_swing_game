@@ -63,7 +63,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     let starfield_quartz = star_field(bg_w, bg_h, STARFIELD_STAR_COUNT, 0xCAFE_BABE);
     let starfield_rgba: &image::RgbaImage = &starfield_quartz.image;
 
-    let grad_start = gradient_rect(bg_w, bg_h, C_SKY_TOP, C_SKY_BOT);
+    let grad_start = {
+        let aurora_src = image::load_from_memory(include_bytes!("../../../assets/aurora_earth.gif"))
+            .expect("aurora_earth.gif decode failed")
+            .to_rgba8();
+        image::imageops::resize(&aurora_src, bg_w, bg_h, image::imageops::FilterType::Lanczos3)
+    };
     let grad_purple = gradient_rect(bg_w, bg_h, C_ZONE_PURPLE_TOP, C_ZONE_PURPLE_BOT);
     let grad_black = gradient_rect(bg_w, bg_h, C_ZONE_BLACK_TOP, C_ZONE_BLACK_BOT);
     let grad_start_vivid = gradient_rect(bg_w, bg_h, (8, 26, 74), (104, 194, 255));
