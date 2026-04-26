@@ -54,7 +54,7 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 });
             } else if obj.tags.iter().any(|t| t == "hook") {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img());
+                    obj.set_image(hook_asteroid_img_for_id(name, AsteroidHookState::Base));
                 } else {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
@@ -101,7 +101,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
         if !prev_nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(prev_nearest) {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img());
+                    obj.set_image(hook_asteroid_img_for_id(prev_nearest, AsteroidHookState::Base));
                 } else {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
@@ -113,12 +113,13 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
         if !nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(&nearest) {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img());
+                    obj.set_image(hook_asteroid_img_for_id(&nearest, AsteroidHookState::Near));
+                    obj.clear_glow();
                 } else {
                     let (r, g, b) = hook_near_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
+                    obj.set_glow(GlowConfig { color: Color(255, 230, 140, 190), width: 13.0 });
                 }
-                obj.set_glow(GlowConfig { color: Color(255, 230, 140, 190), width: 13.0 });
             }
         }
         *prev_nearest = nearest;
@@ -142,7 +143,8 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     for hid in &hooks {
         if let Some(obj) = c.get_game_object_mut(hid) {
             if asteroid_mode {
-                obj.set_image(hook_asteroid_img());
+                obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Base));
+                obj.clear_glow();
             } else {
                 let (r, g, b) = hook_base_for_zone(zone_idx);
                 obj.set_image(hook_img(r, g, b));

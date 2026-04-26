@@ -169,9 +169,14 @@ fn tick_bullet_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.gravity = GRAVITY * gravity_scale * gdir;
         }
         if !prev.is_empty() {
+            let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(hobj) = c.get_game_object_mut(&prev) {
-                let (r, g, b) = hook_base_for_zone(zone_idx);
-                hobj.set_image(hook_img(r, g, b));
+                if asteroid_mode {
+                    hobj.set_image(hook_asteroid_img_for_id(&prev, AsteroidHookState::Base));
+                } else {
+                    let (r, g, b) = hook_base_for_zone(zone_idx);
+                    hobj.set_image(hook_img(r, g, b));
+                }
                 hobj.clear_glow();
             }
         }

@@ -40,7 +40,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&prev) {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img());
+                    obj.set_image(hook_asteroid_img_for_id(&prev, AsteroidHookState::Base));
                 } else {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
@@ -129,12 +129,13 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img());
+                    obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::On));
+                    obj.clear_glow();
                 } else {
                     let (r, g, b) = hook_on_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
+                    obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
                 }
-                obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
             }
 
             c.run(Action::Show { target: Target::name("rope") });

@@ -62,14 +62,15 @@ pub fn tick_background(
 
     if let Some(obj) = c.get_game_object_mut("bg") {
         const OVERSCAN: f32 = 200.0;
+        const BG_RAISE: f32 = 150.0;
         let w = VW * bg_scale + OVERSCAN * 2.0;
-        let h = VH * bg_scale;
+        let h = VH * bg_scale + BG_RAISE;
         obj.size = (w, h);
         let cx = -(w - VW) / 2.0;
         if flipped {
             obj.position = (cx, VH - h);
         } else {
-            obj.position = (cx, 0.0);
+            obj.position = (cx, -BG_RAISE);
         }
         obj.update_image_shape();
     }
@@ -91,7 +92,9 @@ pub fn tick_background(
         obj.visible = false;
     }
 
-    let key = (dark, zone_idx, vivid, flipped);
+    // Zone index no longer drives background selection — aurora is used for all zones.
+    // Key still uses dark/vivid/flipped so those still trigger a refresh.
+    let key = (dark, 0usize, vivid, flipped);
     if *prev_bg_theme == Some(key) { return; }
     *prev_bg_theme = Some(key);
 
@@ -100,31 +103,11 @@ pub fn tick_background(
         for py in 0..4 { for px in 0..4 { img.put_pixel(px, py, image::Rgba([4, 4, 8, 255])); } }
         img
     } else if flipped {
-        if vivid {
-            match zone_idx {
-                0 => bg_zone_start_vivid_flip.clone(),
-                1 => bg_zone_purple_vivid_flip.clone(),
-                _ => bg_zone_black_vivid_flip.clone(),
-            }
-        } else {
-            match zone_idx {
-                0 => bg_zone_start_flip.clone(),
-                1 => bg_zone_purple_flip.clone(),
-                _ => bg_zone_black_flip.clone(),
-            }
-        }
+        if vivid { bg_zone_start_vivid_flip.clone() } else { bg_zone_start_flip.clone() }
     } else if vivid {
-        match zone_idx {
-            0 => bg_zone_start_vivid.clone(),
-            1 => bg_zone_purple_vivid.clone(),
-            _ => bg_zone_black_vivid.clone(),
-        }
+        bg_zone_start_vivid.clone()
     } else {
-        match zone_idx {
-            0 => bg_zone_start.clone(),
-            1 => bg_zone_purple.clone(),
-            _ => bg_zone_black.clone(),
-        }
+        bg_zone_start.clone()
     };
 
     if let Some(obj) = c.get_game_object_mut("bg") {

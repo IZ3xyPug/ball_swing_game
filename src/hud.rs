@@ -5,41 +5,39 @@ use std::sync::OnceLock;
 fn hud_coin_icon() -> &'static image::RgbaImage {
     static ICON: OnceLock<image::RgbaImage> = OnceLock::new();
     ICON.get_or_init(|| {
-        let fallback = || circle_img(18, C_COIN.0, C_COIN.1, C_COIN.2);
-        let decoded = image::load_from_memory_with_format(
-            include_bytes!("../assets/coin.gif"),
-            image::ImageFormat::Gif,
-        )
-        .map(|img| img.to_rgba8())
-        .unwrap_or_else(|_| fallback());
-
-        image::imageops::resize(
-            &decoded,
-            48,
-            48,
-            image::imageops::FilterType::CatmullRom,
-        )
+        let gif_data = include_bytes!("../assets/coin.gif");
+        let img = image::load_from_memory(gif_data)
+            .expect("coin.gif decode failed")
+            .into_rgba8();
+        image::imageops::resize(&img, 112, 112, image::imageops::FilterType::Lanczos3)
     })
 }
 
 pub fn coin_counter_img(count: u32) -> image::RgbaImage {
-    let w = 420;
-    let h = 98;
+    let w = 640;
+    let h = 168;
     let mut img = image::RgbaImage::new(w, h);
-    draw_rect(&mut img, 0, 0, w, h, [15, 18, 28, 210]);
-    draw_rect(&mut img, 0, 0, w, 2, [170, 170, 190, 255]);
-    draw_rect(&mut img, 0, h - 2, w, 2, [170, 170, 190, 255]);
-    draw_rect(&mut img, 0, 0, 2, h, [170, 170, 190, 255]);
-    draw_rect(&mut img, w - 2, 0, 2, h, [170, 170, 190, 255]);
 
-    image::imageops::overlay(&mut img, hud_coin_icon(), 16, 25);
+    let icon_x = 12i64;
+    let icon_y = ((h - 112) / 2) as i64;
+    image::imageops::overlay(&mut img, hud_coin_icon(), icon_x, icon_y);
 
-    let clamped = count.min(9999);
-    let digits = format!("{:04}", clamped);
-    let mut dx = 100;
+    let clamped = count.min(999_999);
+    let digits = clamped.to_string();
+    let scale = 6;
+    let digit_w = 9 * scale;
+    let digit_step = 68;
+    let text_h = 16 * scale;
+    let mut dx = 156;
+    let dy = ((h - text_h) / 2).max(0);
     for ch in digits.bytes() {
-        draw_digit_7seg(&mut img, dx, 17, 3, (ch - b'0') as u8, [250, 250, 255, 255]);
-        dx += 56;
+        if ch.is_ascii_digit() {
+            draw_digit_7seg(&mut img, dx, dy, scale, (ch - b'0') as u8, [255, 232, 128, 255]);
+            dx += digit_step;
+        }
+        if dx + digit_w >= w {
+            break;
+        }
     }
     img
 }

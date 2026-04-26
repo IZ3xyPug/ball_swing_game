@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use crate::constants::*;
+use image::RgbaImage;
 use crate::poisson::PoissonSampler;
 
 pub fn lcg(s: &mut u64) -> f32 {
@@ -147,6 +148,8 @@ pub struct State {
     pub hud_last_score:         u32,
     pub hud_coin_fade_ticks:    u32,
     pub hud_coin_alpha:         u8,
+    pub hud_last_coin_alpha:    u8,
+    pub hud_coin_base_img:      Option<RgbaImage>,
 
     // ── Space zone ──────────────────────────────────────────────────────
     /// True while player is in the space zone.

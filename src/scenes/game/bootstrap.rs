@@ -156,14 +156,15 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut coin_counter = GameObject::new_rect(
         ctx, "coin_counter".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (640.0, 168.0), 0.0),
             image: coin_counter_img(0).into(),
             color: None,
         }),
-        (420.0, 98.0), (30.0, 40.0),
+        (640.0, 168.0), (26.0, 24.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     coin_counter.ignore_zoom = true;
+    coin_counter.visible = false;
 
     let mut score_counter = GameObject::new_rect(
         ctx, "score_counter".into(),
@@ -654,6 +655,31 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("start_prompt_text", start_prompt_text)
         .with_object("settings_text", settings_text)
         .with_object("settings_back_btn", settings_back_btn);
+
+    // ── Zone divider lines ────────────────────────────────────────────────
+    // Thin vertical white lines at each zone boundary, drawn in world space.
+    // Height is intentionally enormous so the top is never visible even when
+    // zoomed out to the maximum camera level.
+    const ZONE_LINE_W: f32 = 8.0;
+    const ZONE_LINE_H: f32 = 400_000.0;
+    const ZONE_LINE_Y: f32 = -200_000.0;
+    for zone_num in 1..=2usize {
+        let world_x = SPAWN_X + zone_num as f32 * ZONE_DISTANCE_STEP - ZONE_LINE_W / 2.0;
+        let id = format!("zone_line_{zone_num}");
+        let mut line = GameObject::new_rect(
+            ctx, id.clone(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (ZONE_LINE_W, ZONE_LINE_H), 0.0),
+                image: solid(255, 255, 255, 150).into(),
+                color: None,
+            }),
+            (ZONE_LINE_W, ZONE_LINE_H),
+            (world_x, ZONE_LINE_Y),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        line.layer = 1; // in front of background, behind everything else
+        scene = scene.with_object(id, line);
+    }
 
     let pools = PoolSets {
         starter_names,

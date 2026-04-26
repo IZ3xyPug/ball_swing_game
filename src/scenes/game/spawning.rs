@@ -200,7 +200,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible = true;
             if asteroid_mode {
-                obj.set_image(hook_asteroid_img());
+                obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
             } else {
                 let (r, g, b) = hook_base_for_zone(zone_idx);
                 obj.set_image(hook_img(r, g, b));

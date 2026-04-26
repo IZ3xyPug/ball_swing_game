@@ -56,34 +56,40 @@ fn update_settings_text(c: &mut Canvas) {
 }
 
 pub fn build_game_scene(ctx: &mut Context) -> Scene {
-    // Pre-compute background images from the aurora earth asset.
-    let bg_w: u32 = VW as u32;
-    let bg_h: u32 = VH as u32;
-    let aurora_base = image::open(ASSET_AURORA_EARTH_GIF)
-        .map(|img| {
-            image::imageops::resize(
-                &img.to_rgba8(),
-                bg_w,
-                bg_h,
-                image::imageops::FilterType::CatmullRom,
-            )
-        })
-        .unwrap_or_else(|_| gradient_rect(bg_w, bg_h, C_SKY_TOP, C_SKY_BOT));
+    // Pre-compute background gradient images (small tile, stretched by GPU).
+    // Generate the starfield once, then composite it into the upper half of each gradient.
+    let bg_w = VW as u32;
+    let bg_h = VH as u32;
+    let starfield_quartz = star_field(bg_w, bg_h, STARFIELD_STAR_COUNT, 0xCAFE_BABE);
+    let starfield_rgba: &image::RgbaImage = &starfield_quartz.image;
 
-    let bg_zone_start = aurora_base.clone();
-    let bg_zone_purple = aurora_base.clone();
-    let bg_zone_black = aurora_base.clone();
-    let bg_zone_start_vivid = aurora_base.clone();
-    let bg_zone_purple_vivid = aurora_base.clone();
-    let bg_zone_black_vivid = aurora_base.clone();
+    let grad_start = {
+        let aurora_src = image::load_from_memory(include_bytes!("../../../assets/aurora_earth.gif"))
+            .expect("aurora_earth.gif decode failed")
+            .to_rgba8();
+        image::imageops::resize(&aurora_src, bg_w, bg_h, image::imageops::FilterType::Lanczos3)
+    };
+    let grad_purple = gradient_rect(bg_w, bg_h, C_ZONE_PURPLE_TOP, C_ZONE_PURPLE_BOT);
+    let grad_black = gradient_rect(bg_w, bg_h, C_ZONE_BLACK_TOP, C_ZONE_BLACK_BOT);
+    let grad_start_vivid = gradient_rect(bg_w, bg_h, (8, 26, 74), (104, 194, 255));
+    let grad_purple_vivid = gradient_rect(bg_w, bg_h, (56, 18, 94), (165, 78, 230));
+    let grad_black_vivid = gradient_rect(bg_w, bg_h, (212, 142, 28), (255, 236, 120));
 
-    // Keep the same image set for space zoom variants so visuals stay consistent.
-    let bg_zone_start_space = aurora_base.clone();
-    let bg_zone_purple_space = aurora_base.clone();
-    let bg_zone_black_space = aurora_base.clone();
-    let bg_zone_start_vivid_space = aurora_base.clone();
-    let bg_zone_purple_vivid_space = aurora_base.clone();
-    let bg_zone_black_vivid_space = aurora_base.clone();
+    let blend_h = bg_h / 8; // smooth transition zone
+    let bg_zone_start = composite_starfield_gradient(starfield_rgba, &grad_start, bg_w, bg_h, blend_h);
+    let bg_zone_purple = composite_starfield_gradient(starfield_rgba, &grad_purple, bg_w, bg_h, blend_h);
+    let bg_zone_black = composite_starfield_gradient(starfield_rgba, &grad_black, bg_w, bg_h, blend_h);
+    let bg_zone_start_vivid = composite_starfield_gradient(starfield_rgba, &grad_start_vivid, bg_w, bg_h, blend_h);
+    let bg_zone_purple_vivid = composite_starfield_gradient(starfield_rgba, &grad_purple_vivid, bg_w, bg_h, blend_h);
+    let bg_zone_black_vivid = composite_starfield_gradient(starfield_rgba, &grad_black_vivid, bg_w, bg_h, blend_h);
+
+    // Extra "space-zoomed" set used when camera zooms out.
+    let bg_zone_start_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_start, bg_w, bg_h, blend_h, 0.76);
+    let bg_zone_purple_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_purple, bg_w, bg_h, blend_h, 0.76);
+    let bg_zone_black_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_black, bg_w, bg_h, blend_h, 0.76);
+    let bg_zone_start_vivid_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_start_vivid, bg_w, bg_h, blend_h, 0.76);
+    let bg_zone_purple_vivid_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_purple_vivid, bg_w, bg_h, blend_h, 0.76);
+    let bg_zone_black_vivid_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_black_vivid, bg_w, bg_h, blend_h, 0.76);
 
     // Pre-compute vertically flipped backgrounds for reverse gravity.
     let bg_zone_start_flip = flip_image_vertical(&bg_zone_start);
@@ -182,6 +188,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             }
             canvas.set_var("coin_sfx_index", 0);
             canvas.set_var("space_zoom_mode", 3);
+            canvas.set_var("asteroid_hooks_on", true);
 
             // ── Background music (looped, switchable) ───────────────────
             if let Ok(mut slot) = bgm_handle_on_enter.lock() {
@@ -352,7 +359,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             for hid in &hooks {
                                 if let Some(obj) = c.get_game_object_mut(hid) {
                                     if next {
-                                        obj.set_image(hook_asteroid_img());
+                                        obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Base));
+                                        obj.clear_glow();
                                     } else {
                                         let (r, g, b) = hook_base_for_zone(zone_idx);
                                         obj.set_image(hook_img(r, g, b));
@@ -634,8 +642,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 hud_last_flip_timer:   u32::MAX,
                 hud_last_zero_g_timer: u32::MAX,
                 hud_last_score:        u32::MAX,
-                hud_coin_fade_ticks:   0,
-                hud_coin_alpha:        255,
+                hud_coin_fade_ticks:   u32::MAX,
+                hud_coin_alpha:        0,
+                hud_last_coin_alpha:   0,
+                hud_coin_base_img:     None,
 
                 // Space zone
                 in_space_mode:            false,

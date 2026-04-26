@@ -31,8 +31,12 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dirty_score    = score           != s.hud_last_score;
 
     let previous_coins = s.hud_last_coins;
-    let coin_gained = previous_coins != u32::MAX && coins > previous_coins;
-    if coin_gained {
+    let initialized = previous_coins != u32::MAX;
+    let coin_gained = initialized && coins > previous_coins;
+    if !initialized && coins == 0 {
+        s.hud_coin_alpha = 0;
+        s.hud_coin_fade_ticks = u32::MAX;
+    } else if !initialized || coin_gained {
         s.hud_coin_fade_ticks = 0;
         s.hud_coin_alpha = 255;
     } else {
@@ -52,6 +56,26 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.hud_coin_alpha = target_alpha;
     }
     let coin_alpha = s.hud_coin_alpha;
+    let dirty_alpha = coin_alpha != s.hud_last_coin_alpha;
+
+    // Rebuild base image whenever coin count changes
+    if dirty_coins || s.hud_coin_base_img.is_none() {
+        s.hud_coin_base_img = Some(coin_counter_img(coins));
+    }
+
+    // Build alpha-applied image when coin count or alpha changes
+    let update_coin_img = if dirty_coins || dirty_alpha {
+        let base = s.hud_coin_base_img.as_ref().unwrap();
+        let mut img = base.clone();
+        if coin_alpha < 255 {
+            for pixel in img.pixels_mut() {
+                pixel[3] = ((pixel[3] as u32 * coin_alpha as u32) / 255) as u8;
+            }
+        }
+        Some(img)
+    } else {
+        None
+    };
 
     // Update tracking
     s.hud_last_dist_fill    = q_dist_fill;
@@ -59,6 +83,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.hud_last_py           = q_py;
     s.hud_last_px           = q_px;
     s.hud_last_score        = score;
+    s.hud_last_coin_alpha   = coin_alpha;
     let in_space = s.in_space_mode;
     drop(s);
 
@@ -79,16 +104,15 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Coin counter
     if let Some(obj) = c.get_game_object_mut("coin_counter") {
-        obj.position = (30.0, 40.0);
-        obj.visible = true;
-        if dirty_coins {
+        obj.position = (26.0, 24.0);
+        obj.visible = coin_alpha > 0;
+        if let Some(img) = update_coin_img {
             obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
-                image: coin_counter_img(coins).into(),
+                shape: ShapeType::Rectangle(0.0, (640.0, 168.0), 0.0),
+                image: img.into(),
                 color: None,
             });
         }
-        obj.set_tint(Color(255, 255, 255, coin_alpha));
     }
 
     // Score counter (top-right)

@@ -44,7 +44,7 @@ fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
         let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         if let Some(hobj) = c.get_game_object_mut(&ops.prev_hook) {
             if asteroid_mode {
-                hobj.set_image(hook_asteroid_img());
+                hobj.set_image(hook_asteroid_img_for_id(&ops.prev_hook, AsteroidHookState::Base));
             } else {
                 let (r, g, b) = hook_base_for_zone(ops.zone_idx);
                 hobj.set_image(hook_img(r, g, b));
