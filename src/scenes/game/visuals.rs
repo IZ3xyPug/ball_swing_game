@@ -221,6 +221,18 @@ fn tick_pad_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 // ── Zoom (Dune-style: zoom out when player goes high) ───────────────────────
 
 fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let intro_zoom_recover = c.get_i32("start_zoom_recover_ticks").max(0);
+    if intro_zoom_recover > 0 {
+        if let Some(cam) = c.camera_mut() {
+            cam.zoom_lerp_speed = 0.02;
+            cam.zoom_anchor = None;
+            cam.follow(Some(Target::name("player")));
+            cam.smooth_zoom(1.0);
+        }
+        c.set_var("start_zoom_recover_ticks", intro_zoom_recover - 1);
+        return;
+    }
+
     let s = st.lock().unwrap();
     // Space mode and rocket ascent manage their own camera/zoom — don't interfere.
     if s.in_space_mode || s.space_launch_active { return; }

@@ -29,6 +29,7 @@ pub struct PoolSets {
     pub space_hook_free:   Vec<String>,
     pub space_coin_free:   Vec<String>,
     pub space_bh_free:     Vec<String>,
+    pub space_asteroid_free: Vec<String>,
 }
 pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Background images ────────────────────────────────────────────────
@@ -69,32 +70,28 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     bg_space.visible = false;
     bg_space.set_tint(Color(255, 255, 255, 0));
 
-    // ── Asteroid (top-right of space background) ─────────────────────────
+    // ── Energy hook reference display (top-right corner) ─────────────────
     const ASTEROID_W: f32 = 480.0;
     const ASTEROID_H: f32 = 480.0;
-    let asteroid_decoded = image::open(ASSET_ASTEROID)
-        .or_else(|_| image::open(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.png")));
-    let asteroid_img = if let Ok(decoded) = asteroid_decoded {
-        Image {
-            shape: ShapeType::Rectangle(0.0, (ASTEROID_W, ASTEROID_H), 0.0),
-            image: decoded.into_rgba8().into(),
-            color: None,
-        }
-    } else {
-        // Fallback keeps the game bootable if the external asset is malformed.
-        Image {
-            shape: ShapeType::Rectangle(0.0, (ASTEROID_W, ASTEROID_H), 0.0),
-            image: solid(120, 120, 132, 255).into(),
-            color: None,
-        }
-    };
     let mut asteroid = GameObject::new_rect(
         ctx, "asteroid".into(),
-        Some(asteroid_img),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (ASTEROID_W, ASTEROID_H), 0.0),
+            image: solid(0, 0, 0, 0).into(),
+            color: None,
+        }),
         (ASTEROID_W, ASTEROID_H),
         (VW - ASTEROID_W - 80.0, 80.0),
         vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
+    if let Ok(anim) = AnimatedSprite::new(
+        include_bytes!("../../../assets/energy_hook_1.gif"),
+        (ASTEROID_W, ASTEROID_H),
+        14.0,
+    ) {
+        asteroid.set_image(anim.get_current_image());
+        asteroid.set_animation(anim);
+    }
     asteroid.ignore_zoom = true;
 
     // ── Player — engine-native gravity ───────────────────────────────────
@@ -116,15 +113,16 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     player.gravity_all_sources = true;
     player.gravity_falloff = GravityFalloff::InverseSquare;
 
-    // Rope
+    // Rope visual is driven each tick in physics.rs (dynamic width-matched beam).
+    let rope_beam_h = ROPE_THICKNESS;
     let mut rope = GameObject::new_rect(
         ctx, "rope".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (4.0, 4.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (4.0, rope_beam_h), 0.0),
             image: solid(C_ROPE.0, C_ROPE.1, C_ROPE.2, 255).into(),
             color: None,
         }),
-        (4.0, 4.0), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        (4.0, rope_beam_h), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     rope.visible = false;
 
@@ -551,6 +549,44 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object(id, obj);
     }
 
+    // ── Main-world decorative asteroid pool ──────────────────────────────
+    let asteroid_space_img: image::RgbaImage = image::open(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.gif"))
+        .or_else(|_| image::open(ASSET_ASTEROID))
+        .map(|img| img.into_rgba8())
+        .unwrap_or_else(|_| solid(120, 120, 132, 255));
+    let asteroid_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/asteroid.gif"),
+        (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
+        14.0,
+    ).ok();
+    let mut space_asteroid_free: Vec<String> = Vec::new();
+    for i in 0..SPACE_ASTEROID_POOL_SIZE {
+        let id = format!("space_asteroid_{i}");
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN), 0.0),
+                image: asteroid_space_img.clone().into(),
+                color: None,
+            }),
+            (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
+            (-6300.0, -6300.0),
+            vec![],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        if let Some(anim) = &asteroid_anim_template {
+            obj.set_animation(anim.clone());
+        }
+        obj.collision_layer = ASTEROID_COLLISION_LAYER;
+        obj.collision_mask  = ASTEROID_COLLISION_LAYER;
+        obj.visible = false;
+        space_asteroid_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
     // ── Space HUD objects ─────────────────────────────────────────────────
     // Oxygen bar (replaces dist_bar while in space)
     let mut oxygen_bar_obj = GameObject::new_rect(
@@ -702,6 +738,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_hook_free,
         space_coin_free,
         space_bh_free,
+        space_asteroid_free,
     };
 
     (scene, pools)

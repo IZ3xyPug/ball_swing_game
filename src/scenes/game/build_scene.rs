@@ -129,6 +129,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_hook_free,
         space_coin_free,
         space_bh_free,
+        space_asteroid_free,
     } = pools;
 
     // Starter hook positions (must match bootstrap.rs).
@@ -189,6 +190,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("coin_sfx_index", 0);
             canvas.set_var("space_zoom_mode", 3);
             canvas.set_var("asteroid_hooks_on", true);
+            canvas.set_var("start_orbit_ticks", 0i32);
+            canvas.set_var("start_follow_force_ticks", 0i32);
+            canvas.set_var("start_zoom_recover_ticks", 0i32);
 
             // ── Background music (looped, switchable) ───────────────────
             if let Ok(mut slot) = bgm_handle_on_enter.lock() {
@@ -400,6 +404,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
 
                     if game_paused {
+                        // Check before clearing the var whether this is an orbit-launch.
+                        let is_orbit_launch = matches!(
+                            c.get_var("start_prompt_active"),
+                            Some(Value::Bool(true))
+                        );
                         c.resume();
                         c.set_var("pause_animating", false);
                         c.set_var("pause_anim_frames", 0);
@@ -441,6 +450,44 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             }
                         }
                         c.set_var("settings_open", false);
+
+                        // If launching from orbit start, give the ball its tangential velocity
+                        // and release the intro zoom so tick_zoom takes over naturally.
+                        if is_orbit_launch {
+                            let ticks = c.get_i32("start_orbit_ticks").max(0) as f32;
+                            const ORBIT_R: f32 = 240.0;
+                            const ORBIT_OMEGA: f32 = 0.038;
+                            let theta = -std::f32::consts::FRAC_PI_2 - ORBIT_OMEGA * ticks;
+                            // CCW visual in Y-down: vx = r*ω*sin(θ), vy = -r*ω*cos(θ)
+                            let vx = ORBIT_R * ORBIT_OMEGA * theta.sin();
+                            let vy = -(ORBIT_R * ORBIT_OMEGA * theta.cos());
+                            let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                            if let Some(state_arc) = state_opt {
+                                let mut s = state_arc.lock().unwrap();
+                                s.vx = vx;
+                                s.vy = vy;
+                                s.hooked = false;
+                                let gdir = s.gravity_dir;
+                                drop(s);
+                                if let Some(obj) = c.get_game_object_mut("player") {
+                                    obj.momentum = (vx, vy);
+                                    obj.gravity = GRAVITY * gdir;
+                                }
+                            }
+                            if let Some(obj) = c.get_game_object_mut("rope") {
+                                obj.visible = false;
+                            }
+                            // Release intro zoom anchor; tick_zoom will lerp back to normal.
+                            if let Some(cam) = c.camera_mut() {
+                                cam.zoom_anchor = None;
+                                cam.follow(Some(Target::name("player")));
+                                cam.snap_zoom(1.0);
+                            }
+                            // Force follow briefly to avoid any intro camera target desync.
+                            c.set_var("start_follow_force_ticks", 180i32);
+                            // Slow zoom recovery so the handoff feels smooth instead of abrupt.
+                            c.set_var("start_zoom_recover_ticks", 0i32);
+                        }
                     } else if is_pause {
                         let animating = matches!(
                             c.get_var("pause_animating"),
@@ -545,13 +592,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 .first()
                 .copied()
                 .unwrap_or((START_HOOK_X, START_HOOK_Y));
-            // Start the ball resting under-left of the first grab node,
-            // inside easy grab range with the rope already attached.
-            let start_px = (start_hook.0 - 240.0).clamp(PLAYER_R, VW * 80.0 - PLAYER_R);
-            let start_py = (start_hook.1 + 240.0).clamp(PLAYER_R, VH - PLAYER_R);
-            let start_rope_len = ((start_px - start_hook.0).powi(2)
-                + (start_py - start_hook.1).powi(2))
-            .sqrt();
+            // Ball starts in a counterclockwise orbit above the first grab node.
+            const ORBIT_R: f32 = 240.0;
+            const ORBIT_OMEGA: f32 = 0.038; // rad/frame, CCW visual (Y-down)
+            let start_px = start_hook.0;
+            let start_py = (start_hook.1 - ORBIT_R).clamp(PLAYER_R, VH - PLAYER_R);
+            let start_rope_len = ORBIT_R;
 
             let coin_spawn_anim = coin_anim_template.clone();
             let coin_spawn_image = coin_static_sprite.clone();
@@ -561,7 +607,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 py: start_py,
                 vx: 0.0,
                 vy: 0.0,
-                hooked: true,
+                hooked: false,
                 hook_x: start_hook.0,
                 hook_y: start_hook.1,
                 rope_len: start_rope_len,
@@ -679,6 +725,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_blackhole_rightmost: SPAWN_X,
                 space_blackhole_data:     Vec::new(),
 
+                space_asteroid_live:      Vec::new(),
+                space_asteroid_free:      space_asteroid_free.clone(),
+                space_asteroid_rightmost: SPAWN_X,
+
                 hud_last_oxygen:          u32::MAX,
             };
 
@@ -694,33 +744,41 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             let state =
                 persistent_state.lock().unwrap().as_ref().unwrap().clone();
 
-            // Start hooked to hook_0—highlight it.
-            if let Some(obj) = canvas.get_game_object_mut("hook_0") {
-                let (r, g, b) = hook_on_for_zone(0);
-                obj.set_image(hook_img(r, g, b));
-            }
             if let Some(obj) = canvas.get_game_object_mut("player") {
                 obj.position = (start_px - PLAYER_R, start_py - PLAYER_R);
                 obj.momentum = (0.0, 0.0);
                 obj.gravity = 0.0;
                 obj.visible = true;
             }
-            canvas.run(Action::Show {
-                target: Target::name("rope"),
-            });
             if let Some(rope_obj) = canvas.get_game_object_mut("rope") {
-                let rdx = start_px - start_hook.0;
-                let rdy = start_py - start_hook.1;
-                let rope_len = (rdx * rdx + rdy * rdy).sqrt().max(1.0);
-                let rope_ang = rdy.atan2(rdx).to_degrees();
-                let rope_mid_x = start_hook.0 + rdx * 0.5;
-                let rope_mid_y = start_hook.1 + rdy * 0.5;
-                rope_obj.size = (rope_len, ROPE_THICKNESS);
-                rope_obj.position = (rope_mid_x - rope_len * 0.5, rope_mid_y - ROPE_THICKNESS * 0.5);
-                rope_obj.rotation = rope_ang;
-                rope_obj.visible = true;
+                rope_obj.visible = false;
             }
-            canvas.set_var("rope_visible_at_pause", true);
+            canvas.set_var("rope_visible_at_pause", false);
+
+            // Reset starter hooks to their canonical positions — they may have
+            // been culled (hidden + moved off-screen) during a previous run.
+            for (i, &(hx, hy)) in starter_hooks.iter().enumerate() {
+                let id = format!("hook_{i}");
+                if let Some(obj) = canvas.get_game_object_mut(&id) {
+                    obj.position = (hx - HOOK_R, hy - HOOK_R);
+                    obj.visible = true;
+                    obj.momentum = (0.0, 0.0);
+                }
+            }
+
+            // Hide all asteroid objects from the previous run so they don't
+            // appear as ghosts before the new run's spawner places them.
+            for i in 0..SPACE_ASTEROID_POOL_SIZE {
+                let id = format!("space_asteroid_{i}");
+                if let Some(obj) = canvas.get_game_object_mut(&id) {
+                    obj.visible = false;
+                    obj.position = (-9800.0, -9800.0);
+                    obj.momentum = (0.0, 0.0);
+                    obj.rotation = 0.0;
+                    obj.rotation_momentum = 0.0;
+                    obj.gravity = 0.0;
+                }
+            }
 
             // Start paused with only tint + "hold space to begin".
             if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
@@ -741,14 +799,21 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 obj.visible = false;
             }
 
-            // Ensure startup pause shows the intended starfield + fading-blue
-            // gameplay background immediately (without waiting for update tick).
+            // Set background image AND apply the proper overscan/raise size so
+            // the background fills the screen correctly from the first frame.
             if let Some(obj) = canvas.get_game_object_mut("bg") {
                 obj.set_image(Image {
                     shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
                     image: bg_zone_start.clone().into(),
                     color: None,
                 });
+                const OVERSCAN: f32 = 200.0;
+                const BG_RAISE: f32 = 150.0;
+                let w = VW + OVERSCAN * 2.0;
+                let h = VH + BG_RAISE;
+                obj.size = (w, h);
+                obj.position = (-OVERSCAN, -BG_RAISE);
+                obj.update_image_shape();
                 obj.visible = true;
             }
             for name in ["pause_title", "pause_resume_btn", "pause_restart_btn", "pause_settings_btn", "pause_menu_btn"] {
@@ -766,6 +831,27 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 &coin_spawn_anim,
             );
 
+            // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
+            // and spawning has populated the full set of hooks visible at start.
+            {
+                let hooks = state.lock().unwrap().live_hooks.clone();
+                for hid in &hooks {
+                    if let Some(obj) = canvas.get_game_object_mut(hid) {
+                        if hid.as_str() == "hook_0" {
+                            obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Near));
+                        } else {
+                            obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Base));
+                        }
+                    }
+                }
+            }
+
+            // Snap intro zoom in on hook_0 for the title screen orbit animation.
+            if let Some(cam) = canvas.camera_mut() {
+                cam.snap_zoom(1.30);
+                cam.zoom_anchor = Some((start_hook.0, start_hook.1));
+            }
+
             canvas.set_var("start_prompt_active", true);
             canvas.set_var("game_paused", true);
             // Do not hard-pause the engine here: hard-pause skips
@@ -773,6 +859,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // the previous scene on screen. We gate gameplay with
             // `game_paused`/`start_prompt_active` instead.
             canvas.resume();
+
+            // ── Pre-warm rope texture cache (background thread) ──────────
+            physics::prewarm_rope_fx_cache();
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -1089,12 +1178,54 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             Some(Value::Bool(true))
                         )
                     {
+                        // ── Orbit animation while waiting for "hold space to begin" ──
+                        if matches!(c.get_var("start_prompt_active"), Some(Value::Bool(true))) {
+                            let ticks = c.get_i32("start_orbit_ticks").max(0) as f32;
+                            const ORBIT_R: f32 = 240.0;
+                            const ORBIT_OMEGA: f32 = 0.038;
+                            const INTRO_ZOOM: f32 = 1.30;
+                            // Start at top (-π/2) and sweep CCW visually (decreasing θ in Y-down)
+                            let theta = -std::f32::consts::FRAC_PI_2 - ORBIT_OMEGA * ticks;
+                            let (hx, hy) = {
+                                let s = st.lock().unwrap();
+                                (s.hook_x, s.hook_y)
+                            };
+                            let px = hx + ORBIT_R * theta.cos();
+                            let py = hy + ORBIT_R * theta.sin();
+                            {
+                                let mut s = st.lock().unwrap();
+                                s.px = px;
+                                s.py = py;
+                            }
+                            if let Some(obj) = c.get_game_object_mut("player") {
+                                obj.position = (px - PLAYER_R, py - PLAYER_R);
+                                obj.momentum = (0.0, 0.0);
+                                obj.gravity = 0.0;
+                            }
+                            // Maintain intro zoom anchored on hook_0.
+                            if let Some(cam) = c.camera_mut() {
+                                cam.zoom_lerp_speed = 0.06;
+                                cam.zoom_anchor = Some((hx, hy));
+                                cam.smooth_zoom(INTRO_ZOOM);
+                            }
+                            c.set_var("start_orbit_ticks", ticks as i32 + 1);
+                        }
                         if let Some(obj) =
                             c.get_game_object_mut("pause_overlay")
                         {
                             obj.position.0 = cam_x;
                         }
                         return;
+                    }
+
+                    // ── Intro follow recovery window ────────────────────
+                    let follow_force = c.get_i32("start_follow_force_ticks").max(0);
+                    if follow_force > 0 {
+                        if let Some(cam) = c.camera_mut() {
+                            cam.follow(Some(Target::name("player")));
+                            cam.lerp_speed = 0.10;
+                        }
+                        c.set_var("start_follow_force_ticks", follow_force - 1);
                     }
 
                     // ── Input (grab / release) ──────────────────────────

@@ -24,7 +24,7 @@ pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
 // ── Object sizes ──────────────────────────────────────────────────────────────
 pub const PLAYER_R:       f32 = 40.0;
 pub const HOOK_R:         f32 = 38.0;
-pub const ROPE_THICKNESS: f32 = 10.0;
+pub const ROPE_THICKNESS: f32 = 60.0;
 
 // ── Generation — General ──────────────────────────────────────────────────────
 
@@ -205,6 +205,13 @@ pub const COIN_ARRAY_Y_MIN:  f32 = -400.0;
 pub const COIN_ARRAY_Y_MAX:  f32 = 200.0;
 pub const COIN_SINGLE_Y_MIN: f32 = -750.0;
 pub const COIN_SINGLE_Y_MAX: f32 = 380.0;
+/// 3×3 grid coin pattern.
+pub const COIN_GRID_COLS:      usize = 3;
+pub const COIN_GRID_ROWS:      usize = 3;
+pub const COIN_GRID_SPACING_X: f32   = 120.0;
+pub const COIN_GRID_SPACING_Y: f32   = 120.0;
+/// Probability (0–1) that a coin spawn is a 3×3 grid.
+pub const COIN_GRID_CHANCE:    f32   = 0.30;
 /// Radius of the coin magnet pickup effect (px).
 pub const COIN_MAGNET_RADIUS:f32 = 180.0;
 pub const COIN_MAGNET_PULL:  f32 = 0.37;
@@ -442,12 +449,14 @@ pub const SPACE_PLANET_POOL_SIZE:    usize = 12;
 pub const SPACE_HOOK_POOL_SIZE:      usize = 64;
 pub const SPACE_COIN_POOL_SIZE:      usize = 40;
 pub const SPACE_BLACKHOLE_POOL_SIZE: usize = 8;
+pub const SPACE_ASTEROID_POOL_SIZE:  usize = 18;
 
 // Space object spawn budgets per tick
 pub const SPACE_PLANET_SPAWN_BUDGET:    usize = 1;
 pub const SPACE_HOOK_SPAWN_BUDGET:      usize = 3;  // one per Y-band per spawn tick
 pub const SPACE_COIN_SPAWN_BUDGET:      usize = 2;
 pub const SPACE_BLACKHOLE_SPAWN_BUDGET: usize = 1;
+pub const SPACE_ASTEROID_SPAWN_BUDGET:  usize = 1;
 
 // Space planet parameters
 pub const SPACE_PLANET_GAP_MIN:         f32 = 2400.0;
@@ -492,6 +501,20 @@ pub const SPACE_BLACKHOLE_RADIUS_MAX:    f32 = 200.0;
 pub const SPACE_BLACKHOLE_GRAV_STRENGTH: f32 = 0.7;
 pub const SPACE_BLACKHOLE_Y_MIN:         f32 = -(VH * 2.8);
 pub const SPACE_BLACKHOLE_Y_MAX:         f32 = -(VH * 0.55);
+
+// Decorative asteroid parameters (main gameplay area)
+pub const SPACE_ASTEROID_GAP_MIN:        f32 = 1300.0;
+pub const SPACE_ASTEROID_GAP_MAX:        f32 = 2800.0;
+// Small asteroids float near the hook zone; large ones drift higher.
+// Y is interpolated between these two bands based on normalised size.
+pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -450.0;  // small, closest to action
+pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -80.0;
+pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -2200.0; // large, highest (visible zoomed-out)
+pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -700.0;
+pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
+pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 420.0;
+/// Crystalline collision layer for asteroid-asteroid physics.
+pub const ASTEROID_COLLISION_LAYER: u32 = 1 << 8;
 
 // Camera behavior during space transition
 pub const SPACE_CAM_LERP_IN:    f32 = 0.048;  // slower lerp (dramatic ascent)

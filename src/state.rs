@@ -196,6 +196,10 @@ pub struct State {
     /// Per-black-hole gravity config: (id, gravity_radius, strength)
     pub space_blackhole_data:    Vec<(String, f32, f32)>,
 
+    pub space_asteroid_live:     Vec<String>,
+    pub space_asteroid_free:     Vec<String>,
+    pub space_asteroid_rightmost: f32,
+
     // HUD dirty for oxygen
     pub hud_last_oxygen:         u32,
 }

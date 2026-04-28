@@ -19,6 +19,7 @@ pub fn tick_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     cull_turrets(c, st);
     cull_bullets(c, st);
     cull_rocket_pads(c, st);
+    cull_main_asteroids(c, st);
     // Space zone culling is handled inside space_zone::tick_space_zone
 }
 
@@ -234,5 +235,25 @@ fn cull_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     s.rocket_pad_live.retain(|n| !to_remove.contains(n));
     for name in to_remove { s.rocket_pad_free.push(name); }
+}
+
+fn cull_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let cutoff = s.px - VW * 1.8;
+    let to_remove: Vec<String> = s.space_asteroid_live.iter()
+        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + o.size.0 < cutoff).unwrap_or(true))
+        .cloned().collect();
+
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible = false;
+            obj.position = (-9800.0, -9800.0);
+            obj.rotation = 0.0;
+            obj.rotation_momentum = 0.0;
+        }
+    }
+
+    s.space_asteroid_live.retain(|n| !to_remove.contains(n));
+    for name in to_remove { s.space_asteroid_free.push(name); }
 }
 

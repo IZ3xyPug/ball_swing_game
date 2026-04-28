@@ -46,6 +46,7 @@ pub fn tick_spawning(
         spawn_turrets(c, st);
     }
     spawn_rocket_pads(c, st);
+    spawn_main_asteroids(c, st);
 }
 
 fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -380,14 +381,33 @@ fn spawn_coins(
     {
         let gap = lcg_range(&mut s.seed, COIN_GAP_MIN, COIN_GAP_MAX);
         let desired_start_x = s.coin_rightmost + gap;
-        let spawn_array = s.coin_free.len() >= COIN_ARRAY_COUNT
-            && lcg(&mut s.seed) < COIN_ARRAY_CHANCE;
+        let roll = lcg(&mut s.seed);
+        let spawn_grid  = s.coin_free.len() >= COIN_GRID_COLS * COIN_GRID_ROWS
+            && roll < COIN_GRID_CHANCE;
+        let spawn_array = !spawn_grid
+            && s.coin_free.len() >= COIN_ARRAY_COUNT
+            && roll < COIN_GRID_CHANCE + COIN_ARRAY_CHANCE;
         let mut spawn_batch: Vec<(String, f32, f32, usize)> = Vec::new();
         let mut spawned_start_x = desired_start_x;
         let coin_anim_frames = coin_spawn_anim.as_ref().map(|a| a.frame_count().max(1)).unwrap_or(1);
         let array_phase_frame = (lcg(&mut s.seed) * coin_anim_frames as f32) as usize;
 
-        if spawn_array {
+        if spawn_grid {
+            let center_min = (COIN_ARRAY_Y_MIN + COIN_CURVE_RISE).min(COIN_ARRAY_Y_MAX);
+            let center_raw_y = lcg_range(&mut s.seed, center_min, COIN_ARRAY_Y_MAX);
+            let half_rows = (COIN_GRID_ROWS as f32 - 1.0) * 0.5;
+            'grid: for gr in 0..COIN_GRID_ROWS {
+                for gc in 0..COIN_GRID_COLS {
+                    let x = spawned_start_x + gc as f32 * COIN_GRID_SPACING_X;
+                    let row_offset = (gr as f32 - half_rows) * COIN_GRID_SPACING_Y;
+                    let raw_y = center_raw_y + row_offset;
+                    let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
+                    let Some(id) = s.coin_free.pop() else { break 'grid; };
+                    s.coin_live.push(id.clone());
+                    spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
+                }
+            }
+        } else if spawn_array {
             let mut best_anchor: Option<(f32, f32)> = None;
             let mut best_score = f32::INFINITY;
             let hook_ids = s.live_hooks.clone();
@@ -429,19 +449,20 @@ fn spawn_coins(
                 spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
             }
         } else {
-            let raw_y = lcg_range(&mut s.seed, COIN_SINGLE_Y_MIN, COIN_SINGLE_Y_MAX);
-            let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
-            let Some(id) = s.coin_free.pop() else { break; };
-            s.coin_live.push(id.clone());
-            spawn_batch.push((id, desired_start_x, y, array_phase_frame.min(coin_anim_frames - 1)));
+            // No pattern this slot — advance rightmost and continue.
+            s.coin_rightmost = desired_start_x;
+            batches += 1;
+            drop(s);
+            s = st.lock().unwrap();
+            continue;
         }
 
         if spawn_batch.is_empty() { break; }
 
-        s.coin_rightmost = if spawn_array {
-            spawned_start_x + (COIN_ARRAY_COUNT as f32 - 1.0) * COIN_ARRAY_SPACING
+        s.coin_rightmost = if spawn_grid {
+            spawned_start_x + (COIN_GRID_COLS as f32 - 1.0) * COIN_GRID_SPACING_X
         } else {
-            desired_start_x
+            spawned_start_x + (COIN_ARRAY_COUNT as f32 - 1.0) * COIN_ARRAY_SPACING
         };
         batches += 1;
         drop(s);
@@ -786,6 +807,68 @@ fn spawn_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
             s = st.lock().unwrap();
         }
+    }
+}
+
+fn spawn_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if s.in_space_mode { return; }
+
+    let mut spawned = 0usize;
+    while spawned < SPACE_ASTEROID_SPAWN_BUDGET
+        && !s.space_asteroid_free.is_empty()
+        && s.space_asteroid_rightmost < s.px + GEN_AHEAD
+    {
+        let gap = lcg_range(&mut s.seed, SPACE_ASTEROID_GAP_MIN, SPACE_ASTEROID_GAP_MAX);
+        let x = s.space_asteroid_rightmost + gap;
+        let size = lcg_range(&mut s.seed, SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MAX);
+
+        // Blend Y range by size: small → near hook zone, large → high up (visible zoomed out).
+        let size_t = (size - SPACE_ASTEROID_SIZE_MIN)
+            / (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        let y_min = SPACE_ASTEROID_Y_NEAR_MIN
+            + (SPACE_ASTEROID_Y_FAR_MIN - SPACE_ASTEROID_Y_NEAR_MIN) * size_t;
+        let y_max = SPACE_ASTEROID_Y_NEAR_MAX
+            + (SPACE_ASTEROID_Y_FAR_MAX - SPACE_ASTEROID_Y_NEAR_MAX) * size_t;
+        let y = lcg_range(&mut s.seed, y_min, y_max);
+
+        // Slightly stronger spin than before so rotation reads clearly in play.
+        let spin_mag = lcg_range(&mut s.seed, 0.45, 0.95);
+        let spin = if lcg(&mut s.seed) < 0.5 { -spin_mag } else { spin_mag };
+
+        let Some(id) = s.space_asteroid_free.pop() else { break; };
+        s.space_asteroid_live.push(id.clone());
+        s.space_asteroid_rightmost = x;
+        spawned += 1;
+        let drift = lcg_range(&mut s.seed, 1.2, 3.5);
+        drop(s);
+
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.position = (x - size * 0.5, y - size * 0.5);
+            obj.size = (size, size);
+            obj.visible = true;
+            obj.rotation_momentum = spin;
+            obj.momentum = (-drift, 0.0);
+            obj.gravity = 0.0;
+            // Dynamic asteroid mass: small asteroids are lighter, large are heavier.
+            // Wide range so large asteroids feel notably heavier than small ones.
+            let density = 0.3 + size_t * 6.0;
+            obj.material.density = density;
+            // Tighter circle collider to closely match the visible sprite shape.
+            let hit_r = size * 0.38;
+            obj.collision_mode = CollisionMode::Solid(CollisionShape::Circle { radius: hit_r });
+            obj.is_platform = false;
+            obj.collision_layer = ASTEROID_COLLISION_LAYER;
+            obj.collision_mask = ASTEROID_COLLISION_LAYER;
+            obj.update_image_shape();
+            if let Some(a) = obj.animated_sprite.as_mut() {
+                let frames = a.frame_count().max(1);
+                let phase = ((x * 0.003).abs() as usize) % frames;
+                a.set_frame(phase);
+            }
+        }
+
+        s = st.lock().unwrap();
     }
 }
 

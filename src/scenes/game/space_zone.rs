@@ -109,6 +109,7 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_hook_rightmost      = px - VW * 0.5;
         s.space_coin_rightmost      = px - VW * 0.5;
         s.space_blackhole_rightmost = px - VW * 2.0;
+        s.space_asteroid_rightmost  = px - VW * 0.5;
 
         // Freeze background scale for parallax starfield effect
         s.space_entry_bg_scale = 1.0; // will be refined below after drop
@@ -742,6 +743,7 @@ fn cull_all_space_objects(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_blackhole_free.push(n.clone());
     }
     s.space_blackhole_data.clear();
+
 }
 
 // ── Space coin collection ─────────────────────────────────────────────────────
