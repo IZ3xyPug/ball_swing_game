@@ -859,7 +859,7 @@ fn spawn_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.collision_mode = CollisionMode::Solid(CollisionShape::Circle { radius: hit_r });
             obj.is_platform = false;
             obj.collision_layer = ASTEROID_COLLISION_LAYER;
-            obj.collision_mask = ASTEROID_COLLISION_LAYER;
+            obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
             obj.update_image_shape();
             if let Some(a) = obj.animated_sprite.as_mut() {
                 let frames = a.frame_count().max(1);

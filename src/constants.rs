@@ -513,8 +513,9 @@ pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -2200.0; // large, highest (visib
 pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -700.0;
 pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
 pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 420.0;
-/// Crystalline collision layer for asteroid-asteroid physics.
+/// Crystalline collision layer bits.
 pub const ASTEROID_COLLISION_LAYER: u32 = 1 << 8;
+pub const PLAYER_COLLISION_LAYER:   u32 = 1 << 1; // matches collision_layers::PLAYER
 
 // Camera behavior during space transition
 pub const SPACE_CAM_LERP_IN:    f32 = 0.048;  // slower lerp (dramatic ascent)

@@ -112,6 +112,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // Opt into gravity well forces.
     player.gravity_all_sources = true;
     player.gravity_falloff = GravityFalloff::InverseSquare;
+    // Collide with asteroids as a solid circle body.
+    player.collision_mode  = CollisionMode::solid_circle(PLAYER_R);
+    player.collision_layer = PLAYER_COLLISION_LAYER;
+    player.collision_mask  = ASTEROID_COLLISION_LAYER;
 
     // Rope visual is driven each tick in physics.rs (dynamic width-matched beam).
     let rope_beam_h = ROPE_THICKNESS;
@@ -580,8 +584,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         if let Some(anim) = &asteroid_anim_template {
             obj.set_animation(anim.clone());
         }
+        obj.collision_mode  = CollisionMode::solid_circle(SPACE_ASTEROID_SIZE_MIN * 0.5);
         obj.collision_layer = ASTEROID_COLLISION_LAYER;
-        obj.collision_mask  = ASTEROID_COLLISION_LAYER;
+        obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
         obj.visible = false;
         space_asteroid_free.push(id.clone());
         scene = scene.with_object(id, obj);
