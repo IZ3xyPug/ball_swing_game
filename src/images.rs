@@ -916,6 +916,55 @@ pub fn space_coin_img_cached(radius: u32) -> Arc<image::RgbaImage> {
     img
 }
 
+/// Red arc-coin image: same star shape as space_coin_img but crimson/scarlet.
+pub fn red_coin_img(radius: u32) -> image::RgbaImage {
+    let d = radius * 2;
+    let mut img = image::RgbaImage::new(d, d);
+    let ctr = radius as f32;
+    let r = radius as f32;
+    let inner_r = r * 0.42;
+    let outer_r = r * 0.90;
+    let points = 6u32;
+
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 + 0.5 - ctr;
+            let dy = py as f32 + 0.5 - ctr;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > r { continue; }
+
+            let angle = dy.atan2(dx);
+            let sector = (angle / (std::f32::consts::TAU / points as f32)) * 2.0;
+            let frac = sector - sector.floor();
+            let star_r = inner_r + (outer_r - inner_r) * (1.0 - (frac - 0.5).abs() * 2.0);
+
+            if dist <= star_r {
+                let t = dist / star_r;
+                let luma = 1.0 - t * 0.50;
+                // Crimson-to-orange gradient
+                let cr = (255.0_f32 * luma).min(255.0) as u8;
+                let cg = ((55.0 + 40.0 * (1.0 - t)) * luma).min(255.0) as u8;
+                let cb = (20.0_f32 * luma).min(255.0) as u8;
+                img.put_pixel(px, py, image::Rgba([cr, cg, cb, 255]));
+            }
+        }
+    }
+    img
+}
+
+/// Cached red arc-coin image keyed by radius.
+pub fn red_coin_img_cached(radius: u32) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Mutex<HashMap<u32, Arc<image::RgbaImage>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap();
+    if let Some(cached) = guard.get(&radius) {
+        return cached.clone();
+    }
+    let img: Arc<image::RgbaImage> = red_coin_img(radius).into();
+    guard.insert(radius, img.clone());
+    img
+}
+
 /// Oxygen bar image. `fill` is 0.0 (empty) to 1.0 (full).
 /// Color blends green → yellow → red as fill decreases.
 pub fn oxygen_bar_img(fill: f32, w: u32, h: u32) -> image::RgbaImage {

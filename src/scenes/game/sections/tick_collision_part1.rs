@@ -20,7 +20,7 @@
 
                 // Apply only tangential gravity while hooked; allows full loops if fast enough.
                 tangent_v += GRAVITY * s.gravity_dir * ty;
-                tangent_v *= SWING_DRAG;
+                if !s.in_space_mode { tangent_v *= SWING_DRAG; }
                 s.vx = tx * tangent_v;
                 s.vy = ty * tangent_v;
 

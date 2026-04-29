@@ -13,6 +13,7 @@
 
 use quartz::*;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use crate::constants::*;
 use crate::images::*;
@@ -40,6 +41,24 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
                 if let Some(cam) = c.camera_mut() { cam.zoom_anchor = None; }
                 return;
             }
+            // Pre-warm solar gif decode the moment the rocket fires — gives the
+            // full ascent time (several seconds) for the thread to finish before
+            // the player arrives near the solar ceiling.
+            {
+                let already_loading = st.lock().unwrap().solar_anim_pending.is_some();
+                if !already_loading {
+                    let pending = Arc::new(Mutex::new(None::<AnimatedSprite>));
+                    st.lock().unwrap().solar_anim_pending = Some(Arc::clone(&pending));
+                    thread::spawn(move || {
+                        let solar_bytes: &[u8] = include_bytes!("../../../assets/solar_v8.gif");
+                        let load_w = VW / 4.0;
+                        let load_h = SPACE_SOLAR_H / 4.0;
+                        if let Ok(anim) = AnimatedSprite::new(solar_bytes, (load_w, load_h), SOLAR_ANIM_FPS) {
+                            *pending.lock().unwrap() = Some(anim);
+                        }
+                    });
+                }
+            }
             // Allow camera to track above y=0 (normally clamped by lerp_toward)
             if let Some(cam) = c.camera_mut() {
                 if cam.zoom_anchor.is_none() {
@@ -55,20 +74,55 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     }
 
     // ── Inside space zone ────────────────────────────────────────────────────
-    // No rotational drag: swing is perfectly elastic in space.
-    // The hook-grab event always attaches with damping=0.001; zero it each tick.
-    if st.lock().unwrap().hooked {
-        if let Some(g) = c.get_grapple_mut("player") { g.damping = 0.0; }
+    // In space there is no pendulum: zero downward gravity while hooked so the
+    // player swings at a constant rate. Restore space gravity when unhooked.
+    {
+        let (hooked, gdir) = { let s = st.lock().unwrap(); (s.hooked, s.gravity_dir) };
+        if hooked {
+            if let Some(g) = c.get_grapple_mut("player") { g.damping = 0.0; }
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.gravity = 0.0;                    // no pendulum: constant-rate swing
+                obj.gravity_target = None;            // no planet pull while on rope
+                obj.gravity_all_sources = false;      // disable ALL gravity sources while swinging
+            }
+        } else {
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.gravity = GRAVITY * SPACE_GRAVITY_SCALE * gdir;
+                obj.gravity_target = Some("space_planet".to_string()); // planet pull when free
+                obj.gravity_all_sources = false;      // only tagged "space_planet" planets pull
+            }
+        }
+    }
+
+    // ── Solar ceiling kill zone ───────────────────────────────────────────────
+    let py = st.lock().unwrap().py;
+    if py < SPACE_UPPER_LIMIT_Y + SPACE_SOLAR_H * 0.5 {
+        // Player has entered the lower half of the solar gif — sun-death.
+        c.set_var("died_to_sun", true);
+        if let Some(cam) = c.camera_mut() {
+            cam.flash_with(
+                Color(255, 200, 50, 255),
+                1.4,
+                FlashMode::FadeOut,
+                FlashEase::Smooth,
+                1.0,
+                0.3,
+            );
+        }
+        exit_space(c, st, true); // forced: no exit stasis, no return
+        return;
     }
 
     tick_space_camera(c, st);
+    tick_solar_pending(c, st);
+    tick_solar_screen_pos(c, st);
     tick_space_oxygen(c, st);
+    tick_space_gwells(c, st, frame);
     tick_space_spawning(c, st, frame);
     tick_space_culling(c, st);
     tick_space_coin_collect(c, st);
     tick_space_welcome_text(c, st);
     tick_space_planet_pulse(c, st, frame);
-    tick_space_settle(st);
 
     // Check return threshold: player drifted back below SPACE_RETURN_Y
     let py = st.lock().unwrap().py;
@@ -113,7 +167,12 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         // Freeze background scale for parallax starfield effect
         s.space_entry_bg_scale = 1.0; // will be refined below after drop
-
+        s.space_entry_px = s.px; // freeze X for return teleport
+        // Return any leftover spent coins from a prior visit to the free pool
+        let _sc: Vec<String> = s.space_coin_spent.drain(..).collect();
+        s.space_coin_free.extend(_sc);
+        let _src: Vec<String> = s.space_red_coin_spent.drain(..).collect();
+        s.space_red_coin_free.extend(_src);
         // Set near-zero gravity
         drop(s);
     }
@@ -128,15 +187,76 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let gdir = s.gravity_dir;
         let hooked = s.hooked;
         drop(s);
-        if !hooked {
-            if let Some(obj) = c.get_game_object_mut("player") {
-                obj.gravity = GRAVITY * SPACE_GRAVITY_SCALE * gdir;
-            }
+        if let Some(obj) = c.get_game_object_mut("player") {
+            if !hooked { obj.gravity = GRAVITY * SPACE_GRAVITY_SCALE * gdir; }
+            // Enable engine planet-gravity attraction toward "space_planet"-tagged objects
+            obj.gravity_target        = Some("space_planet".to_string());
+            obj.gravity_influence_mult = 3.0;  // field bounded to 3× planet_radius
+            obj.gravity_all_sources   = false; // only respond to space_planet gravity
         }
     }
 
-    // Guarantee a planet at entry so the player has an immediate gravity anchor.
-    spawn_catch_planet(c, st);
+    // Show solar ceiling. Kick off a background thread to decode the animation
+    // at 1/4 resolution the first time — 16× fewer pixels per frame than full
+    // VW, so it takes well under a second. The engine GPU-upscales the texture
+    // to full size; imperceptible for a background element. tick_solar_pending
+    // swaps the animation in the moment the thread finishes.
+    if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
+        if obj.animated_sprite.is_none() {
+            let already_loading = st.lock().unwrap().solar_anim_pending.is_some();
+            if !already_loading {
+                let pending = Arc::new(Mutex::new(None::<AnimatedSprite>));
+                st.lock().unwrap().solar_anim_pending = Some(Arc::clone(&pending));
+                thread::spawn(move || {
+                    let solar_bytes: &[u8] = include_bytes!("../../../assets/solar_v8.gif");
+                    let load_w = VW / 4.0;
+                    let load_h = SPACE_SOLAR_H / 4.0;
+                    use image::codecs::gif::GifDecoder;
+                    use image::AnimationDecoder;
+                    use image::{Rgba, imageops};
+                    let cursor = std::io::Cursor::new(solar_bytes);
+                    if let Ok(decoder) = GifDecoder::new(cursor) {
+                        // Decode all frames; skip any that error.
+                        let raw_frames: Vec<image::Frame> = decoder.into_frames()
+                            .filter_map(|r| r.ok())
+                            .collect();
+                        let frames: Vec<image::RgbaImage> = raw_frames.into_iter().map(|f| {
+                            let mut img: image::RgbaImage = f.into_buffer();
+                            // Key out near-black pixels — make transparent so the
+                            // starfield background shows through the dark GIF regions.
+                            for pixel in img.pixels_mut() {
+                                let Rgba([r, g, b, _a]) = *pixel;
+                                if (r as u32 + g as u32 + b as u32) < 60 {
+                                    *pixel = Rgba([0, 0, 0, 0]);
+                                }
+                            }
+                            // Downsample to 1/4 resolution for fast GPU upload.
+                            imageops::resize(
+                                &img,
+                                load_w as u32,
+                                load_h as u32,
+                                imageops::FilterType::Triangle,
+                            )
+                        }).collect();
+                        if !frames.is_empty() {
+                            let anim = AnimatedSprite::from_frames(
+                                frames, (load_w, load_h), SOLAR_ANIM_FPS,
+                            );
+                            *pending.lock().unwrap() = Some(anim);
+                            return; // keyed decode succeeded
+                        }
+                    }
+                    // Fallback: GIF decode failed or yielded no frames
+                    if let Ok(anim) = AnimatedSprite::new(
+                        solar_bytes, (load_w, load_h), SOLAR_ANIM_FPS,
+                    ) {
+                        *pending.lock().unwrap() = Some(anim);
+                    }
+                });
+            }
+        }
+        obj.visible = true;
+    }
 
     // Camera: disable auto Y lerp by setting a dummy zoom_anchor
     if let Some(cam) = c.camera_mut() {
@@ -184,6 +304,79 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Signal background module to switch to deep-space look
     c.set_var("in_space_mode", true);
+
+    // ── Entry stasis: orbit a nearby hook before the player has control ───────
+    // Pick a hook from the pool; place it just above entry, directly above player.
+    let stasis_hook = {
+        let mut s = st.lock().unwrap();
+        s.space_hook_free.pop()
+    };
+    if let Some(hook_id) = stasis_hook {
+        let (px, px_done) = {
+            let s = st.lock().unwrap();
+            (s.px, true)
+        };
+        // Place hook just above entry at a comfortable orbit depth
+        let hx = px;
+        let hy = SPACE_ENTRY_Y - STASIS_ORBIT_R * 2.5;
+
+        if let Some(obj) = c.get_game_object_mut(&hook_id) {
+            obj.position = (hx - HOOK_R, hy - HOOK_R);
+            obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+            obj.visible  = true;
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                image: asteroid_hook_image_cached(),
+                color: None,
+            });
+        }
+
+        {
+            let mut s = st.lock().unwrap();
+            s.space_hook_live.push(hook_id.clone());
+            if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
+            // Position player at orbit start (top of circle)
+            s.px = hx;
+            s.py = hy - STASIS_ORBIT_R;
+            s.vx = 0.0;
+            s.vy = 0.0;
+            // Stasis state
+            s.space_stasis_active   = true;
+            s.space_stasis_hook_id  = hook_id.clone();
+            s.space_stasis_is_entry = true;
+            s.space_settle_done     = true; // prevent old settle from firing
+            // Orbit center for build_scene orbit animation
+            s.hook_x = hx;
+            s.hook_y = hy;
+        }
+
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.position = (px - PLAYER_R, SPACE_ENTRY_Y - STASIS_ORBIT_R - PLAYER_R);
+            obj.momentum = (0.0, 0.0);
+            obj.gravity  = 0.0;
+        }
+
+        // Activate soft pause: game_paused + start_prompt_active (orbit animation)
+        c.set_var("game_paused", true);
+        c.set_var("start_prompt_active", true);
+        c.set_var("start_orbit_ticks", 0i32);
+        let _ = px_done;
+
+        // Update prompt text
+        if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+            let scale = c.virtual_scale();
+            if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
+                obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                    "HOLD SPACE TO EXPLORE",
+                    &font,
+                    52.0 * scale,
+                    Color(235, 245, 255, 255),
+                    1300.0 * scale,
+                )));
+                obj.visible = true;
+            }
+        }
+    }
 }
 
 // ── Entry catch planet ─────────────────────────────────────────────────────────
@@ -217,13 +410,15 @@ fn spawn_catch_planet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drop(s);
 
     let (pr, pg, pb) = C_SPACE_PLANET[color_idx % C_SPACE_PLANET.len()];
-    let img = planet_img_cached(visual_r, gravity_r, pr, pg, pb);
-    let d   = gravity_r * 2.0;
+    // Body-only image: visual_r for both params, no ring padding
+    let img = planet_img_cached(visual_r, visual_r, pr, pg, pb);
+    let d   = visual_r * 2.0;
     if let Some(obj) = c.get_game_object_mut(&id) {
-        obj.position      = (x - gravity_r, y - gravity_r);
+        obj.position      = (x - visual_r, y - visual_r);
         obj.size          = (d, d);
-        obj.planet_radius = Some(visual_r); // engine collision + gravity at visual surface
-        obj.visible       = true;
+        obj.planet_radius  = Some(visual_r); // engine gravity + landing snap
+        obj.collision_mode = CollisionMode::Solid(CollisionShape::Circle { radius: visual_r }); // solid surface at visual radius
+        obj.visible        = true;
         obj.set_image(Image {
             shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
             image: img,
@@ -251,7 +446,11 @@ fn spawn_catch_planet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (hx - HOOK_R, hy - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(hook_img(C_SPACE_HOOK.0, C_SPACE_HOOK.1, C_SPACE_HOOK.2));
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                image: asteroid_hook_image_cached(),
+                color: None,
+            });
         }
         s = st.lock().unwrap();
     }
@@ -262,6 +461,13 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
         let mut s = st.lock().unwrap();
         if !s.in_space_mode { return; }
         s.in_space_mode = false;
+        s.space_stasis_active = false;
+        s.space_gwell_timers.clear();
+    }
+
+    // Hide solar ceiling
+    if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
+        obj.visible = false;
     }
 
     // Hide all space objects and return them to pools
@@ -294,17 +500,21 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
     // Restore normal swing damping
     if let Some(g) = c.get_grapple_mut("player") { g.damping = 0.001; }
 
-    // Restore normal gravity
+    // Restore normal gravity; clear space-planet attraction, snap X to entry position
     {
         let s = st.lock().unwrap();
         let gdir = s.gravity_dir;
         let hooked = s.hooked;
+        let entry_px = s.space_entry_px;
         drop(s);
-        if !hooked {
-            if let Some(obj) = c.get_game_object_mut("player") {
-                obj.gravity = GRAVITY * gdir;
-            }
+        if let Some(obj) = c.get_game_object_mut("player") {
+            if !hooked { obj.gravity = GRAVITY * gdir; }
+            obj.gravity_target        = None;
+            obj.gravity_influence_mult = 3.0;
+            obj.gravity_all_sources   = true; // restore normal game gravity-well behavior
+            obj.position.0 = entry_px - PLAYER_R; // snap X to pre-space position
         }
+        st.lock().unwrap().px = entry_px;
     }
 
     // Apply a strong downward push to send player back to normal zone
@@ -331,9 +541,119 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
 
     c.set_var("in_space_mode", false);
     c.set_var("bg_force_refresh", true);
+
+    // ── Exit stasis: orbit a hook in normal space before player resumes ───────
+    // Only for voluntary returns (not forced oxygen/sun death).
+    if !forced {
+        // Use a hook from the normal pool placed in comfortable normal-world height.
+        let exit_hook = {
+            let mut s = st.lock().unwrap();
+            s.pool_free.pop()
+        };
+        if let Some(hook_id) = exit_hook {
+            let px = st.lock().unwrap().px;
+            let hx = px;
+            let hy = VH * 0.28; // well within normal play zone, near top third
+
+            if let Some(obj) = c.get_game_object_mut(&hook_id) {
+                obj.position = (hx - HOOK_R, hy - HOOK_R);
+                obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+                obj.visible  = true;
+            }
+
+            {
+                let mut s = st.lock().unwrap();
+                s.live_hooks.push(hook_id.clone());
+                // Position player at orbit top
+                s.px = hx;
+                s.py = hy - STASIS_ORBIT_R;
+                s.vx = 0.0;
+                s.vy = 0.0;
+                s.hooked = false;
+                // Stasis state
+                s.space_stasis_active   = true;
+                s.space_stasis_hook_id  = hook_id.clone();
+                s.space_stasis_is_entry = false;
+                // Orbit center for build_scene orbit animation
+                s.hook_x = hx;
+                s.hook_y = hy;
+            }
+
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.position = (px - PLAYER_R, hy - STASIS_ORBIT_R - PLAYER_R);
+                obj.momentum = (0.0, 0.0);
+                obj.gravity  = 0.0;
+            }
+            if let Some(obj) = c.get_game_object_mut("rope") {
+                obj.visible = false;
+            }
+
+            // Snap camera to normal zone, then activate stasis
+            if let Some(cam) = c.camera_mut() {
+                cam.zoom_anchor = Some((hx, hy));
+                cam.zoom_lerp_speed = 0.06;
+                cam.smooth_zoom(1.30);
+            }
+
+            c.set_var("game_paused", true);
+            c.set_var("start_prompt_active", true);
+            c.set_var("start_orbit_ticks", 0i32);
+
+            if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+                let scale = c.virtual_scale();
+                if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
+                    obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                        "HOLD SPACE TO CONTINUE",
+                        &font,
+                        52.0 * scale,
+                        Color(235, 245, 255, 255),
+                        1300.0 * scale,
+                    )));
+                    obj.visible = true;
+                }
+            }
+        }
+    }
 }
 
 // ── Camera ────────────────────────────────────────────────────────────────────
+
+/// Poll the solar ceiling async decode. When the background thread has finished
+/// decoding the AnimatedSprite, swap it onto the solar_ceiling object and clear
+/// the pending handle from state.
+fn tick_solar_pending(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Clone the Arc handle without holding the state lock during try_lock.
+    let pending_arc = st.lock().unwrap().solar_anim_pending.clone();
+    if let Some(arc) = pending_arc {
+        if let Ok(mut guard) = arc.try_lock() {
+            if let Some(anim) = guard.take() {
+                if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
+                    obj.size = (VW, SPACE_SOLAR_H);
+                    obj.set_animation(anim);
+                }
+                st.lock().unwrap().solar_anim_pending = None;
+            }
+        }
+    }
+}
+
+fn tick_solar_screen_pos(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Position the solar ceiling in screen space based on player proximity to
+    // the kill zone. t=0 → gif fully above screen (far away);
+    // t=1 → gif bottom at screen top (player at kill zone).
+    let py = st.lock().unwrap().py;
+    let kill_y = SPACE_UPPER_LIMIT_Y + SPACE_SOLAR_H * 0.5;
+    let dist_to_kill = (py - kill_y).max(0.0);
+    let t = (1.0 - dist_to_kill / (VH * 3.0)).clamp(0.0, 1.0);
+    let screen_y = -SPACE_SOLAR_H * (1.0 - t);
+    if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
+        obj.position = (0.0, screen_y);
+    }
+}
+
+pub(super) fn tick_space_camera_pub(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    tick_space_camera(c, st);
+}
 
 fn tick_space_camera(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let s = st.lock().unwrap();
@@ -363,6 +683,10 @@ fn tick_space_camera(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (oxygen, needs_return) = {
         let mut s = st.lock().unwrap();
+        // Don't drain oxygen during entry/exit stasis.
+        if s.space_stasis_active {
+            return;
+        }
         if s.space_oxygen > 0 {
             s.space_oxygen -= 1;
             (s.space_oxygen, false)
@@ -459,7 +783,9 @@ fn tick_space_spawning(c: &mut Canvas, st: &Arc<Mutex<State>>, _frame: u32) {
     spawn_space_hooks(c, st);
     spawn_space_planets(c, st);
     spawn_space_coins(c, st);
+    spawn_space_red_coins(c, st);
     spawn_space_blackholes(c, st);
+    spawn_space_asteroids(c, st);
 }
 
 fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -469,13 +795,20 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.space_hook_free.is_empty()
         && s.space_hook_rightmost < s.px + GEN_AHEAD
     {
-        let gap = lcg_range(&mut s.seed, SPACE_HOOK_GAP_MIN, SPACE_HOOK_GAP_MAX);
+        // 4 vertical bands; sun zone (band 3) uses tighter gaps for dense coverage.
+        let band = (lcg(&mut s.seed) * 4.0) as u32;
+        let gap = match band {
+            3 => lcg_range(&mut s.seed, SPACE_HOOK_SUN_GAP_MIN, SPACE_HOOK_SUN_GAP_MAX),
+            _ => lcg_range(&mut s.seed, SPACE_HOOK_GAP_MIN, SPACE_HOOK_GAP_MAX),
+        };
         let x   = s.space_hook_rightmost + gap;
-        // Distribute across 3 vertical bands so hooks exist everywhere in space.
-        let y = match (lcg(&mut s.seed) * 3.0) as u32 {
+        // Distribute across 4 vertical bands so hooks exist everywhere, with
+        // extra density near the solar ceiling where the player needs them most.
+        let y = match band {
             0 => lcg_range(&mut s.seed, SPACE_HOOK_Y_SHALLOW_MIN, SPACE_HOOK_Y_SHALLOW_MAX),
             1 => lcg_range(&mut s.seed, SPACE_HOOK_Y_MID_MIN,     SPACE_HOOK_Y_MID_MAX),
-            _ => lcg_range(&mut s.seed, SPACE_HOOK_Y_DEEP_MIN,    SPACE_HOOK_Y_DEEP_MAX),
+            2 => lcg_range(&mut s.seed, SPACE_HOOK_Y_DEEP_MIN,    SPACE_HOOK_Y_DEEP_MAX),
+            _ => lcg_range(&mut s.seed, SPACE_HOOK_SUN_ZONE_Y_MIN, SPACE_HOOK_SUN_ZONE_Y_MAX),
         };
         let Some(id) = s.space_hook_free.pop() else { break; };
         s.space_hook_live.push(id.clone());
@@ -487,7 +820,11 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (x - HOOK_R, y - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(hook_img(C_SPACE_HOOK.0, C_SPACE_HOOK.1, C_SPACE_HOOK.2));
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                image: asteroid_hook_image_cached(),
+                color: None,
+            });
         }
 
         s = st.lock().unwrap();
@@ -517,28 +854,123 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_planet_data.push((id.clone(), gravity_r, SPACE_PLANET_GRAV_STRENGTH));
         s.space_planet_rightmost = x;
         spawned += 1;
+
+        // Collect coin arc IDs (mix of normal and red) and nearby hook IDs
+        let arc_count = SPACE_COIN_ARC_COUNT;
+        let red_count = (arc_count as f32 * SPACE_COIN_ARC_RED_FRAC).floor() as usize;
+        let normal_count = arc_count - red_count;
+        let arc_coin_ids: Vec<(String, bool)> = {
+            let mut ids: Vec<(String, bool)> = Vec::new();
+            for _ in 0..normal_count {
+                if let Some(cid) = s.space_coin_free.pop() {
+                    ids.push((cid, false));
+                }
+            }
+            for _ in 0..red_count {
+                if let Some(cid) = s.space_red_coin_free.pop() {
+                    ids.push((cid, true));
+                }
+            }
+            ids
+        };
+        let hook_ids: Vec<String> = (0..SPACE_PLANET_NEARBY_HOOKS)
+            .filter_map(|_| s.space_hook_free.pop())
+            .collect();
         drop(s);
 
-        // Rebuild planet at new position and size
+        // Rebuild planet
         let (pr, pg, pb) = C_SPACE_PLANET[color_idx % C_SPACE_PLANET.len()];
-        let img = planet_img_cached(visual_r, gravity_r, pr, pg, pb);
-        let d   = gravity_r * 2.0;
+        // Body-only image: visual_r for both params, no ring padding
+        let img = planet_img_cached(visual_r, visual_r, pr, pg, pb);
+        let d   = visual_r * 2.0;
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position     = (x - gravity_r, y - gravity_r);
-            obj.size         = (d, d);
-            // Engine handles surface collision + slide at visual_r.
-            // gravity_influence_mult (default 3×) extends the field beyond visual_r.
-            obj.planet_radius = Some(visual_r);
-            obj.visible      = true;
+            obj.position      = (x - visual_r, y - visual_r);
+            obj.size          = (d, d);
+            obj.planet_radius  = Some(visual_r);
+            obj.collision_mode = CollisionMode::Solid(CollisionShape::Circle { radius: visual_r }); // match current visual size
+            obj.visible        = true;
             obj.set_image(Image {
                 shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
                 image: img,
                 color: None,
             });
-            obj.set_glow(GlowConfig {
-                color: Color(pr, pg, pb, 55),
-                width: 18.0,
-            });
+            obj.set_glow(GlowConfig { color: Color(pr, pg, pb, 55), width: 18.0 });
+        }
+
+        // Place coin arc around planet
+        let arc_r = visual_r * SPACE_COIN_ARC_RADIUS_MULT;
+        let n_arc = arc_coin_ids.len();
+        let step = if n_arc > 0 { std::f32::consts::TAU / n_arc as f32 } else { 0.0 };
+        let phase_offset: f32 = std::f32::consts::FRAC_PI_2; // start at top
+        for (i, (cid, is_red)) in arc_coin_ids.iter().enumerate() {
+            let theta = phase_offset + step * i as f32;
+            let cx = x + arc_r * theta.cos();
+            let cy = y + arc_r * theta.sin();
+            if *is_red {
+                if let Some(obj) = c.get_game_object_mut(cid) {
+                    obj.position = (cx - SPACE_RED_COIN_R, cy - SPACE_RED_COIN_R);
+                    obj.size     = (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
+                    obj.visible  = true;
+                    obj.set_image(Image {
+                        shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
+                        image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
+                        color: None,
+                    });
+                    obj.set_glow(GlowConfig { color: Color(255, 60, 20, 160), width: 18.0 });
+                }
+            } else {
+                if let Some(obj) = c.get_game_object_mut(cid) {
+                    obj.position = (cx - SPACE_COIN_R, cy - SPACE_COIN_R);
+                    obj.size     = (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0);
+                    obj.visible  = true;
+                    obj.set_image(Image {
+                        shape: ShapeType::Ellipse(0.0, (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0), 0.0),
+                        image: space_coin_img_cached(SPACE_COIN_R as u32),
+                        color: None,
+                    });
+                    obj.set_glow(GlowConfig { color: Color(C_SPACE_COIN.0, C_SPACE_COIN.1, 60, 140), width: 14.0 });
+                }
+            }
+        }
+        // Register arc coins
+        {
+            let mut s = st.lock().unwrap();
+            for (cid, is_red) in arc_coin_ids {
+                if is_red {
+                    s.space_red_coin_live.push(cid);
+                } else {
+                    s.space_coin_live.push(cid);
+                    if s.space_coin_rightmost < x { s.space_coin_rightmost = x; }
+                }
+            }
+        }
+
+        // Place hooks at cardinal offsets from planet
+        let offsets: &[(f32, f32)] = &[
+            (-(visual_r + SPACE_PLANET_HOOK_OFFSET), 0.0),
+            ( visual_r + SPACE_PLANET_HOOK_OFFSET,  0.0),
+            (0.0, -(visual_r + SPACE_PLANET_HOOK_OFFSET)),
+        ];
+        {
+            let mut s = st.lock().unwrap();
+            for (hook_id, &(ox, oy)) in hook_ids.iter().zip(offsets.iter()) {
+                let hx = x + ox;
+                let hy = y + oy;
+                s.space_hook_live.push(hook_id.clone());
+                if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
+                drop(s);
+                if let Some(obj) = c.get_game_object_mut(hook_id) {
+                    obj.position = (hx - HOOK_R, hy - HOOK_R);
+                    obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+                    obj.visible  = true;
+                    obj.set_image(Image {
+                        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                        image: asteroid_hook_image_cached(),
+                        color: None,
+                    });
+                }
+                s = st.lock().unwrap();
+            }
         }
 
         s = st.lock().unwrap();
@@ -596,24 +1028,197 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_blackhole_live.push(id.clone());
         s.space_blackhole_data.push((id.clone(), radius, SPACE_BLACKHOLE_GRAV_STRENGTH));
         s.space_blackhole_rightmost = x;
+        // Start gwell active with a random remaining time so they don't all sync
+        let initial_ticks = (lcg(&mut s.seed) * GWELL_ON_TICKS as f32) as u32 + 1;
+        s.space_gwell_timers.push((id.clone(), initial_ticks, true));
+        spawned += 1;
+
+        let hook_ids: Vec<String> = (0..SPACE_GWELL_NEARBY_HOOKS)
+            .filter_map(|_| s.space_hook_free.pop())
+            .collect();
+        drop(s);
+
+        // Use gravity well ring visual (semi-transparent, visible but subtle)
+        let visual_r = radius * 3.0; // display rings at 3× gravity radius
+        let d = visual_r * 2.0;
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.position      = (x - visual_r, y - visual_r);
+            obj.size          = (d, d);
+            obj.planet_radius = Some(radius); // starts active
+            obj.visible       = true;
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                image: gwell_ring_cached(visual_r, C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, GWELL_RING_COUNT, 200.0),
+                color: None,
+            });
+            obj.set_glow(GlowConfig {
+                color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 160),
+                width: 12.0,
+            });
+        }
+
+        // Place nearby hooks so the player can escape the gravity pull
+        let hook_offsets: &[(f32, f32)] = &[
+            (-(visual_r + SPACE_GWELL_HOOK_OFFSET), 0.0),
+            ( visual_r + SPACE_GWELL_HOOK_OFFSET,   0.0),
+        ];
+        {
+            let mut s = st.lock().unwrap();
+            for (hook_id, &(ox, oy)) in hook_ids.iter().zip(hook_offsets.iter()) {
+                let hx = x + ox;
+                let hy = y + oy;
+                s.space_hook_live.push(hook_id.clone());
+                if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
+                drop(s);
+                if let Some(obj) = c.get_game_object_mut(hook_id) {
+                    obj.position = (hx - HOOK_R, hy - HOOK_R);
+                    obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+                    obj.visible  = true;
+                    obj.set_image(Image {
+                        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                        image: asteroid_hook_image_cached(),
+                        color: None,
+                    });
+                }
+                s = st.lock().unwrap();
+            }
+        }
+
+        s = st.lock().unwrap();
+    }
+}
+
+// ── Gravity well tick (space zone) ───────────────────────────────────────────
+
+fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
+    let mut s = st.lock().unwrap();
+    let mut toggle_ids: Vec<(String, bool)> = Vec::new();
+
+    for (id, remaining, active) in s.space_gwell_timers.iter_mut() {
+        if *remaining > 0 { *remaining -= 1; }
+        if *remaining == 0 {
+            *active = !*active;
+            *remaining = if *active { GWELL_ON_TICKS } else { GWELL_OFF_TICKS };
+            toggle_ids.push((id.clone(), *active));
+        }
+    }
+
+    let timers = s.space_gwell_timers.clone();
+    drop(s);
+
+    for (id, now_active) in &toggle_ids {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            let visual_r = obj.size.0 * 0.5;
+            let d = visual_r * 2.0;
+            if *now_active {
+                obj.planet_radius = Some(obj.planet_radius.unwrap_or(SPACE_BLACKHOLE_RADIUS_MIN));
+                obj.set_image(Image {
+                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                    image: gwell_ring_cached(visual_r, C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, GWELL_RING_COUNT, 200.0),
+                    color: None,
+                });
+                obj.set_glow(GlowConfig { color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 200), width: 14.0 });
+            } else {
+                obj.planet_radius = None;
+                obj.set_image(Image {
+                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                    image: gwell_ring_cached(visual_r, C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, GWELL_RING_COUNT, 80.0),
+                    color: None,
+                });
+                obj.set_glow(GlowConfig { color: Color(C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, 60), width: 6.0 });
+            }
+        }
+    }
+
+    // Pulse active wells
+    for (id, _, active) in &timers {
+        if !active { continue; }
+        if let Some(obj) = c.get_game_object_mut(id) {
+            let t = frame as f32 * GWELL_PULSE_SPEED;
+            let pulse = GWELL_PULSE_MIN + (1.0 - GWELL_PULSE_MIN) * ((t.sin() + 1.0) * 0.5);
+            obj.set_glow(GlowConfig {
+                color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, (200.0 * pulse) as u8),
+                width: 14.0 * pulse,
+            });
+        }
+    }
+}
+
+// ── Spawn: space asteroids ────────────────────────────────────────────────────
+
+fn spawn_space_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let mut spawned = 0usize;
+    while spawned < SPACE_ASTEROID_SPAWN_BUDGET
+        && !s.space_asteroid_free.is_empty()
+        && s.space_asteroid_rightmost < s.px + GEN_AHEAD
+    {
+        let gap   = lcg_range(&mut s.seed, SPACE_ASTEROID_GAP_MIN, SPACE_ASTEROID_GAP_MAX);
+        let x     = s.space_asteroid_rightmost + gap;
+        let large = lcg(&mut s.seed) < 0.4;
+        let y     = if large {
+            lcg_range(&mut s.seed, SPACE_ASTEROID_Y_FAR_MIN, SPACE_ASTEROID_Y_FAR_MAX)
+        } else {
+            lcg_range(&mut s.seed, SPACE_ASTEROID_Y_NEAR_MIN, SPACE_ASTEROID_Y_NEAR_MAX)
+        };
+        let size  = lcg_range(&mut s.seed, SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MAX);
+        let drift_vx = lcg_range(&mut s.seed, SPACE_ASTEROID_VX_MIN, SPACE_ASTEROID_VX_MAX);
+        let drift_vy = lcg_range(&mut s.seed, SPACE_ASTEROID_VY_MIN, SPACE_ASTEROID_VY_MAX);
+        let rot_mom  = (lcg(&mut s.seed) - 0.5) * 0.02; // gentle spin
+
+        let Some(id) = s.space_asteroid_free.pop() else { break; };
+        s.space_asteroid_live.push(id.clone());
+        s.space_asteroid_rightmost = x;
         spawned += 1;
         drop(s);
 
-        let img = black_hole_img_cached(radius);
-        let d   = radius * 2.0;
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position     = (x - radius, y - radius);
-            obj.size         = (d, d);
-            obj.planet_radius = Some(radius);
-            obj.visible      = true;
+            obj.position          = (x, y);
+            obj.size              = (size, size);
+            obj.momentum          = (drift_vx, drift_vy);
+            obj.rotation_momentum = rot_mom;
+            obj.gravity           = 0.0;
+            obj.visible           = true;
+            // Image already loaded in bootstrap; just resize the shape on the existing image.
             obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                image: img,
+                shape: ShapeType::Rectangle(0.0, (size, size), 0.0),
+                image: asteroid_hook_image_cached(),
                 color: None,
             });
         }
 
         s = st.lock().unwrap();
+    }
+}
+
+// ── Spawn: isolated space red coins ──────────────────────────────────────────
+
+fn spawn_space_red_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    // Only spawn isolated red coins if no recent planet spawned them.
+    // We gate on a low probability roll per tick to keep them rare.
+    // Actual heavy red-coin spawn happens in spawn_space_planets (coin arcs).
+    // Here we add the occasional lonely red coin in open space.
+    let roll = lcg(&mut s.seed);
+    if roll > 0.004 { return; } // ~0.4% per tick = one every ~25 sec at 60fps
+
+    let Some(id) = s.space_red_coin_free.pop() else { return; };
+
+    let x = s.px + GEN_AHEAD * (0.6 + lcg(&mut s.seed) * 0.4);
+    let y = lcg_range(&mut s.seed, SPACE_PLANET_Y_MIN, SPACE_PLANET_Y_MAX);
+    s.space_red_coin_live.push(id.clone());
+    drop(s);
+
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.position = (x - SPACE_RED_COIN_R, y - SPACE_RED_COIN_R);
+        obj.size     = (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
+        obj.visible  = true;
+        obj.set_image(Image {
+            shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
+            image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
+            color: None,
+        });
+        obj.set_glow(GlowConfig { color: Color(255, 60, 20, 160), width: 18.0 });
     }
 }
 
@@ -623,7 +1228,9 @@ fn tick_space_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     cull_space_hooks(c, st);
     cull_space_planets(c, st);
     cull_space_coins(c, st);
+    cull_space_red_coins(c, st);
     cull_space_blackholes(c, st);
+    cull_space_asteroids(c, st);
 }
 
 fn cull_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -703,7 +1310,45 @@ fn cull_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     s.space_blackhole_live.retain(|n| !to_remove.contains(n));
     s.space_blackhole_data.retain(|(n, _, _)| !to_remove.contains(n));
+    s.space_gwell_timers.retain(|(id, _, _)| !to_remove.contains(id));
     for name in to_remove { s.space_blackhole_free.push(name); }
+}
+
+fn cull_space_red_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let cutoff = s.px - VW * 1.5;
+    let to_remove: Vec<String> = s.space_red_coin_live.iter()
+        .filter(|n| c.get_game_object(n)
+            .map(|o| o.position.0 + SPACE_RED_COIN_R * 2.0 < cutoff)
+            .unwrap_or(true))
+        .cloned().collect();
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible   = false;
+            obj.position  = (-9500.0, -9500.0);
+        }
+    }
+    s.space_red_coin_live.retain(|n| !to_remove.contains(n));
+    for name in to_remove { s.space_red_coin_free.push(name); }
+}
+
+fn cull_space_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let cutoff = s.px - VW * 2.0;
+    let to_remove: Vec<String> = s.space_asteroid_live.iter()
+        .filter(|n| c.get_game_object(n)
+            .map(|o| o.position.0 + o.size.0 < cutoff)
+            .unwrap_or(true))
+        .cloned().collect();
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible  = false;
+            obj.momentum = (0.0, 0.0);
+            obj.position = (-12000.0, -12000.0);
+        }
+    }
+    s.space_asteroid_live.retain(|n| !to_remove.contains(n));
+    for name in to_remove { s.space_asteroid_free.push(name); }
 }
 
 /// Return ALL space objects to their free pools and hide them. Used on exit.
@@ -743,7 +1388,28 @@ fn cull_all_space_objects(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_blackhole_free.push(n.clone());
     }
     s.space_blackhole_data.clear();
+    s.space_gwell_timers.clear();
 
+    let red_coins: Vec<String> = s.space_red_coin_live.drain(..).collect();
+    for n in &red_coins {
+        if let Some(obj) = c.get_game_object_mut(n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
+        s.space_red_coin_free.push(n.clone());
+    }
+
+    let asteroids: Vec<String> = s.space_asteroid_live.drain(..).collect();
+    for n in &asteroids {
+        if let Some(obj) = c.get_game_object_mut(n) {
+            obj.visible  = false;
+            obj.momentum = (0.0, 0.0);
+            obj.position = (-12000.0, -12000.0);
+        }
+        s.space_asteroid_free.push(n.clone());
+    }
+    // Return spent coins to free pool (can respawn on next space visit)
+    let spent: Vec<String> = s.space_coin_spent.drain(..).collect();
+    for n in spent { s.space_coin_free.push(n); }
+    let spent_red: Vec<String> = s.space_red_coin_spent.drain(..).collect();
+    for n in spent_red { s.space_red_coin_free.push(n); }
 }
 
 // ── Space coin collection ─────────────────────────────────────────────────────
@@ -770,7 +1436,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for name in &collected {
         s.score = s.score.saturating_add(SPACE_COIN_SCORE * score_mult);
         s.space_coin_live.retain(|n| n != name);
-        s.space_coin_free.push(name.clone());
+        s.space_coin_spent.push(name.clone()); // won't respawn until next space entry
     }
     drop(s);
 
@@ -790,5 +1456,46 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             crate::constants::ASSET_COIN_SFX_2,
             SoundOptions::new().volume(0.28),
         );
+    }
+
+    // ── Red coin collection ───────────────────────────────────────────────────
+    {
+        let mut s = st.lock().unwrap();
+        let collect_r = PLAYER_R + SPACE_RED_COIN_R + 10.0;
+        let live = s.space_red_coin_live.clone();
+        let mut red_collected: Vec<String> = Vec::new();
+        for name in &live {
+            if let Some(obj) = c.get_game_object(name) {
+                let cx = obj.position.0 + SPACE_RED_COIN_R;
+                let cy = obj.position.1 + SPACE_RED_COIN_R;
+                let dx = s.px - cx;
+                let dy = s.py - cy;
+                if dx * dx + dy * dy < collect_r * collect_r {
+                    red_collected.push(name.clone());
+                }
+            }
+        }
+        let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+        for name in &red_collected {
+            s.score = s.score.saturating_add(SPACE_RED_COIN_SCORE * score_mult);
+            s.space_red_coin_live.retain(|n| n != name);
+            s.space_red_coin_spent.push(name.clone()); // won't respawn until next space entry
+        }
+        drop(s);
+        for name in &red_collected {
+            if let Some(obj) = c.get_game_object_mut(name) {
+                obj.visible = false;
+                obj.position = (-9500.0, -9500.0);
+            }
+            if let Some(cam) = c.camera_mut() {
+                cam.flash_with(Color(255, 80, 20, 100), 0.3, FlashMode::Pulse, FlashEase::Sharp, 0.9, 0.0);
+            }
+        }
+        if !red_collected.is_empty() {
+            c.play_sound_with(
+                crate::constants::ASSET_COIN_SFX_2,
+                SoundOptions::new().volume(0.45),
+            );
+        }
     }
 }

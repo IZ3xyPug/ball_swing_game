@@ -30,6 +30,7 @@ pub struct PoolSets {
     pub space_coin_free:   Vec<String>,
     pub space_bh_free:     Vec<String>,
     pub space_asteroid_free: Vec<String>,
+    pub space_red_coin_free: Vec<String>,
 }
 pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Background images ────────────────────────────────────────────────
@@ -582,9 +583,43 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         }
         obj.collision_layer = ASTEROID_COLLISION_LAYER;
         obj.collision_mask  = ASTEROID_COLLISION_LAYER;
+        // Low density so asteroids float aside on contact rather than slamming back.
+        obj.material = PhysicsMaterial { elasticity: 0.2, friction: 0.3, density: 0.15 };
         obj.visible = false;
         space_asteroid_free.push(id.clone());
         scene = scene.with_object(id, obj);
+    }
+
+    // ── Space red-coin pool ───────────────────────────────────────────────
+    let mut space_red_coin_free: Vec<String> = Vec::new();
+    for i in 0..SPACE_RED_COIN_POOL_SIZE {
+        let id = format!("space_red_coin_{i}");
+        let mut obj = make_coin(ctx, &id, -6500.0, -6500.0);
+        obj.set_image(Image {
+            shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
+            image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
+            color: None,
+        });
+        obj.visible = false;
+        space_red_coin_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Solar ceiling ─────────────────────────────────────────────────────
+    // Placeholder object only — AnimatedSprite is decoded lazily on first
+    // enter_space() to avoid a multi-second freeze at game startup.
+    {
+        let mut solar_ceiling = GameObject::new_rect(
+            ctx, "solar_ceiling".into(),
+            None::<Image>,  // no image at startup — set on first space entry
+            (VW, SPACE_SOLAR_H),
+            (0.0, -SPACE_SOLAR_H),  // starts above screen; tick_solar_screen_pos moves it
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        solar_ceiling.visible     = false;
+        solar_ceiling.layer       = 1;
+        solar_ceiling.ignore_zoom = true; // screen-space: slides in from top as player approaches
+        scene = scene.with_object("solar_ceiling", solar_ceiling);
     }
 
     // ── Space HUD objects ─────────────────────────────────────────────────
@@ -739,6 +774,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_coin_free,
         space_bh_free,
         space_asteroid_free,
+        space_red_coin_free,
     };
 
     (scene, pools)
