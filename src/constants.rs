@@ -106,8 +106,8 @@ pub const PAD_POOL_SIZE:  usize = 32;
 pub const PAD_GAP_MIN:    f32 = 5000.0;
 pub const PAD_GAP_MAX:    f32 = 9000.0;
 
-pub const PAD_W:          f32 = 750.0;
-pub const PAD_H:          f32 = 125.0;
+pub const PAD_W:          f32 = 775.0;
+pub const PAD_H:          f32 = 350.0;
 
 /// How close (px) in X a pad must be to a hook before the Y floor is applied.
 pub const PAD_HOOK_NEAR_X:      f32 = 2200.0;
@@ -120,11 +120,8 @@ pub const PAD_BELOW_HOOK_Y_GAP: f32 = 400.0;
 /// Set to HOOK_Y_MAX + N to keep pads visually below all grab points.
 pub const PAD_Y_MIN: f32 = HOOK_Y_MAX + 150.0; // ≈ 1200.0
 
-/// Bounce physics — how the ball launches upward off a pad.
-pub const PAD_BOUNCE_VY_START:  f32 = -46.0;
-pub const PAD_BOUNCE_VERTICAL_BOOST: f32 = 1.15;
-pub const PAD_BOUNCE_DECAY:     f32 = 0.20;
-pub const PAD_BOUNCE_MIN_FACTOR:f32 = 0.30;
+/// Fixed upward velocity applied when the player hits a bounce pad.
+pub const PAD_BOUNCE_VY: f32 = -52.0;
 
 /// How far a moving pad travels from its origin (px). 0 = static.
 pub const PAD_MOVE_RANGE: f32 = 250.0;
@@ -132,7 +129,9 @@ pub const PAD_MOVE_RANGE: f32 = 250.0;
 pub const PAD_MOVE_SPEED: f32 = 3.0;
 
 pub fn pad_corner_radius() -> f32 {
-	(PAD_H * 0.48).clamp(1.0, PAD_H * 0.5 - 1.0)
+    // Tuned to the current bounce-pad art profile (rounded_rectangle + 9-slice).
+    // At PAD_H=350 this yields ~89px, matching the rendered corner silhouette.
+    (PAD_H * 0.254).clamp(1.0, PAD_H * 0.5 - 1.0)
 }
 
 // ── Generation — Spinners ─────────────────────────────────────────────────────
@@ -523,8 +522,17 @@ pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -2200.0; // large, highest (visib
 pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -700.0;
 pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
 pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 420.0;
-/// Crystalline collision layer for asteroid-asteroid physics.
+/// Crystalline collision layer bits.
 pub const ASTEROID_COLLISION_LAYER: u32 = 1 << 8;
+pub const PLAYER_COLLISION_LAYER:   u32 = 1 << 1; // matches collision_layers::PLAYER
+
+// ── Spawn-build animation ─────────────────────────────────────────────────────
+/// Duration of the drop-in animation (frames).
+pub const SPAWN_ANIM_TICKS: u32 = 150;
+/// How far above target the object starts (virtual pixels).
+/// ~VH/3.5 — places the start near the top of the camera view so the
+/// full drop is visible rather than happening off-screen above the player.
+pub const SPAWN_ANIM_DROP:  f32 = 600.0;
 
 // Camera behavior during space transition
 pub const SPACE_CAM_LERP_IN:    f32 = 0.048;  // slower lerp (dramatic ascent)

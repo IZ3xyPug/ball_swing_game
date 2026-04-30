@@ -124,6 +124,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template: _,
+        tech_bounce_static_img,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,
@@ -643,7 +644,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 pad_free: pad_free.clone(),
                 pad_rightmost: SPAWN_X,
                 pad_origins: Vec::new(),
-                pad_bounce_count: 0,
                 spinner_live: Vec::new(),
                 spinner_free: spinner_free.clone(),
                 spinner_rightmost: SPAWN_X + VW * 0.65,
@@ -682,11 +682,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 turret_timers: Vec::new(),
                 bullet_live: Vec::new(),
                 bullet_free: bullet_free.clone(),
-                // Temporarily disable bounce pads.
-                bounce_enabled: true,
                 dark_mode: false,
                 god_mode: false,
                 glow_flashes: Vec::new(),
+                spawn_animations: Vec::new(),
 
                 hud_last_dist_fill:    u32::MAX,
                 hud_last_coins:        u32::MAX,
@@ -853,6 +852,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 &state,
                 &coin_spawn_image,
                 &coin_spawn_anim,
+                &tech_bounce_static_img,
             );
 
             // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
@@ -894,6 +894,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             physics::prewarm_rope_fx_cache();
             // Pre-warm solar GIF decode so corona is ready before space approach.
             super::space_zone::prewarm_solar_decode(&state);
+
+            // ── Pre-warm asteroid hook image cache (background thread) ───
+            // Builds all 9 variants (3 buckets × 3 states) off the main thread
+            // so the first frame of gameplay doesn't stall on disk I/O + resize.
+            std::thread::spawn(|| { hook_asteroid_img_for_id("hook_0", AsteroidHookState::Base); });
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -1179,6 +1184,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     shield.rotation = dy.atan2(dx).to_degrees();
                     shield.visible = true;
                 });
+                let tech_bounce_img = tech_bounce_static_img.clone();
 
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
@@ -1330,6 +1336,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         Some(Value::Bool(true))
                     );
                     let action_now = space_now || mouse_now;
+                    // After orbit launch, force "was" state to false so the held
+                    // space press is seen as a fresh rising edge on the first gameplay
+                    // frame — giving an immediate grab on that same space click.
+                    if matches!(c.get_var("input_needs_edge_reset"), Some(Value::Bool(true))) {
+                        space_was_down = false;
+                        mouse_was_down = false;
+                        c.set_var("input_needs_edge_reset", false);
+                    }
                     let action_was = space_was_down || mouse_was_down;
                     if action_now && !action_was {
                         c.run(Action::Custom {
@@ -1420,6 +1434,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &st,
                         &coin_spawn_image,
                         &coin_spawn_anim,
+                        &tech_bounce_img,
                     );
 
                     // ── Culling ──────────────────────────────────────────
@@ -1547,6 +1562,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &mut prev_nearest_hook,
                         &mut dark_mode_prev,
                         frame_counter,
+                        &tech_bounce_img,
                     );
 
                     // ── Coin magnet radius debug visual ──────────────────

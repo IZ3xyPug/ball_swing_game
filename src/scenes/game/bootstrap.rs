@@ -23,6 +23,7 @@ pub struct PoolSets {
     pub coin_anim_template:  Option<AnimatedSprite>,
     #[allow(dead_code)]
     pub score_x2_anim_template: Option<AnimatedSprite>,
+    pub tech_bounce_static_img: Image,
     // ── Space zone pools
     pub rocket_pad_free:   Vec<String>,
     pub space_planet_free: Vec<String>,
@@ -88,7 +89,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     if let Ok(anim) = AnimatedSprite::new(
         include_bytes!("../../../assets/energy_hook_1.gif"),
         (ASTEROID_W, ASTEROID_H),
-        14.0,
+        8.0,
     ) {
         asteroid.set_image(anim.get_current_image());
         asteroid.set_animation(anim);
@@ -113,6 +114,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // Opt into gravity well forces.
     player.gravity_all_sources = true;
     player.gravity_falloff = GravityFalloff::InverseSquare;
+    // Collide with asteroids as a solid circle body.
+    player.collision_mode  = CollisionMode::solid_circle(PLAYER_R);
+    player.collision_layer = PLAYER_COLLISION_LAYER;
+    player.collision_mask  = ASTEROID_COLLISION_LAYER;
 
     // Velocity-facing air shield. The gif is mirrored on X once at load time,
     // then rotated each post-physics tick based on player net velocity.
@@ -392,10 +397,21 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Pad pool ─────────────────────────────────────────────────────────
+    // Keep pad image + rounded corner geometry in sync so highlights and
+    // silhouette edges match the rendered bounce-pad art.
+    let tech_bounce_static_img: Image = {
+        let corner_r = pad_corner_radius();
+        Image {
+            shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
+            image: pad_image_cached(),
+            color: None,
+        }
+    };
     let mut pad_free: Vec<String> = Vec::new();
     for i in 0..PAD_POOL_SIZE {
         let id = format!("pad_{i}");
         let mut obj = make_pad(ctx, &id, -3000.0, -3000.0);
+        obj.set_image(tech_bounce_static_img.clone());
         obj.visible = false;
         pad_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -584,7 +600,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let asteroid_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/asteroid.gif"),
         (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
-        14.0,
+        8.0,
     ).ok();
     let mut space_asteroid_free: Vec<String> = Vec::new();
     for i in 0..SPACE_ASTEROID_POOL_SIZE {
@@ -607,10 +623,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         if let Some(anim) = &asteroid_anim_template {
             obj.set_animation(anim.clone());
         }
+        obj.collision_mode  = CollisionMode::solid_circle(SPACE_ASTEROID_SIZE_MIN * 0.5);
         obj.collision_layer = ASTEROID_COLLISION_LAYER;
-        obj.collision_mask  = ASTEROID_COLLISION_LAYER;
-        // Low density so asteroids float aside on contact rather than slamming back.
-        obj.material = PhysicsMaterial { elasticity: 0.2, friction: 0.3, density: 0.15 };
+        obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
         obj.visible = false;
         space_asteroid_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -794,6 +809,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template,
+        tech_bounce_static_img,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,

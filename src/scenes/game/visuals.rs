@@ -16,10 +16,11 @@ pub fn tick_visuals(
     prev_nearest_hook: &mut String,
     dark_mode_prev: &mut bool,
     frame_counter: u32,
+    tech_bounce_img: &Image,
 ) {
-    tick_glow_flashes(c, st);
+    tick_glow_flashes(c, st, tech_bounce_img);
     tick_nearest_hook_highlight(c, st, prev_nearest_hook);
-    tick_zone_palette(c, st, prev_zone_idx);
+    tick_zone_palette(c, st, prev_zone_idx, tech_bounce_img);
     tick_dark_mode(c, st, dark_mode_prev);
     tick_spinner_movers(c, st, frame_counter);
     tick_pad_movers(c, st, frame_counter);
@@ -28,7 +29,7 @@ pub fn tick_visuals(
 
 // ── Glow flash decay ────────────────────────────────────────────────────────
 
-fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image) {
     let mut s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
     let mut expired: Vec<String> = Vec::new();
@@ -44,15 +45,7 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     for name in &expired {
         if let Some(obj) = c.get_game_object_mut(name) {
-            if obj.tags.iter().any(|t| t == "pad") {
-                let (r, g, b) = pad_for_zone(zone_idx);
-                let corner_r = pad_corner_radius();
-                obj.set_image(Image {
-                    shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
-                    image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
-                    color: None,
-                });
-            } else if obj.tags.iter().any(|t| t == "hook") {
+            if obj.tags.iter().any(|t| t == "hook") {
                 if asteroid_mode {
                     obj.set_image(hook_asteroid_img_for_id(name, AsteroidHookState::Base));
                 } else {
@@ -128,7 +121,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
 
 // ── Zone-palette recolouring ────────────────────────────────────────────────
 
-fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usize) {
+fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usize, tech_bounce_img: &Image) {
     let s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
     if zone_idx == *prev_zone { return; }
@@ -153,13 +146,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     }
     for pid in &pads {
         if let Some(obj) = c.get_game_object_mut(pid) {
-            let (r, g, b) = pad_for_zone(zone_idx);
-            let corner_r = pad_corner_radius();
-            obj.set_image(Image {
-                shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
-                image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
-                color: None,
-            });
+            obj.set_image(tech_bounce_img.clone());
         }
     }
     for sid in &spinners {
@@ -187,10 +174,15 @@ fn tick_dark_mode(c: &mut Canvas, _st: &Arc<Mutex<State>>, prev_dark: &mut bool)
 fn tick_spinner_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     let s = st.lock().unwrap();
     let origins = s.spinner_origins.clone();
+    // Collect IDs of objects still in a spawn animation (dormant or mid-drop).
+    let animating: std::collections::HashSet<String> = s.spawn_animations.iter()
+        .map(|a| a.id.clone())
+        .collect();
     drop(s);
 
     for (id, origin_y, amp, speed, phase) in &origins {
         if *amp == 0.0 { continue; }
+        if animating.contains(id) { continue; } // don't fight spawn anim
         let t = *phase + *speed * (frame as f32 / 60.0);
         let offset = amp * t.sin();
         if let Some(obj) = c.get_game_object_mut(id) {
@@ -204,10 +196,15 @@ fn tick_spinner_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 fn tick_pad_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     let s = st.lock().unwrap();
     let origins = s.pad_origins.clone();
+    // Collect IDs of objects still in a spawn animation (dormant or mid-drop).
+    let animating: std::collections::HashSet<String> = s.spawn_animations.iter()
+        .map(|a| a.id.clone())
+        .collect();
     drop(s);
 
     for (id, origin_x, amp, speed, phase) in &origins {
         if *amp == 0.0 { continue; }
+        if animating.contains(id) { continue; } // don't fight spawn anim
         // speed is stored as a small angular rate (radians per ~60 frames).
         // Divide frame by 60 to get a smooth time base so sin() changes gradually.
         let t = *phase + *speed * (frame as f32 / 60.0);

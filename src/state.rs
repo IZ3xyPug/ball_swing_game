@@ -16,6 +16,29 @@ pub fn lcg_range(s: &mut u64, lo: f32, hi: f32) -> f32 { lo + lcg(s) * (hi - lo)
 #[derive(Clone)]
 pub struct HookSpec { pub x: f32, pub y: f32 }
 
+/// Tracks a single in-flight spawn-build animation.
+/// Objects drop in from above and ease-rotate to their final position.
+#[derive(Clone, Debug)]
+pub struct SpawnAnim {
+    pub id:               String,
+    /// Final (resting) top-left position.
+    pub target_x:         f32,
+    pub target_y:         f32,
+    /// World-Y at animation start (above screen).
+    pub start_y:          f32,
+    /// Starting rotation offset (degrees), eases toward target_rot.
+    pub start_rot:        f32,
+    pub target_rot:       f32,
+    pub elapsed:          u32,
+    pub total:            u32,
+    /// Restore `is_platform = true` when animation completes (for pads).
+    pub restore_platform: bool,
+    /// False until the object is near the viewport — animation waits here.
+    pub started:          bool,
+    /// rotation_momentum to restore when animation starts (0.0 = no change).
+    pub restore_rotation_momentum: f32,
+}
+
 pub fn gen_hook_batch(seed: &mut u64, from_x: f32, gen_head_x: &mut f32, gen_head_y: &mut f32, distance_px: f32) -> VecDeque<HookSpec> {
     use crate::level_gen::generate_next_hook;
 
@@ -81,7 +104,6 @@ pub struct State {
     pub pad_free:      Vec<String>,
     pub pad_rightmost: f32,
     pub pad_origins:   Vec<(String, f32, f32, f32, f32)>,
-    pub pad_bounce_count: u32,
 
     pub spinner_live:      Vec<String>,
     pub spinner_free:      Vec<String>,
@@ -132,11 +154,12 @@ pub struct State {
     pub bullet_live:      Vec<(String, f32, f32, u32)>,
     pub bullet_free:      Vec<String>,
 
-    pub bounce_enabled: bool,
-
     pub dark_mode: bool,
     pub god_mode: bool,
     pub glow_flashes: Vec<(String, u8)>,
+
+    /// Active spawn-build animations (drop-in from above).
+    pub spawn_animations: Vec<SpawnAnim>,
 
     // ── HUD dirty-tracking ──────────────────────────────────────────────
     pub hud_last_dist_fill:     u32,   // dist_fill * 1000 as u32

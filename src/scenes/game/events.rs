@@ -113,7 +113,6 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             s.hook_y = hy;
             s.rope_len = rope_len;
             s.active_hook = hook_id.clone();
-            s.pad_bounce_count = 0;
 
             let zone_idx = zone_index_for_distance(s.distance);
 
