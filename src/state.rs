@@ -157,6 +157,9 @@ pub struct State {
     pub dark_mode: bool,
     pub god_mode: bool,
     pub glow_flashes: Vec<(String, u8)>,
+    /// One-shot playback for tech_bounce pad impact animation.
+    /// Tuple: (pad_id, current_frame_idx, ticks_until_next_frame).
+    pub pad_bounce_anim: Vec<(String, usize, u32)>,
 
     /// Active spawn-build animations (drop-in from above).
     pub spawn_animations: Vec<SpawnAnim>,

@@ -17,19 +17,80 @@ pub fn tick_visuals(
     dark_mode_prev: &mut bool,
     frame_counter: u32,
     tech_bounce_img: &Image,
+    tech_bounce_anim_frames: &[Image],
 ) {
+    tick_pad_impact_animation(c, st, tech_bounce_img, tech_bounce_anim_frames);
     tick_glow_flashes(c, st, tech_bounce_img);
     tick_nearest_hook_highlight(c, st, prev_nearest_hook);
     tick_zone_palette(c, st, prev_zone_idx, tech_bounce_img);
     tick_dark_mode(c, st, dark_mode_prev);
     tick_spinner_movers(c, st, frame_counter);
     tick_pad_movers(c, st, frame_counter);
+    tick_pad_thrusters(c, st);
     tick_zoom(c, st);
+}
+
+fn tick_pad_impact_animation(
+    c: &mut Canvas,
+    st: &Arc<Mutex<State>>,
+    tech_bounce_img: &Image,
+    tech_bounce_anim_frames: &[Image],
+) {
+    if tech_bounce_anim_frames.is_empty() {
+        let mut s = st.lock().unwrap();
+        s.pad_bounce_anim.clear();
+        return;
+    }
+
+    let frame_count = tech_bounce_anim_frames.len();
+    if frame_count <= 1 {
+        let mut s = st.lock().unwrap();
+        s.pad_bounce_anim.clear();
+        return;
+    }
+
+    let ticks_per_frame = (60.0 / TECH_BOUNCE_FPS.max(1.0)).round().max(1.0) as u32;
+    let mut s = st.lock().unwrap();
+    let mut keep: Vec<(String, usize, u32)> = Vec::with_capacity(s.pad_bounce_anim.len());
+    let active = std::mem::take(&mut s.pad_bounce_anim);
+    drop(s);
+
+    for (name, mut frame_idx, mut ticks_left) in active {
+        let mut finished = false;
+        if let Some(obj) = c.get_game_object_mut(&name) {
+            let idx = frame_idx.min(frame_count - 1);
+            obj.animated_sprite = None;
+            obj.set_image(tech_bounce_anim_frames[idx].clone());
+        } else {
+            finished = true;
+        }
+
+        if !finished {
+            if ticks_left > 0 {
+                ticks_left -= 1;
+            }
+            if ticks_left == 0 {
+                frame_idx += 1;
+                ticks_left = ticks_per_frame;
+            }
+            if frame_idx >= frame_count {
+                if let Some(obj) = c.get_game_object_mut(&name) {
+                    obj.animated_sprite = None;
+                    obj.set_image(tech_bounce_img.clone());
+                }
+            } else {
+                keep.push((name, frame_idx, ticks_left));
+            }
+        }
+    }
+
+    let mut s = st.lock().unwrap();
+    s.pad_bounce_anim = keep;
 }
 
 // ── Glow flash decay ────────────────────────────────────────────────────────
 
-fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image) {
+fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>, _tech_bounce_img: &Image) {
     let mut s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
     let mut expired: Vec<String> = Vec::new();
@@ -146,6 +207,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     }
     for pid in &pads {
         if let Some(obj) = c.get_game_object_mut(pid) {
+            obj.animated_sprite = None;
             obj.set_image(tech_bounce_img.clone());
         }
     }
@@ -211,6 +273,30 @@ fn tick_pad_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
         let offset = amp * t.sin();
         if let Some(obj) = c.get_game_object_mut(id) {
             obj.position.0 = origin_x + offset;
+        }
+    }
+}
+
+fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let pad_ids = {
+        let s = st.lock().unwrap();
+        s.pad_live.clone()
+    };
+
+    for pad_id in &pad_ids {
+        let Some((px, py, vis, layer)) = c
+            .get_game_object(pad_id)
+            .map(|pad| (pad.position.0, pad.position.1, pad.visible, pad.layer))
+        else {
+            continue;
+        };
+
+        let thr_id = pad_thruster_id(pad_id);
+        if let Some(thr) = c.get_game_object_mut(&thr_id) {
+            thr.position.0 = px + (PAD_W - PAD_THRUSTER_W) * 0.5;
+            thr.position.1 = py + PAD_H - PAD_THRUSTER_HIDE_TOP - PAD_THRUSTER_RAISE_Y;
+            thr.layer = layer - 1;
+            thr.visible = vis;
         }
     }
 }

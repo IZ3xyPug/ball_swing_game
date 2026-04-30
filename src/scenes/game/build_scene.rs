@@ -125,6 +125,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         coin_anim_template,
         score_x2_anim_template: _,
         tech_bounce_static_img,
+        tech_bounce_anim_frames,
+        pad_thruster_static_img,
+        pad_thruster_anim_template,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,
@@ -685,6 +688,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 dark_mode: false,
                 god_mode: false,
                 glow_flashes: Vec::new(),
+                pad_bounce_anim: Vec::new(),
                 spawn_animations: Vec::new(),
 
                 hud_last_dist_fill:    u32::MAX,
@@ -853,6 +857,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 &coin_spawn_image,
                 &coin_spawn_anim,
                 &tech_bounce_static_img,
+                &pad_thruster_static_img,
+                pad_thruster_anim_template.as_ref(),
             );
 
             // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
@@ -878,6 +884,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // Reset solar death flag and ceiling visibility for fresh run.
             canvas.set_var("died_to_sun", false);
+            canvas.set_var("died_to_oxygen", false);
             if let Some(obj) = canvas.get_game_object_mut("solar_ceiling") {
                 obj.visible = false;
             }
@@ -1185,6 +1192,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     shield.visible = true;
                 });
                 let tech_bounce_img = tech_bounce_static_img.clone();
+                let tech_bounce_anim = tech_bounce_anim_frames.clone();
+                let pad_thruster_static_img = pad_thruster_static_img.clone();
+                let pad_thruster_anim_template = pad_thruster_anim_template.clone();
 
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
@@ -1435,6 +1445,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &coin_spawn_image,
                         &coin_spawn_anim,
                         &tech_bounce_img,
+                        &pad_thruster_static_img,
+                        pad_thruster_anim_template.as_ref(),
                     );
 
                     // ── Culling ──────────────────────────────────────────
@@ -1563,6 +1575,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &mut dark_mode_prev,
                         frame_counter,
                         &tech_bounce_img,
+                        &tech_bounce_anim,
                     );
 
                     // ── Coin magnet radius debug visual ──────────────────
@@ -1627,7 +1640,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     let mut s = st.lock().unwrap();
                     // Solar death: set by tick_space_zone when player reaches solar ceiling.
                     let died_to_sun = matches!(c.get_var("died_to_sun"), Some(Value::Bool(true)));
-                    let dead_now = !s.god_mode && (died_to_sun || (s.gravity_dir > 0.0
+                    let died_to_oxygen = matches!(c.get_var("died_to_oxygen"), Some(Value::Bool(true)));
+                    let dead_now = !s.god_mode && (died_to_sun || died_to_oxygen || (s.gravity_dir > 0.0
                         && s.py > VH + 150.0)
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {
@@ -1652,6 +1666,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if died_to_sun {
                             c.set_var("died_to_sun", false);
                             c.load_scene("gameover_sun");
+                        } else if died_to_oxygen {
+                            c.set_var("died_to_oxygen", false);
+                            c.load_scene("gameover_oxygen");
                         } else {
                             c.load_scene("gameover");
                         }

@@ -106,8 +106,10 @@ pub const PAD_POOL_SIZE:  usize = 32;
 pub const PAD_GAP_MIN:    f32 = 5000.0;
 pub const PAD_GAP_MAX:    f32 = 9000.0;
 
-pub const PAD_W:          f32 = 775.0;
-pub const PAD_H:          f32 = 350.0;
+// tech_bounce.gif displayed geometry: +50% width, with a taller pad profile so
+// the stretched gif reads clearly without vertical squish.
+pub const PAD_W:          f32 = 1162.5;
+pub const PAD_H:          f32 = 420.0;
 
 /// How close (px) in X a pad must be to a hook before the Y floor is applied.
 pub const PAD_HOOK_NEAR_X:      f32 = 2200.0;
@@ -326,6 +328,8 @@ pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 // ── Asset paths ──────────────────────────────────────────────────────────────
 pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin.gif");
 pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
+pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/tech_bounce.gif");
+pub const TECH_BOUNCE_FPS: f32 = 12.0;
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
 pub const ASSET_COIN_SFX_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_collect.mp3");
@@ -339,6 +343,12 @@ pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/
 pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background_2.webp");
 pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
+pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
+pub const PAD_THRUSTER_FPS: f32 = 12.0;
+pub const PAD_THRUSTER_W: f32 = PAD_W * 0.24;
+pub const PAD_THRUSTER_H: f32 = PAD_H * 0.775;
+pub const PAD_THRUSTER_HIDE_TOP: f32 = 3.0;
+pub const PAD_THRUSTER_RAISE_Y: f32 = PAD_THRUSTER_H * 0.30 + PLAYER_R + 20.0;
 
 // ── Generation — Gravity Wells ────────────────────────────────────────────────
 
@@ -491,16 +501,28 @@ pub const SPACE_HOOK_Y_DEEP_MAX:    f32 = -(VH * 5.0);
 pub const SPACE_HOOK_Y_MIN: f32 = SPACE_HOOK_Y_SHALLOW_MIN;
 pub const SPACE_HOOK_Y_MAX: f32 = SPACE_HOOK_Y_SHALLOW_MAX;
 // Dense hook zone near the solar ceiling (0.5–2.0 screen-heights below the sun).
-pub const SPACE_HOOK_SUN_ZONE_Y_MIN: f32 = SPACE_UPPER_LIMIT_Y + VH * 0.5;
-pub const SPACE_HOOK_SUN_ZONE_Y_MAX: f32 = SPACE_UPPER_LIMIT_Y + VH * 2.0;
-pub const SPACE_HOOK_SUN_GAP_MIN:    f32 = 180.0;
-pub const SPACE_HOOK_SUN_GAP_MAX:    f32 = 380.0;
+pub const SPACE_HOOK_SUN_SAFE_MIN_FROM_KILL: f32 = ROPE_LEN_MAX * 2.0;
+pub const SPACE_HOOK_SUN_ZONE_Y_MIN: f32 = SPACE_UPPER_LIMIT_Y + SPACE_HOOK_SUN_SAFE_MIN_FROM_KILL;
+pub const SPACE_HOOK_SUN_ZONE_Y_MAX: f32 = SPACE_UPPER_LIMIT_Y + VH * 2.6;
+pub const SPACE_HOOK_SUN_SAFETY_BAND_MIN: f32 = SPACE_UPPER_LIMIT_Y + ROPE_LEN_MAX * 2.1;
+pub const SPACE_HOOK_SUN_SAFETY_BAND_MAX: f32 = SPACE_UPPER_LIMIT_Y + ROPE_LEN_MAX * 2.9;
+pub const SPACE_HOOK_SUN_GAP_MIN:    f32 = 140.0;
+pub const SPACE_HOOK_SUN_GAP_MAX:    f32 = 260.0;
 
 // Space coin parameters
 pub const SPACE_COIN_GAP_MIN:  f32 = 580.0;
 pub const SPACE_COIN_GAP_MAX:  f32 = 1200.0;
 pub const SPACE_COIN_SCORE:    u32 = 1000;
 pub const SPACE_COIN_R:        f32 = 56.0;
+pub const SPACE_PLANET_HOOK_GUIDE_COINS: usize = 4;
+pub const SPACE_PLANET_HOOK_GUIDE_RED_CHANCE: f32 = 0.20;
+pub const SPACE_PLANET_HOOK_GUIDE_T_MIN: f32 = 0.20;
+pub const SPACE_PLANET_HOOK_GUIDE_T_MAX: f32 = 0.75;
+pub const SPACE_SUN_BONUS_CLUSTER_CHANCE: f32 = 0.012;
+pub const SPACE_SUN_BONUS_CLUSTER_COINS_MIN: usize = 4;
+pub const SPACE_SUN_BONUS_CLUSTER_COINS_MAX: usize = 8;
+pub const SPACE_SUN_BONUS_CLUSTER_SPACING: f32 = 105.0;
+pub const SPACE_SUN_BONUS_RED_CHANCE: f32 = 0.18;
 
 // Black hole parameters
 pub const SPACE_BLACKHOLE_GAP_MIN:       f32 = 5000.0;
@@ -548,6 +570,7 @@ pub const C_SPACE_PLANET: [(u8,u8,u8); 5] = [
     (235, 210, 90),  // Sandy/yellow
 ];
 pub const C_SPACE_COIN:  (u8,u8,u8) = (255, 230, 100);
+pub const C_SPACE_COIN_HIGH: (u8,u8,u8) = (120, 255, 220);
 pub const C_SPACE_HOOK:  (u8,u8,u8) = (155, 115, 255);
 pub const C_SPACE_HOOK_ON: (u8,u8,u8) = (210, 185, 255);
 pub const C_BLACKHOLE:   (u8,u8,u8) = (18,  8,   26);

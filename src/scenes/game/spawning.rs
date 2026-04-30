@@ -93,6 +93,8 @@ pub fn tick_spawning(
     coin_spawn_image: &Image,
     coin_spawn_anim: &Option<AnimatedSprite>,
     tech_bounce_img: &Image,
+    pad_thruster_static_img: &Image,
+    pad_thruster_anim_template: Option<&AnimatedSprite>,
 ) {
     if st.lock().unwrap().in_space_mode {
         return;
@@ -106,7 +108,7 @@ pub fn tick_spawning(
     }
     spawn_hooks(c, st);
     if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
-        spawn_pads(c, st, tech_bounce_img);
+        spawn_pads(c, st, tech_bounce_img, pad_thruster_static_img, pad_thruster_anim_template);
     }
     if matches!(c.get_var("spawn_spinners_on"), Some(Value::Bool(true)) | None) {
         spawn_spinners(c, st);
@@ -330,7 +332,13 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Pads ──────────────────────────────────────────────────────────────────────
 
-fn spawn_pads(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image) {
+fn spawn_pads(
+    c: &mut Canvas,
+    st: &Arc<Mutex<State>>,
+    tech_bounce_img: &Image,
+    pad_thruster_static_img: &Image,
+    pad_thruster_anim_template: Option<&AnimatedSprite>,
+) {
     let mut s = st.lock().unwrap();
     let mut pads_spawned = 0usize;
     while pads_spawned < PADS_SPAWN_BUDGET_PER_TICK
@@ -412,7 +420,19 @@ fn spawn_pads(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image) {
         if let Some(obj) = c.get_game_object_mut(&id) {
             obj.position = (x, y - SPAWN_ANIM_DROP); // start above screen
             obj.visible = false; // hidden until animation starts
+            obj.animated_sprite = None;
             obj.set_image(tech_bounce_img.clone());
+        }
+        let thr_id = pad_thruster_id(&id);
+        if let Some(thr) = c.get_game_object_mut(&thr_id) {
+            thr.position.0 = x + (PAD_W - PAD_THRUSTER_W) * 0.5;
+            thr.position.1 = (y - SPAWN_ANIM_DROP) + PAD_H - PAD_THRUSTER_HIDE_TOP - PAD_THRUSTER_RAISE_Y;
+            thr.visible = false;
+            thr.animated_sprite = None;
+            thr.set_image(pad_thruster_static_img.clone());
+            if let Some(anim) = pad_thruster_anim_template {
+                thr.set_animation(anim.clone());
+            }
         }
 
         s = st.lock().unwrap();

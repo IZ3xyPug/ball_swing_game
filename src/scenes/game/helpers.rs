@@ -189,3 +189,8 @@ pub fn spinner_for_zone(zone_idx: usize) -> (u8, u8, u8) {
         _ => C_SPINNER,
     }
 }
+
+#[inline]
+pub fn pad_thruster_id(pad_id: &str) -> String {
+    format!("{pad_id}_thruster")
+}

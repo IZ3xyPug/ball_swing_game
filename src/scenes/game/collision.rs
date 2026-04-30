@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
-use crate::images::*;
 use crate::objects::*;
 use crate::state::*;
 use super::helpers::*;
@@ -168,24 +167,30 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     let player_bottom = s.py + PLAYER_R;
     let player_top    = s.py - PLAYER_R;
-    let player_left   = s.px - PLAYER_R;
-    let player_right  = s.px + PLAYER_R;
     let mut bounced_pad: Option<(String, f32, f32)> = None;
 
     for name in &s.pad_live {
         if let Some(obj) = c.get_game_object(name) {
             if !obj.visible { continue; }
             let pad_left   = obj.position.0;
-            let pad_right  = pad_left + PAD_W;
             let pad_top    = obj.position.1;
             let pad_bottom = pad_top + PAD_H;
-            let overlap_x  = player_right > pad_left && player_left < pad_right;
+            let rounded_hit = circle_overlaps_rounded_rect(
+                s.px,
+                s.py,
+                PLAYER_R,
+                pad_left,
+                pad_top,
+                PAD_W,
+                PAD_H,
+                pad_corner_radius(),
+            );
             let hit = if falling_down {
-                overlap_x
+                rounded_hit
                     && player_bottom >= pad_top
                     && player_bottom <= pad_top + PLAYER_R * 2.0 + s.vy.abs()
             } else {
-                overlap_x
+                rounded_hit
                     && player_top <= pad_bottom
                     && player_top >= pad_bottom - PLAYER_R * 2.0 - s.vy.abs()
             };
@@ -193,7 +198,7 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    if let Some((_pad_name, pad_top, pad_bottom)) = bounced_pad {
+    if let Some((pad_name, pad_top, pad_bottom)) = bounced_pad {
         s.vy = PAD_BOUNCE_VY * s.gravity_dir;
         if falling_down {
             s.py = pad_top - PLAYER_R;
@@ -203,6 +208,9 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         let (new_px, new_py, new_vx, new_vy) = (s.px, s.py, s.vx, s.vy);
         let unhook_ops = begin_unhook(&mut s);
+        // Restart one-shot tech_bounce playback for this pad.
+        s.pad_bounce_anim.retain(|(id, _, _)| id != &pad_name);
+        s.pad_bounce_anim.push((pad_name.clone(), 1, 0));
         drop(s);
 
         if let Some(ref ops) = unhook_ops {

@@ -1,4 +1,5 @@
 use quartz::*;
+use image::{AnimationDecoder, ImageDecoder};
 
 use crate::constants::*;
 use crate::hud::*;
@@ -24,6 +25,9 @@ pub struct PoolSets {
     #[allow(dead_code)]
     pub score_x2_anim_template: Option<AnimatedSprite>,
     pub tech_bounce_static_img: Image,
+    pub tech_bounce_anim_frames: Vec<Image>,
+    pub pad_thruster_static_img: Image,
+    pub pad_thruster_anim_template: Option<AnimatedSprite>,
     // ── Space zone pools
     pub rocket_pad_free:   Vec<String>,
     pub space_planet_free: Vec<String>,
@@ -33,6 +37,49 @@ pub struct PoolSets {
     pub space_asteroid_free: Vec<String>,
     pub space_red_coin_free: Vec<String>,
 }
+
+fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
+    let bytes = include_bytes!("../../../assets/tech_bounce.gif");
+    let cursor = std::io::Cursor::new(bytes.as_slice());
+    let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) else {
+        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+    };
+
+    let (gif_w, gif_h) = decoder.dimensions();
+    let mut composed = image::RgbaImage::from_pixel(gif_w.max(1), gif_h.max(1), image::Rgba([0, 0, 0, 0]));
+    let Ok(frames) = decoder.into_frames().collect_frames() else {
+        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+    };
+
+    let out_w = PAD_W.max(1.0).round() as u32;
+    let out_h = PAD_H.max(1.0).round() as u32;
+    let mut out: Vec<Image> = Vec::with_capacity(frames.len());
+
+    for frame in frames {
+        let left = frame.left();
+        let top = frame.top();
+        let patch = frame.into_buffer();
+        image::imageops::overlay(&mut composed, &patch, left as i64, top as i64);
+        let stretched = image::imageops::resize(
+            &composed,
+            out_w,
+            out_h,
+            image::imageops::FilterType::Nearest,
+        );
+        out.push(Image {
+            shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
+            image: stretched.into(),
+            color: None,
+        });
+    }
+
+    if out.is_empty() {
+        vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
+    } else {
+        out
+    }
+}
+
 pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Background images ────────────────────────────────────────────────
     let bg_texture_w = VW as u32;
@@ -399,22 +446,49 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Pad pool ─────────────────────────────────────────────────────────
     // Keep pad image + rounded corner geometry in sync so highlights and
     // silhouette edges match the rendered bounce-pad art.
-    let tech_bounce_static_img: Image = {
-        let corner_r = pad_corner_radius();
-        Image {
-            shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
-            image: pad_image_cached(),
-            color: None,
-        }
-    };
+    let tech_bounce_anim_frames = decode_tech_bounce_frames_stretched();
+    let tech_bounce_static_img = tech_bounce_anim_frames
+        .first()
+        .cloned()
+        .unwrap_or_else(|| load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
+    let pad_thruster_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/thruster1.gif"),
+        (PAD_THRUSTER_W, PAD_THRUSTER_H),
+        PAD_THRUSTER_FPS,
+    ).ok();
+    let pad_thruster_static_img = pad_thruster_anim_template
+        .as_ref()
+        .map(|a| a.get_current_image())
+        .unwrap_or_else(|| load_image_sized(ASSET_THRUSTER1_GIF, PAD_THRUSTER_W, PAD_THRUSTER_H));
     let mut pad_free: Vec<String> = Vec::new();
     for i in 0..PAD_POOL_SIZE {
         let id = format!("pad_{i}");
         let mut obj = make_pad(ctx, &id, -3000.0, -3000.0);
         obj.set_image(tech_bounce_static_img.clone());
+        obj.layer = 5;
         obj.visible = false;
         pad_free.push(id.clone());
         scene = scene.with_object(id, obj);
+
+        let thr_id = format!("pad_{i}_thruster");
+        let mut thr = GameObject::new_rect(
+            ctx,
+            thr_id.clone(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (PAD_THRUSTER_W, PAD_THRUSTER_H), 0.0),
+                image: pad_thruster_static_img.image.clone(),
+                color: None,
+            }),
+            (PAD_THRUSTER_W, PAD_THRUSTER_H),
+            (-3000.0, -3000.0),
+            vec!["pad_thruster".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        thr.layer = 4;
+        thr.visible = false;
+        scene = scene.with_object(thr_id, thr);
     }
 
     // ── Spinner pool ─────────────────────────────────────────────────────
@@ -810,6 +884,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         coin_anim_template,
         score_x2_anim_template,
         tech_bounce_static_img,
+        tech_bounce_anim_frames,
+        pad_thruster_static_img,
+        pad_thruster_anim_template,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,
