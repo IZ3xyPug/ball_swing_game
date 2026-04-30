@@ -114,6 +114,31 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     player.gravity_all_sources = true;
     player.gravity_falloff = GravityFalloff::InverseSquare;
 
+    // Velocity-facing air shield. The gif is mirrored on X once at load time,
+    // then rotated each post-physics tick based on player net velocity.
+    let mut airshield = GameObject::new_rect(
+        ctx, "airshield".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (AIRSHIELD_W, AIRSHIELD_H), 0.0),
+            image: solid(0, 0, 0, 0).into(),
+            color: None,
+        }),
+        (AIRSHIELD_W, AIRSHIELD_H),
+        (SPAWN_X - AIRSHIELD_W * 0.5, SPAWN_Y - AIRSHIELD_H * 0.5),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    if let Ok(mut anim) = AnimatedSprite::new(
+        include_bytes!("../../../assets/airshield2.gif"),
+        (AIRSHIELD_W, AIRSHIELD_H),
+        AIRSHIELD_ANIM_FPS,
+    ) {
+        anim.set_mirrored(true);
+        airshield.set_image(anim.get_current_image());
+        airshield.set_animation(anim);
+    }
+    airshield.visible = false;
+    airshield.layer = 18;
+
     // Rope visual is driven each tick in physics.rs (dynamic width-matched beam).
     let rope_beam_h = ROPE_THICKNESS;
     let mut rope = GameObject::new_rect(
@@ -333,6 +358,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("danger_floor", floor)
         .with_object("rope",         rope)
         .with_object("player",       player)
+        .with_object("airshield",    airshield)
         .with_object("dist_bar",     dist_bar)
         .with_object("coin_counter", coin_counter)
         .with_object("score_counter", score_counter)

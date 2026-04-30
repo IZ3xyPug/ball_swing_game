@@ -25,6 +25,11 @@ pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
 pub const PLAYER_R:       f32 = 40.0;
 pub const HOOK_R:         f32 = 38.0;
 pub const ROPE_THICKNESS: f32 = 60.0;
+pub const AIRSHIELD_W:    f32 = 220.0;
+pub const AIRSHIELD_H:    f32 = 160.0;
+pub const AIRSHIELD_SPEED_THRESHOLD: f32 = 30.0;
+pub const AIRSHIELD_AHEAD_OFFSET:    f32 = 110.0;
+pub const AIRSHIELD_ANIM_FPS:        f32 = 16.0;
 
 // ── Generation — General ──────────────────────────────────────────────────────
 

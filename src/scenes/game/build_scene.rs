@@ -1124,6 +1124,61 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let bg_svsf = bg_zone_start_vivid_space_flip.clone();
                 let bg_pvsf = bg_zone_purple_vivid_space_flip.clone();
                 let bg_bvsf = bg_zone_black_vivid_space_flip.clone();
+                let mut prev_player_center: Option<(f32, f32)> = None;
+
+                canvas.on_update(move |c: &mut Canvas| {
+                    let (px, py, vx, vy) = if let Some(player) = c.get_game_object("player") {
+                        (
+                            player.position.0 + player.size.0 * 0.5,
+                            player.position.1 + player.size.1 * 0.5,
+                            player.momentum.0,
+                            player.momentum.1,
+                        )
+                    } else {
+                        return;
+                    };
+
+                    let speed = (vx * vx + vy * vy).sqrt();
+                    let Some(shield) = c.get_game_object_mut("airshield") else {
+                        return;
+                    };
+
+                    if speed < AIRSHIELD_SPEED_THRESHOLD {
+                        shield.visible = false;
+                        prev_player_center = Some((px, py));
+                        return;
+                    }
+
+                    // Direction source: post-crystalline net movement from solved
+                    // position delta this frame. Momentum is fallback only.
+                    let (mdx, mdy) = if let Some((lx, ly)) = prev_player_center {
+                        (px - lx, py - ly)
+                    } else {
+                        (vx, vy)
+                    };
+                    prev_player_center = Some((px, py));
+
+                    let motion_len = (mdx * mdx + mdy * mdy).sqrt();
+                    let (dx, dy) = if motion_len > 0.001 {
+                        (mdx / motion_len, mdy / motion_len)
+                    } else if speed > f32::EPSILON {
+                        (vx / speed, vy / speed)
+                    } else {
+                        (1.0, 0.0)
+                    };
+
+                    // Anchor the shield by its right-middle point (x=1.0, y=0.5),
+                    // then rotate so that point always lies in front of net motion.
+                    let ahead = PLAYER_R + AIRSHIELD_AHEAD_OFFSET;
+                    let ax = px + dx * ahead;
+                    let ay = py + dy * ahead;
+                    let cx = ax - dx * (shield.size.0 * 0.5);
+                    let cy = ay - dy * (shield.size.0 * 0.5);
+
+                    shield.position = (cx - shield.size.0 * 0.5, cy - shield.size.1 * 0.5);
+                    shield.rotation = dy.atan2(dx).to_degrees();
+                    shield.visible = true;
+                });
 
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
