@@ -236,6 +236,12 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let s = st.lock().unwrap();
     // Space mode and rocket ascent manage their own camera/zoom — don't interfere.
     if s.in_space_mode || s.space_launch_active { return; }
+
+    let pending_space_exit_reset = matches!(
+        c.get_var("space_exit_zoom_reset"),
+        Some(Value::Bool(true))
+    );
+
     let flipped = s.gravity_dir < 0.0;
     let anchor_y = if flipped { 0.0 } else { VH };
 
@@ -249,6 +255,23 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     let px = s.px;
     drop(s);
+
+    if pending_space_exit_reset {
+        if let Some(cam) = c.camera_mut() {
+            cam.follow(Some(Target::name("player")));
+            cam.zoom_lerp_speed = ZOOM_OUT_LERP;
+            cam.zoom_anchor = Some((px, anchor_y));
+            cam.snap_zoom(target_zoom);
+            // Keep the post-space handoff from inheriting stale negative-space Y.
+            cam.position.1 = if flipped {
+                (VH - VH / cam.zoom).max(0.0)
+            } else {
+                0.0
+            };
+        }
+        c.set_var("space_exit_zoom_reset", false);
+        return;
+    }
 
     if let Some(cam) = c.camera_mut() {
         cam.zoom_lerp_speed = if target_zoom < cam.zoom { ZOOM_OUT_LERP } else { ZOOM_IN_LERP };

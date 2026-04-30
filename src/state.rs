@@ -227,6 +227,10 @@ pub struct State {
     pub space_gwell_timers:      Vec<(String, u32, bool)>,
 
     // ── Solar ceiling async decode ────────────────────────────────────────────
+    /// Pixel-derived y-ratio where the solar surface begins (from top of gif).
+    pub solar_surface_ratio: f32,
+    /// True once the solar animation has been attached to the scene object.
+    pub solar_anim_loaded: bool,
     /// Set on first enter_space: background thread stores the decoded
     /// AnimatedSprite here; tick_solar_pending swaps it onto the object.
     pub solar_anim_pending: Option<Arc<Mutex<Option<AnimatedSprite>>>>,

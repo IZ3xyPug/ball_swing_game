@@ -751,6 +751,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_entry_px:         0.0,
                 space_coin_spent:       Vec::new(),
                 space_red_coin_spent:   Vec::new(),
+                solar_surface_ratio:    SOLAR_SURFACE_RATIO_DEFAULT,
+                solar_anim_loaded:      false,
                 solar_anim_pending:     None,
             };
 
@@ -890,6 +892,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // ── Pre-warm rope texture cache (background thread) ──────────
             physics::prewarm_rope_fx_cache();
+            // Pre-warm solar GIF decode so corona is ready before space approach.
+            super::space_zone::prewarm_solar_decode(&state);
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);

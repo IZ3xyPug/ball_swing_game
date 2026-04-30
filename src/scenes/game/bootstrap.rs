@@ -617,7 +617,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
         );
         solar_ceiling.visible     = false;
-        solar_ceiling.layer       = 1;
+        solar_ceiling.layer       = 120; // above world objects, below HUD overlays
         solar_ceiling.ignore_zoom = true; // screen-space: slides in from top as player approaches
         scene = scene.with_object("solar_ceiling", solar_ceiling);
     }

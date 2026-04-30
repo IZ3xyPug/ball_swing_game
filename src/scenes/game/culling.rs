@@ -7,6 +7,9 @@ use crate::state::*;
 use crate::gameplay::zone_index_for_distance;
 
 pub fn tick_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    if st.lock().unwrap().in_space_mode {
+        return;
+    }
     cull_hooks(c, st);
     cull_pads(c, st);
     cull_spinners(c, st);

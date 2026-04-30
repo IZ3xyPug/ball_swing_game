@@ -129,9 +129,12 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.vx -= radial_v * nx * SWING_TENSION;
     s.vy -= radial_v * ny * SWING_TENSION;
 
-    // Apply tangential gravity + swing drag.
-    tangent_v += GRAVITY * gravity_scale * s.gravity_dir * ty;
-    if !s.in_space_mode { tangent_v *= SWING_DRAG; }
+    // In space, preserve tangential velocity exactly so rotation direction and
+    // speed stay constant while hooked. Normal mode keeps gravity + drag.
+    if !s.in_space_mode {
+        tangent_v += GRAVITY * gravity_scale * s.gravity_dir * ty;
+        tangent_v *= SWING_DRAG;
+    }
     s.vx = tx * tangent_v;
     s.vy = ty * tangent_v;
 

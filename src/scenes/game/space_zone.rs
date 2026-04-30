@@ -21,6 +21,100 @@ use crate::objects::*;
 use crate::state::*;
 use super::helpers::*;
 
+fn solar_surface_ratio_from_gif_bytes(solar_bytes: &[u8]) -> f32 {
+    use image::AnimationDecoder;
+    use image::codecs::gif::GifDecoder;
+
+    const LUMA_MIN: f32 = 120.0;
+    const COVERAGE_THRESHOLD: f32 = 0.35;
+
+    let cursor = std::io::Cursor::new(solar_bytes);
+    let Ok(decoder) = GifDecoder::new(cursor) else {
+        return SOLAR_SURFACE_RATIO_DEFAULT;
+    };
+    let Ok(frames) = decoder.into_frames().collect_frames() else {
+        return SOLAR_SURFACE_RATIO_DEFAULT;
+    };
+    if frames.is_empty() {
+        return SOLAR_SURFACE_RATIO_DEFAULT;
+    }
+
+    let h = frames[0].buffer().height() as usize;
+    let w = frames[0].buffer().width() as usize;
+    if h < 2 || w == 0 {
+        return SOLAR_SURFACE_RATIO_DEFAULT;
+    }
+
+    let mut row_coverage = vec![0.0f32; h];
+    for frame in &frames {
+        let buf = frame.buffer();
+        for y in 0..h {
+            let mut covered = 0usize;
+            for x in 0..w {
+                let p = buf.get_pixel(x as u32, y as u32);
+                let luma = 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
+                if luma >= LUMA_MIN {
+                    covered += 1;
+                }
+            }
+            row_coverage[y] += covered as f32 / w as f32;
+        }
+    }
+    let inv_n = 1.0 / frames.len() as f32;
+    for v in &mut row_coverage {
+        *v *= inv_n;
+    }
+
+    for y in (0..h).rev() {
+        if row_coverage[y] >= COVERAGE_THRESHOLD {
+            return (y as f32 / (h - 1) as f32).clamp(0.0, 1.0);
+        }
+    }
+
+    SOLAR_SURFACE_RATIO_DEFAULT
+}
+
+fn solar_kill_y(s: &State) -> f32 {
+    let surface_ratio = s.solar_surface_ratio.clamp(0.0, 1.0);
+    SPACE_UPPER_LIMIT_Y + SPACE_SOLAR_H * surface_ratio
+}
+
+fn queue_solar_decode_if_needed(st: &Arc<Mutex<State>>) {
+    let should_queue = {
+        let s = st.lock().unwrap();
+        !s.solar_anim_loaded && s.solar_anim_pending.is_none()
+    };
+    if !should_queue {
+        return;
+    }
+
+    let pending = Arc::new(Mutex::new(None::<AnimatedSprite>));
+    st.lock().unwrap().solar_anim_pending = Some(Arc::clone(&pending));
+    let st_for_decode = Arc::clone(st);
+    thread::spawn(move || {
+        let solar_bytes: &[u8] = include_bytes!("../../../assets/corona_v5.gif");
+        // Decode at 1/8 resolution — GPU upscales to full size at display time.
+        // 4× fewer pixels per frame vs 1/4, so this completes well before space entry.
+        let load_w = VW / 8.0;
+        let load_h = SPACE_SOLAR_H / 8.0;
+        let surface_ratio = solar_surface_ratio_from_gif_bytes(solar_bytes);
+        if let Ok(anim) = AnimatedSprite::new(
+            solar_bytes, (load_w, load_h), SOLAR_ANIM_FPS,
+        ) {
+            *pending.lock().unwrap() = Some(anim);
+            st_for_decode.lock().unwrap().solar_surface_ratio = surface_ratio;
+            return;
+        }
+
+        // Decode failed: clear pending so later ticks/re-entries can retry.
+        st_for_decode.lock().unwrap().solar_anim_pending = None;
+    });
+}
+
+pub fn prewarm_solar_decode(st: &Arc<Mutex<State>>) {
+    queue_solar_decode_if_needed(st);
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Called every tick from the main on_update closure.
@@ -44,21 +138,7 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
             // Pre-warm solar gif decode the moment the rocket fires — gives the
             // full ascent time (several seconds) for the thread to finish before
             // the player arrives near the solar ceiling.
-            {
-                let already_loading = st.lock().unwrap().solar_anim_pending.is_some();
-                if !already_loading {
-                    let pending = Arc::new(Mutex::new(None::<AnimatedSprite>));
-                    st.lock().unwrap().solar_anim_pending = Some(Arc::clone(&pending));
-                    thread::spawn(move || {
-                        let solar_bytes: &[u8] = include_bytes!("../../../assets/solar_v8.gif");
-                        let load_w = VW / 4.0;
-                        let load_h = SPACE_SOLAR_H / 4.0;
-                        if let Ok(anim) = AnimatedSprite::new(solar_bytes, (load_w, load_h), SOLAR_ANIM_FPS) {
-                            *pending.lock().unwrap() = Some(anim);
-                        }
-                    });
-                }
-            }
+            queue_solar_decode_if_needed(st);
             // Allow camera to track above y=0 (normally clamped by lerp_toward)
             if let Some(cam) = c.camera_mut() {
                 if cam.zoom_anchor.is_none() {
@@ -94,10 +174,17 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
         }
     }
 
+    // Keep solar animation/device state current before evaluating death.
+    tick_solar_pending(c, st);
+    tick_solar_screen_pos(c, st);
+
     // ── Solar ceiling kill zone ───────────────────────────────────────────────
-    let py = st.lock().unwrap().py;
-    if py < SPACE_UPPER_LIMIT_Y + SPACE_SOLAR_H * 0.5 {
-        // Player has entered the lower half of the solar gif — sun-death.
+    let (py, kill_y) = {
+        let s = st.lock().unwrap();
+        (s.py, solar_kill_y(&s))
+    };
+    if py < kill_y {
+        // Player has crossed the dense solar surface line — sun-death.
         c.set_var("died_to_sun", true);
         if let Some(cam) = c.camera_mut() {
             cam.flash_with(
@@ -114,8 +201,6 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     }
 
     tick_space_camera(c, st);
-    tick_solar_pending(c, st);
-    tick_solar_screen_pos(c, st);
     tick_space_oxygen(c, st);
     tick_space_gwells(c, st, frame);
     tick_space_spawning(c, st, frame);
@@ -196,66 +281,15 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    // Show solar ceiling. Kick off a background thread to decode the animation
-    // at 1/4 resolution the first time — 16× fewer pixels per frame than full
-    // VW, so it takes well under a second. The engine GPU-upscales the texture
-    // to full size; imperceptible for a background element. tick_solar_pending
-    // swaps the animation in the moment the thread finishes.
+    // Show solar ceiling. Prewarm started at game load; tick_solar_pending
+    // attaches the animation the tick the background thread finishes.
+    // If already decoded (common on revisit), it is visible immediately.
     if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
         if obj.animated_sprite.is_none() {
-            let already_loading = st.lock().unwrap().solar_anim_pending.is_some();
-            if !already_loading {
-                let pending = Arc::new(Mutex::new(None::<AnimatedSprite>));
-                st.lock().unwrap().solar_anim_pending = Some(Arc::clone(&pending));
-                thread::spawn(move || {
-                    let solar_bytes: &[u8] = include_bytes!("../../../assets/solar_v8.gif");
-                    let load_w = VW / 4.0;
-                    let load_h = SPACE_SOLAR_H / 4.0;
-                    use image::codecs::gif::GifDecoder;
-                    use image::AnimationDecoder;
-                    use image::{Rgba, imageops};
-                    let cursor = std::io::Cursor::new(solar_bytes);
-                    if let Ok(decoder) = GifDecoder::new(cursor) {
-                        // Decode all frames; skip any that error.
-                        let raw_frames: Vec<image::Frame> = decoder.into_frames()
-                            .filter_map(|r| r.ok())
-                            .collect();
-                        let frames: Vec<image::RgbaImage> = raw_frames.into_iter().map(|f| {
-                            let mut img: image::RgbaImage = f.into_buffer();
-                            // Key out near-black pixels — make transparent so the
-                            // starfield background shows through the dark GIF regions.
-                            for pixel in img.pixels_mut() {
-                                let Rgba([r, g, b, _a]) = *pixel;
-                                if (r as u32 + g as u32 + b as u32) < 60 {
-                                    *pixel = Rgba([0, 0, 0, 0]);
-                                }
-                            }
-                            // Downsample to 1/4 resolution for fast GPU upload.
-                            imageops::resize(
-                                &img,
-                                load_w as u32,
-                                load_h as u32,
-                                imageops::FilterType::Triangle,
-                            )
-                        }).collect();
-                        if !frames.is_empty() {
-                            let anim = AnimatedSprite::from_frames(
-                                frames, (load_w, load_h), SOLAR_ANIM_FPS,
-                            );
-                            *pending.lock().unwrap() = Some(anim);
-                            return; // keyed decode succeeded
-                        }
-                    }
-                    // Fallback: GIF decode failed or yielded no frames
-                    if let Ok(anim) = AnimatedSprite::new(
-                        solar_bytes, (load_w, load_h), SOLAR_ANIM_FPS,
-                    ) {
-                        *pending.lock().unwrap() = Some(anim);
-                    }
-                });
-            }
+            queue_solar_decode_if_needed(st);
+        } else {
+            obj.visible = true;
         }
-        obj.visible = true;
     }
 
     // Camera: disable auto Y lerp by setting a dummy zoom_anchor
@@ -496,6 +530,7 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
         cam.zoom            = 1.0 / ZOOM_MAX;   // start fully zoomed out (arc-peak look)
         cam.zoom_target     = 1.0 / ZOOM_MAX;   // tick_zoom lerps back as player falls
     }
+    c.set_var("space_exit_zoom_reset", true);
 
     // Restore normal swing damping
     if let Some(g) = c.get_grapple_mut("player") { g.damping = 0.001; }
@@ -626,28 +661,39 @@ fn tick_solar_pending(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let pending_arc = st.lock().unwrap().solar_anim_pending.clone();
     if let Some(arc) = pending_arc {
         if let Ok(mut guard) = arc.try_lock() {
-            if let Some(anim) = guard.take() {
+            if let Some(mut anim) = guard.take() {
                 if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
                     obj.size = (VW, SPACE_SOLAR_H);
+                    obj.set_image(anim.get_current_image());
                     obj.set_animation(anim);
+                    obj.visible = true;
                 }
-                st.lock().unwrap().solar_anim_pending = None;
+                let mut s = st.lock().unwrap();
+                s.solar_anim_pending = None;
+                s.solar_anim_loaded = true;
             }
         }
     }
 }
 
 fn tick_solar_screen_pos(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    // Position the solar ceiling in screen space based on player proximity to
-    // the kill zone. t=0 → gif fully above screen (far away);
-    // t=1 → gif bottom at screen top (player at kill zone).
-    let py = st.lock().unwrap().py;
-    let kill_y = SPACE_UPPER_LIMIT_Y + SPACE_SOLAR_H * 0.5;
+    // Distance-based reveal: far away it is oversized and fully off-screen,
+    // then it zooms/slides into view as the player nears the killline.
+    let (py, kill_y) = {
+        let s = st.lock().unwrap();
+        (s.py, solar_kill_y(&s))
+    };
     let dist_to_kill = (py - kill_y).max(0.0);
-    let t = (1.0 - dist_to_kill / (VH * 3.0)).clamp(0.0, 1.0);
-    let screen_y = -SPACE_SOLAR_H * (1.0 - t);
+    let t = (1.0 - dist_to_kill / SPACE_SOLAR_REVEAL_DIST).clamp(0.0, 1.0);
+    let scale = SPACE_SOLAR_FAR_SCALE + (1.0 - SPACE_SOLAR_FAR_SCALE) * t;
+    let w = VW * scale;
+    let h = SPACE_SOLAR_H * scale;
+    let bottom_y = SPACE_SOLAR_FAR_BOTTOM_OFFSET * (1.0 - t) + SPACE_SOLAR_NEAR_BOTTOM_Y * t;
+    let screen_x = -(w - VW) * 0.5;
+    let screen_y = bottom_y - h;
     if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
-        obj.position = (0.0, screen_y);
+        obj.size = (w, h);
+        obj.position = (screen_x, screen_y);
     }
 }
 

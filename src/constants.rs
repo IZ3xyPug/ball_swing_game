@@ -552,19 +552,35 @@ pub const C_OXY_LOW:     (u8,u8,u8) = (220, 55,  55);
 pub const SPACE_MOMENTUM_CAP: f32 = MOMENTUM_CAP * 2.0 / 3.0;
 
 /// Y coordinate of the solar ceiling (5 screen-heights above space entry).
-/// Solar gif is placed here; crossing into its lower half triggers sun-death.
+/// Solar gif is placed here; crossing into the dense surface zone triggers sun-death.
 pub const SPACE_UPPER_LIMIT_Y: f32 = SPACE_ENTRY_Y - VH * 5.0;
 
-/// Approximate height of solar_v8.gif when scaled to full VW width.
+/// Approximate height of corona_v5.gif when scaled to full VW width.
 /// Adjust if the gif has a different aspect ratio.
 pub const SPACE_SOLAR_H: f32 = VH * 1.0;
+
+/// Distance from the killline where the solar ceiling reveal starts.
+/// Set to cover the entire space zone so corona is visible from entry.
+pub const SPACE_SOLAR_REVEAL_DIST: f32 = VH * 4.2;
+/// Far-away scale: corona is slightly wider than the screen when distant.
+pub const SPACE_SOLAR_FAR_SCALE: f32 = 1.35;
+/// Bottom Y of the corona in screen-space when the player is far from the sun.
+/// VH*0.08 delays initial visibility so the sun does not appear too early.
+pub const SPACE_SOLAR_FAR_BOTTOM_OFFSET: f32 = VH * 0.08;
+/// Bottom Y of the solar ceiling when fully revealed (screen-space).
+/// VH*0.90 brings the dense surface line into view right as killline is reached.
+pub const SPACE_SOLAR_NEAR_BOTTOM_Y: f32 = VH * 0.90;
+
+/// Default solar surface ratio (y from top / height), derived from a frame-wide
+/// luminance scan of corona_v5.gif (lum>=120, row coverage>=0.35).
+pub const SOLAR_SURFACE_RATIO_DEFAULT: f32 = 0.3690;
 
 /// Animation speed for the solar ceiling gif (fps).
 pub const SOLAR_ANIM_FPS: f32 = 8.0;
 
 /// Asset path for the solar ceiling gif.
 pub const ASSET_SOLAR_GIF: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/solar_v8.gif");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/corona_v5.gif");
 
 // Red (arc) coins
 pub const SPACE_RED_COIN_POOL_SIZE: usize = 20;
