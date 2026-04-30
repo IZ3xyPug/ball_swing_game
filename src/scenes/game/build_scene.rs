@@ -1245,11 +1245,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         Some(Value::Bool(true))
                     );
                     let action_now = space_now || mouse_now;
-                    // After orbit launch the "was" state may be stale; resync it so
-                    // the very first press is detected as a fresh edge.
+                    // After orbit launch, force "was" state to false so the held
+                    // space press is seen as a fresh rising edge on the first gameplay
+                    // frame — giving an immediate grab on that same space click.
                     if matches!(c.get_var("input_needs_edge_reset"), Some(Value::Bool(true))) {
-                        space_was_down = space_now;
-                        mouse_was_down = mouse_now;
+                        space_was_down = false;
+                        mouse_was_down = false;
                         c.set_var("input_needs_edge_reset", false);
                     }
                     let action_was = space_was_down || mouse_was_down;

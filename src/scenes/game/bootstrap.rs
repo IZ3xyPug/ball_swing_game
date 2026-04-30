@@ -88,7 +88,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     if let Ok(anim) = AnimatedSprite::new(
         include_bytes!("../../../assets/energy_hook_1.gif"),
         (ASTEROID_W, ASTEROID_H),
-        14.0,
+        8.0,
     ) {
         asteroid.set_image(anim.get_current_image());
         asteroid.set_animation(anim);
@@ -573,7 +573,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let asteroid_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/asteroid.gif"),
         (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
-        14.0,
+        8.0,
     ).ok();
     let mut space_asteroid_free: Vec<String> = Vec::new();
     for i in 0..SPACE_ASTEROID_POOL_SIZE {
