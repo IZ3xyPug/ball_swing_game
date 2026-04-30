@@ -7,11 +7,92 @@ use crate::images::*;
 use crate::state::*;
 use super::helpers::*;
 
+/// Returns animation duration in ticks, scaled down at higher player speeds.
+/// Base: SPAWN_ANIM_TICKS at normal pace. Halves at MOMENTUM_CAP.
+#[inline]
+fn spawn_anim_ticks_for_speed(vx: f32) -> u32 {
+    let speed_t = (vx.abs() / MOMENTUM_CAP).min(1.0);
+    // Lerp from SPAWN_ANIM_TICKS down to SPAWN_ANIM_TICKS/2 as speed goes 0→cap.
+    let ticks = SPAWN_ANIM_TICKS as f32 * (1.0 - speed_t * 0.5);
+    (ticks as u32).max(10)
+}
+
+/// Advance all active spawn-build animations by one tick.
+/// Must be called once per frame, before or after spawning (but consistently).
+pub fn tick_spawn_animations(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if s.spawn_animations.is_empty() { return; }
+
+    // Trigger distance = half the visible screen width + speed lookahead.
+    // At zoom=1.0 the visible half-width is VW/2. Zoomed out (zoom<1) the
+    // visible area is larger, so the trigger fires earlier automatically.
+    // Speed adds a small extra lookahead on top so fast players stay ahead.
+    let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.1);
+    let visible_half_w = (VW as f32 * 0.5) / zoom;
+    let speed_t = (s.vx.abs() / MOMENTUM_CAP).min(1.0);
+    let trigger_ahead = visible_half_w + VW as f32 * speed_t * 0.3;
+    let trigger_x = s.px + trigger_ahead;
+    for anim in s.spawn_animations.iter_mut() {
+        if !anim.started && anim.target_x < trigger_x {
+            anim.started = true;
+        }
+    }
+
+    // Collect per-anim updates, then release the lock before touching game objects.
+    // Tuple: (id, tx, y, rot, done, restore_platform, just_started, restore_rot_mom)
+    let mut updates: Vec<(String, f32, f32, f32, bool, bool, bool, f32)> = Vec::new();
+    for anim in s.spawn_animations.iter_mut() {
+        if !anim.started { continue; }
+        let just_started = anim.elapsed == 0;
+        anim.elapsed += 1;
+        let t = (anim.elapsed as f32 / anim.total as f32).min(1.0);
+        // Cubic ease-out: fast start, slow finish.
+        let ease = 1.0 - (1.0 - t).powi(3);
+        let y   = anim.start_y  + (anim.target_y  - anim.start_y)  * ease;
+        let rot = anim.start_rot + (anim.target_rot - anim.start_rot) * ease;
+        let done = anim.elapsed >= anim.total;
+        updates.push((
+            anim.id.clone(),
+            anim.target_x,
+            if done { anim.target_y } else { y },
+            if done { anim.target_rot } else { rot },
+            done,
+            anim.restore_platform,
+            just_started,
+            anim.restore_rotation_momentum,
+        ));
+    }
+    s.spawn_animations.retain(|a| !a.started || a.elapsed < a.total);
+    drop(s);
+
+    for (id, tx, y, rot, done, restore_platform, just_started, restore_rot_mom) in updates {
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            if just_started {
+                obj.visible = true;
+                if restore_rot_mom != 0.0 {
+                    obj.rotation_momentum = restore_rot_mom;
+                }
+            }
+            obj.position.0 = tx;
+            obj.position.1 = y;
+            // Spinners use rotation_momentum for continuous spin — don't
+            // overwrite their rotation with the animation easing value.
+            if restore_rot_mom == 0.0 {
+                obj.rotation = rot;
+            }
+            if done && restore_platform {
+                obj.is_platform = true;
+            }
+        }
+    }
+}
+
 pub fn tick_spawning(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
     coin_spawn_image: &Image,
     coin_spawn_anim: &Option<AnimatedSprite>,
+    tech_bounce_img: &Image,
 ) {
     // Evict Poisson-disk points that have scrolled far behind the player.
     {
@@ -21,7 +102,7 @@ pub fn tick_spawning(
     }
     spawn_hooks(c, st);
     if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
-        spawn_pads(c, st);
+        spawn_pads(c, st, tech_bounce_img);
     }
     if matches!(c.get_var("spawn_spinners_on"), Some(Value::Bool(true)) | None) {
         spawn_spinners(c, st);
@@ -47,6 +128,7 @@ pub fn tick_spawning(
     }
     spawn_rocket_pads(c, st);
     spawn_main_asteroids(c, st);
+    tick_spawn_animations(c, st);
 }
 
 fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -188,18 +270,33 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.live_hooks.push(id.clone());
         if hx > s.rightmost_x { s.rightmost_x = hx; }
         hooks_spawned += 1;
-        // Register hook centre in the Poisson sampler so future pads/spinners
-        // naturally avoid this Y position.
         s.world_sampler.add(hx, hy);
+
+        // Enqueue drop-in animation: hook falls from above, slow-spins into place.
+        let start_rot = lcg_range(&mut s.seed, -80.0, 80.0);
+        let target_x  = hx - HOOK_R;
+        let target_y  = hy - HOOK_R;
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x, target_y,
+            start_y:      target_y - SPAWN_ANIM_DROP,
+            start_rot,    target_rot: 0.0,
+            elapsed: 0,   total: anim_ticks,
+            restore_platform: false,
+            started: false,
+            restore_rotation_momentum: 0.0,
+        });
 
         let zone_idx = zone_index_for_distance(s.distance);
         drop(s);
 
         let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (hx - HOOK_R, hy - HOOK_R);
+            // Start above screen; tick_spawn_animations moves it to (hx-HOOK_R, hy-HOOK_R).
+            obj.position = (hx - HOOK_R, hy - HOOK_R - SPAWN_ANIM_DROP);
             obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-            obj.visible = true;
+            obj.visible = false; // hidden until animation starts
             if asteroid_mode {
                 obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
             } else {
@@ -229,7 +326,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Pads ──────────────────────────────────────────────────────────────────────
 
-fn spawn_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+fn spawn_pads(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image) {
     let mut s = st.lock().unwrap();
     let mut pads_spawned = 0usize;
     while pads_spawned < PADS_SPAWN_BUDGET_PER_TICK
@@ -290,19 +387,28 @@ fn spawn_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         };
         s.pad_origins.push((id.clone(), origin_x, amp, speed, phase));
 
+        // Drop-in animation: pad sweeps in from above and rotates level.
+        let start_rot = lcg_range(&mut s.seed, -40.0, 40.0);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x: x, target_y: y,
+            start_y:      y - SPAWN_ANIM_DROP,
+            start_rot,    target_rot: 0.0,
+            elapsed: 0,   total: anim_ticks,
+            restore_platform: false, // pads stay is_platform=false; bounce is handled manually
+            started: false,
+            restore_rotation_momentum: 0.0,
+        });
+
         let zone_idx = zone_index_for_distance(s.distance);
+        let _ = zone_idx; // reserved for future zone-tinted pads
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
-            let (r, g, b) = pad_for_zone(zone_idx);
-            let corner_r = pad_corner_radius();
-            obj.position = (x, y);
-            obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
-                image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
-                color: None,
-            });
+            obj.position = (x, y - SPAWN_ANIM_DROP); // start above screen
+            obj.visible = false; // hidden until animation starts
+            obj.set_image(tech_bounce_img.clone());
         }
 
         s = st.lock().unwrap();
@@ -347,13 +453,27 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         };
         s.spinner_origins.push((id.clone(), origin_y, amp, speed, phase));
 
+        // Drop-in animation: spinner falls in from above while spinning.
+        let start_rot = lcg_range(&mut s.seed, -120.0, 120.0);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x: x, target_y: y,
+            start_y:      y - SPAWN_ANIM_DROP,
+            start_rot,    target_rot: 0.0,
+            elapsed: 0,   total: anim_ticks,
+            restore_platform: false,
+            started: false,
+            restore_rotation_momentum: rot_speed,
+        });
+
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
             let (r, g, b) = spinner_for_zone(zone_idx);
-            obj.position = (x, y);
-            obj.visible = true;
-            obj.rotation_momentum = rot_speed;
+            obj.position = (x, y - SPAWN_ANIM_DROP); // start above screen (off-screen)
+            obj.visible = true; // stay visible so physics bridge applies rotation_momentum
+            obj.rotation_momentum = rot_speed; // spin immediately even before drop anim
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (SPINNER_W, SPINNER_H), 0.0),
                 image: spinner_cached(SPINNER_W as u32, SPINNER_H as u32, r, g, b),
@@ -506,11 +626,22 @@ fn spawn_flips(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.flip_live.push(id.clone());
         s.flip_rightmost = x;
         flips_spawned += 1;
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x: x, target_y: y,
+            start_y: y - SPAWN_ANIM_DROP,
+            start_rot, target_rot: 0.0,
+            elapsed: 0, total: anim_ticks,
+            restore_platform: false, started: false,
+            restore_rotation_momentum: 0.0,
+        });
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x, y);
-            obj.visible = true;
+            obj.position = (x, y - SPAWN_ANIM_DROP);
+            obj.visible = false;
         }
 
         s = st.lock().unwrap();
@@ -536,11 +667,22 @@ fn spawn_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.score_x2_live.push(id.clone());
         s.score_x2_rightmost = x;
         spawned += 1;
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x: x, target_y: y,
+            start_y: y - SPAWN_ANIM_DROP,
+            start_rot, target_rot: 0.0,
+            elapsed: 0, total: anim_ticks,
+            restore_platform: false, started: false,
+            restore_rotation_momentum: 0.0,
+        });
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x, y);
-            obj.visible = true;
+            obj.position = (x, y - SPAWN_ANIM_DROP);
+            obj.visible = false;
         }
 
         s = st.lock().unwrap();
@@ -566,11 +708,22 @@ fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.zero_g_live.push(id.clone());
         s.zero_g_rightmost = x;
         spawned += 1;
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x: x, target_y: y,
+            start_y: y - SPAWN_ANIM_DROP,
+            start_rot, target_rot: 0.0,
+            elapsed: 0, total: anim_ticks,
+            restore_platform: false, started: false,
+            restore_rotation_momentum: 0.0,
+        });
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x, y);
-            obj.visible = true;
+            obj.position = (x, y - SPAWN_ANIM_DROP);
+            obj.visible = false;
         }
 
         s = st.lock().unwrap();
@@ -703,13 +856,24 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.gwell_rightmost = x;
         s.gwell_timers.push((id.clone(), GWELL_ON_TICKS, true)); // starts active
         spawned += 1;
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let start_rot = lcg_range(&mut s.seed, -90.0, 90.0);
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x: x - visual_r, target_y: y - visual_r,
+            start_y: y - visual_r - SPAWN_ANIM_DROP,
+            start_rot, target_rot: 0.0,
+            elapsed: 0, total: anim_ticks,
+            restore_platform: false, started: false,
+            restore_rotation_momentum: 0.0,
+        });
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
             let d = visual_r * 2.0;
-            obj.position = (x - visual_r, y - visual_r);
+            obj.position = (x - visual_r, y - visual_r - SPAWN_ANIM_DROP);
             obj.size = (d, d);
-            obj.visible = true;
+            obj.visible = false;
             obj.planet_radius = Some(radius);
             obj.gravity_strength = strength;
             // Set the stepped-alpha ring image
@@ -761,13 +925,25 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.turret_rightmost = x;
         s.turret_timers.push((id.clone(), TURRET_SHOOT_INTERVAL));
         spawned += 1;
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let start_rot = lcg_range(&mut s.seed, -90.0, 90.0);
+        let half = TURRET_FULL_SIZE * 0.5;
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x: x - half, target_y: y - half,
+            start_y: y - half - SPAWN_ANIM_DROP,
+            start_rot, target_rot: 0.0,
+            elapsed: 0, total: anim_ticks,
+            restore_platform: false, started: false,
+            restore_rotation_momentum: 0.0,
+        });
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
             let half = TURRET_FULL_SIZE * 0.5;
-            obj.position = (x - half, y - half);
+            obj.position = (x - half, y - half - SPAWN_ANIM_DROP);
             obj.size = (TURRET_FULL_SIZE, TURRET_FULL_SIZE);
-            obj.visible = true;
+            obj.visible = false;
         }
 
         s = st.lock().unwrap();
@@ -850,9 +1026,8 @@ fn spawn_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.rotation_momentum = spin;
             obj.momentum = (-drift, 0.0);
             obj.gravity = 0.0;
-            // Dynamic asteroid mass: small asteroids are lighter, large are heavier.
-            // Wide range so large asteroids feel notably heavier than small ones.
-            let density = 0.3 + size_t * 6.0;
+            // Quadratic density curve: small asteroids barely move, large are very heavy.
+            let density = 0.08 + size_t * size_t * 16.0;
             obj.material.density = density;
             // Tighter circle collider to closely match the visible sprite shape.
             let hit_r = size * 0.38;

@@ -14,7 +14,7 @@ const ROPE_FX_SUPERSAMPLE: u32 = 1;
 const ROPE_LEN_QUANTUM_PX: u32 = 20;
 // How far the rope image extends past the hook center (away from player).
 // Enough to hide cleanly behind the hook sprite but not protrude past it.
-const ROPE_HOOK_PAD:   f32 = 50.0; // HOOK_R(38) + 12
+const ROPE_HOOK_PAD:   f32 = 62.0; // HOOK_R(38) + 24
 // How far the rope image extends past the player center.
 // Must cover PLAYER_R + look-ahead motion at max swing speed.
 const ROPE_PLAYER_PAD: f32 = PLAYER_R + 35.0; // 75px
@@ -78,8 +78,8 @@ pub fn prewarm_rope_fx_cache() {
     let beam_px = ROPE_THICKNESS.round().max(2.0) as u32;
     let n_frames = rope_fx_frames().len();
     const VEL_LOOK: f32 = 1.0;
-    let min_draw = ROPE_LEN_MIN + ROPE_HOOK_PAD + ROPE_PLAYER_PAD;
-    let max_draw = ROPE_LEN_MAX + ROPE_HOOK_PAD + ROPE_PLAYER_PAD + MOMENTUM_CAP * VEL_LOOK;
+    let min_draw = (ROPE_LEN_MIN + ROPE_PLAYER_PAD).max(1.0);
+    let max_draw = ROPE_LEN_MAX + ROPE_PLAYER_PAD + MOMENTUM_CAP * VEL_LOOK;
     let min_q = quantize_len_px(min_draw as u32 - ROPE_LEN_QUANTUM_PX);
     let max_q = quantize_len_px(max_draw as u32 + ROPE_LEN_QUANTUM_PX);
     let step  = ROPE_LEN_QUANTUM_PX.max(1);
@@ -162,13 +162,15 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let unit_y = vis_rdy / vis_dist;
     let rope_ang = vis_rdy.atan2(vis_rdx).to_degrees();
 
-    // Asymmetric pads: hook pad hides behind the hook sprite (50px < HOOK_R*2);
-    // player pad extends past the player circle edge.
-    let rope_draw_len = vis_dist + ROPE_HOOK_PAD + ROPE_PLAYER_PAD;
-    // Shift center toward the larger-pad side so both endpoints land correctly.
-    let center_shift = (ROPE_PLAYER_PAD - ROPE_HOOK_PAD) * 0.5;
-    let rope_mid_x = hx + vis_rdx * 0.5 + unit_x * center_shift;
-    let rope_mid_y = hy + vis_rdy * 0.5 + unit_y * center_shift;
+    // Rope draws from hook CENTER so the rectangle extends into the hook sprite,
+    // filling the gap. The far end extends ROPE_PLAYER_PAD past the player center.
+    let end_x = vis_px + unit_x * ROPE_PLAYER_PAD;
+    let end_y = vis_py + unit_y * ROPE_PLAYER_PAD;
+    let seg_dx = end_x - hx;
+    let seg_dy = end_y - hy;
+    let rope_draw_len = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt().max(1.0);
+    let rope_mid_x = (hx + end_x) * 0.5;
+    let rope_mid_y = (hy + end_y) * 0.5;
 
     let rope_beam = ROPE_THICKNESS.max(2.0);
     let rope_beam_px = rope_beam.round().max(2.0) as u32;

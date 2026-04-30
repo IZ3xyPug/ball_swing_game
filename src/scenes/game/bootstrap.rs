@@ -23,6 +23,7 @@ pub struct PoolSets {
     pub coin_anim_template:  Option<AnimatedSprite>,
     #[allow(dead_code)]
     pub score_x2_anim_template: Option<AnimatedSprite>,
+    pub tech_bounce_static_img: Image,
     // ── Space zone pools
     pub rocket_pad_free:   Vec<String>,
     pub space_planet_free: Vec<String>,
@@ -369,10 +370,21 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Pad pool ─────────────────────────────────────────────────────────
+    // Keep pad image + rounded corner geometry in sync so highlights and
+    // silhouette edges match the rendered bounce-pad art.
+    let tech_bounce_static_img: Image = {
+        let corner_r = pad_corner_radius();
+        Image {
+            shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
+            image: pad_image_cached(),
+            color: None,
+        }
+    };
     let mut pad_free: Vec<String> = Vec::new();
     for i in 0..PAD_POOL_SIZE {
         let id = format!("pad_{i}");
         let mut obj = make_pad(ctx, &id, -3000.0, -3000.0);
+        obj.set_image(tech_bounce_static_img.clone());
         obj.visible = false;
         pad_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -738,6 +750,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template,
+        tech_bounce_static_img,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,

@@ -124,6 +124,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template: _,
+        tech_bounce_static_img,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,
@@ -481,12 +482,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             if let Some(cam) = c.camera_mut() {
                                 cam.zoom_anchor = None;
                                 cam.follow(Some(Target::name("player")));
-                                cam.snap_zoom(1.0);
+                                // Don't snap — let tick_zoom lerp smoothly from intro zoom.
                             }
                             // Force follow briefly to avoid any intro camera target desync.
                             c.set_var("start_follow_force_ticks", 180i32);
                             // Slow zoom recovery so the handoff feels smooth instead of abrupt.
-                            c.set_var("start_zoom_recover_ticks", 0i32);
+                            c.set_var("start_zoom_recover_ticks", 240i32);
+                            // Sync input edge state so the first press after launch is detected.
+                            c.set_var("input_needs_edge_reset", true);
                         }
                     } else if is_pause {
                         let animating = matches!(
@@ -634,7 +637,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 pad_free: pad_free.clone(),
                 pad_rightmost: SPAWN_X,
                 pad_origins: Vec::new(),
-                pad_bounce_count: 0,
                 spinner_live: Vec::new(),
                 spinner_free: spinner_free.clone(),
                 spinner_rightmost: SPAWN_X + VW * 0.65,
@@ -673,11 +675,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 turret_timers: Vec::new(),
                 bullet_live: Vec::new(),
                 bullet_free: bullet_free.clone(),
-                // Temporarily disable bounce pads.
-                bounce_enabled: true,
                 dark_mode: false,
                 god_mode: false,
                 glow_flashes: Vec::new(),
+                spawn_animations: Vec::new(),
 
                 hud_last_dist_fill:    u32::MAX,
                 hud_last_coins:        u32::MAX,
@@ -829,6 +830,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 &state,
                 &coin_spawn_image,
                 &coin_spawn_anim,
+                &tech_bounce_static_img,
             );
 
             // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
@@ -862,6 +864,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // ── Pre-warm rope texture cache (background thread) ──────────
             physics::prewarm_rope_fx_cache();
+
+            // ── Pre-warm asteroid hook image cache (background thread) ───
+            // Builds all 9 variants (3 buckets × 3 states) off the main thread
+            // so the first frame of gameplay doesn't stall on disk I/O + resize.
+            std::thread::spawn(|| { hook_asteroid_img_for_id("hook_0", AsteroidHookState::Base); });
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -1092,6 +1099,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let bg_svsf = bg_zone_start_vivid_space_flip.clone();
                 let bg_pvsf = bg_zone_purple_vivid_space_flip.clone();
                 let bg_bvsf = bg_zone_black_vivid_space_flip.clone();
+                let tech_bounce_img = tech_bounce_static_img.clone();
 
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
@@ -1237,6 +1245,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         Some(Value::Bool(true))
                     );
                     let action_now = space_now || mouse_now;
+                    // After orbit launch the "was" state may be stale; resync it so
+                    // the very first press is detected as a fresh edge.
+                    if matches!(c.get_var("input_needs_edge_reset"), Some(Value::Bool(true))) {
+                        space_was_down = space_now;
+                        mouse_was_down = mouse_now;
+                        c.set_var("input_needs_edge_reset", false);
+                    }
                     let action_was = space_was_down || mouse_was_down;
                     if action_now && !action_was {
                         c.run(Action::Custom {
@@ -1327,6 +1342,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &st,
                         &coin_spawn_image,
                         &coin_spawn_anim,
+                        &tech_bounce_img,
                     );
 
                     // ── Culling ──────────────────────────────────────────
@@ -1454,6 +1470,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &mut prev_nearest_hook,
                         &mut dark_mode_prev,
                         frame_counter,
+                        &tech_bounce_img,
                     );
 
                     // ── Coin magnet radius debug visual ──────────────────
