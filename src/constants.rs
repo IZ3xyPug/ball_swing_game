@@ -25,6 +25,11 @@ pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
 pub const PLAYER_R:       f32 = 40.0;
 pub const HOOK_R:         f32 = 38.0;
 pub const ROPE_THICKNESS: f32 = 60.0;
+pub const AIRSHIELD_W:    f32 = 220.0;
+pub const AIRSHIELD_H:    f32 = 160.0;
+pub const AIRSHIELD_SPEED_THRESHOLD: f32 = 30.0;
+pub const AIRSHIELD_AHEAD_OFFSET:    f32 = 110.0;
+pub const AIRSHIELD_ANIM_FPS:        f32 = 16.0;
 
 // ── Generation — General ──────────────────────────────────────────────────────
 
@@ -423,12 +428,12 @@ pub const C_ROCKET_PAD_GLOW:       (u8,u8,u8) = (120, 240, 255);
 
 // ── Space zone ────────────────────────────────────────────────────────────────
 /// Player py must drop below this (negative y) to enter space mode.
-pub const SPACE_ENTRY_Y:           f32 = -(VH * 0.35);
+pub const SPACE_ENTRY_Y:           f32 = -(VH * 1.35);
 /// Depth at which the entry catch planet is centered and momentum is zeroed.
 /// Must be below (more negative than) SPACE_ENTRY_Y by enough that the player
 /// reaches it while still moving upward. Planet radius + gravity_influence_mult
 /// together ensure gravity pulls from here all the way back to SPACE_ENTRY_Y.
-pub const SPACE_SETTLE_Y:          f32 = -(VH * 1.1);  // ~-2376 at VH=2160
+pub const SPACE_SETTLE_Y:          f32 = -(VH * 2.1);  // ~-4536 at VH=2160
 /// Player py rising back above this (less negative) while in space triggers return.
 pub const SPACE_RETURN_Y:          f32 = -(VH * 0.05);
 /// Global gravity scale while in space — effectively zero. Planet and
@@ -444,22 +449,22 @@ pub const SPACE_WELCOME_TICKS:     u32 = 200;
 pub const SPACE_RETURN_DELAY_TICKS: u32 = 90;
 
 // Space object pool sizes
-pub const SPACE_PLANET_POOL_SIZE:    usize = 12;
-pub const SPACE_HOOK_POOL_SIZE:      usize = 64;
-pub const SPACE_COIN_POOL_SIZE:      usize = 40;
+pub const SPACE_PLANET_POOL_SIZE:    usize = 24;
+pub const SPACE_HOOK_POOL_SIZE:      usize = 160;
+pub const SPACE_COIN_POOL_SIZE:      usize = 80;
 pub const SPACE_BLACKHOLE_POOL_SIZE: usize = 8;
-pub const SPACE_ASTEROID_POOL_SIZE:  usize = 18;
+pub const SPACE_ASTEROID_POOL_SIZE:  usize = 40;
 
 // Space object spawn budgets per tick
-pub const SPACE_PLANET_SPAWN_BUDGET:    usize = 1;
-pub const SPACE_HOOK_SPAWN_BUDGET:      usize = 3;  // one per Y-band per spawn tick
-pub const SPACE_COIN_SPAWN_BUDGET:      usize = 2;
+pub const SPACE_PLANET_SPAWN_BUDGET:    usize = 2;
+pub const SPACE_HOOK_SPAWN_BUDGET:      usize = 8;  // one per Y-band per spawn tick
+pub const SPACE_COIN_SPAWN_BUDGET:      usize = 3;
 pub const SPACE_BLACKHOLE_SPAWN_BUDGET: usize = 1;
-pub const SPACE_ASTEROID_SPAWN_BUDGET:  usize = 1;
+pub const SPACE_ASTEROID_SPAWN_BUDGET:  usize = 3;
 
 // Space planet parameters
-pub const SPACE_PLANET_GAP_MIN:         f32 = 2400.0;
-pub const SPACE_PLANET_GAP_MAX:         f32 = 5200.0;
+pub const SPACE_PLANET_GAP_MIN:         f32 = 1400.0;
+pub const SPACE_PLANET_GAP_MAX:         f32 = 3200.0;
 pub const SPACE_PLANET_Y_MIN:           f32 = -(VH * 4.0);
 pub const SPACE_PLANET_Y_MAX:           f32 = -(VH * 0.55);
 pub const SPACE_PLANET_RADIUS_SM_MIN:   f32 = 120.0;
@@ -485,6 +490,11 @@ pub const SPACE_HOOK_Y_DEEP_MAX:    f32 = -(VH * 5.0);
 // Keep old names as aliases so nothing else breaks
 pub const SPACE_HOOK_Y_MIN: f32 = SPACE_HOOK_Y_SHALLOW_MIN;
 pub const SPACE_HOOK_Y_MAX: f32 = SPACE_HOOK_Y_SHALLOW_MAX;
+// Dense hook zone near the solar ceiling (0.5–2.0 screen-heights below the sun).
+pub const SPACE_HOOK_SUN_ZONE_Y_MIN: f32 = SPACE_UPPER_LIMIT_Y + VH * 0.5;
+pub const SPACE_HOOK_SUN_ZONE_Y_MAX: f32 = SPACE_UPPER_LIMIT_Y + VH * 2.0;
+pub const SPACE_HOOK_SUN_GAP_MIN:    f32 = 180.0;
+pub const SPACE_HOOK_SUN_GAP_MAX:    f32 = 380.0;
 
 // Space coin parameters
 pub const SPACE_COIN_GAP_MIN:  f32 = 580.0;
@@ -548,3 +558,74 @@ pub const OXYGEN_BAR_H:  f32 = 42.0;
 pub const C_OXY_FULL:    (u8,u8,u8) = (80,  220, 160);
 pub const C_OXY_MID:     (u8,u8,u8) = (240, 200, 55);
 pub const C_OXY_LOW:     (u8,u8,u8) = (220, 55,  55);
+
+// ── Space zone — new features ─────────────────────────────────────────────────
+
+/// Momentum cap while in space mode (2/3 of the normal cap).
+pub const SPACE_MOMENTUM_CAP: f32 = MOMENTUM_CAP * 2.0 / 3.0;
+
+/// Y coordinate of the solar ceiling (5 screen-heights above space entry).
+/// Solar gif is placed here; crossing into the dense surface zone triggers sun-death.
+pub const SPACE_UPPER_LIMIT_Y: f32 = SPACE_ENTRY_Y - VH * 5.0;
+
+/// Approximate height of corona_v5.gif when scaled to full VW width.
+/// Adjust if the gif has a different aspect ratio.
+pub const SPACE_SOLAR_H: f32 = VH * 1.0;
+
+/// Distance from the killline where the solar ceiling reveal starts.
+/// Set to cover the entire space zone so corona is visible from entry.
+pub const SPACE_SOLAR_REVEAL_DIST: f32 = VH * 4.2;
+/// Far-away scale: corona is slightly wider than the screen when distant.
+pub const SPACE_SOLAR_FAR_SCALE: f32 = 1.35;
+/// Bottom Y of the corona in screen-space when the player is far from the sun.
+/// VH*0.08 delays initial visibility so the sun does not appear too early.
+pub const SPACE_SOLAR_FAR_BOTTOM_OFFSET: f32 = VH * 0.08;
+/// Bottom Y of the solar ceiling when fully revealed (screen-space).
+/// VH*0.90 brings the dense surface line into view right as killline is reached.
+pub const SPACE_SOLAR_NEAR_BOTTOM_Y: f32 = VH * 0.90;
+
+/// Default solar surface ratio (y from top / height), derived from a frame-wide
+/// luminance scan of corona_v5.gif (lum>=120, row coverage>=0.35).
+pub const SOLAR_SURFACE_RATIO_DEFAULT: f32 = 0.3690;
+
+/// Animation speed for the solar ceiling gif (fps).
+pub const SOLAR_ANIM_FPS: f32 = 8.0;
+
+/// Asset path for the solar ceiling gif.
+pub const ASSET_SOLAR_GIF: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/corona_v5.gif");
+
+// Red (arc) coins
+pub const SPACE_RED_COIN_POOL_SIZE: usize = 20;
+/// Score awarded for collecting a red space coin.
+pub const SPACE_RED_COIN_SCORE:     u32   = 3000;
+/// Visual radius of a red space coin (slightly larger than normal space coin).
+pub const SPACE_RED_COIN_R:         f32   = 60.0;
+
+// Planet coin arcs — when a space planet spawns it places coins in a ring.
+/// Number of coins placed in the arc around each planet.
+pub const SPACE_COIN_ARC_COUNT:        usize = 7;
+/// Fraction of arc coins that are red (floored to whole coins).
+pub const SPACE_COIN_ARC_RED_FRAC:     f32   = 0.30;
+/// Distance from planet centre where the arc coins are placed (×visual_r).
+pub const SPACE_COIN_ARC_RADIUS_MULT:  f32   = 1.85;
+/// Number of hooks placed near each newly spawned space planet.
+pub const SPACE_PLANET_NEARBY_HOOKS:   usize = 3;
+/// Offset from planet centre to nearby hook positions (px beyond visual_r).
+pub const SPACE_PLANET_HOOK_OFFSET:    f32   = 340.0;
+
+// Space gravity wells (repurpose blackhole pool)
+/// Number of hooks placed near each newly spawned space gravity well.
+pub const SPACE_GWELL_NEARBY_HOOKS:   usize = 2;
+/// Offset from well centre to nearby hook positions (px).
+pub const SPACE_GWELL_HOOK_OFFSET:    f32   = 500.0;
+
+// Asteroid drift — velocity components added when an asteroid is spawned.
+pub const SPACE_ASTEROID_VX_MIN: f32 = -4.0;
+pub const SPACE_ASTEROID_VX_MAX: f32 =  4.0;
+pub const SPACE_ASTEROID_VY_MIN: f32 = -2.0;
+pub const SPACE_ASTEROID_VY_MAX: f32 =  2.0;
+
+// Stasis orbit (shared between entry/exit stasis and game-start stasis)
+pub const STASIS_ORBIT_R:     f32 = 240.0;
+pub const STASIS_ORBIT_OMEGA: f32 = 0.038;

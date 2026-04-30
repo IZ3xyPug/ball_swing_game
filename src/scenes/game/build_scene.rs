@@ -131,6 +131,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_coin_free,
         space_bh_free,
         space_asteroid_free,
+        space_red_coin_free,
     } = pools;
 
     // Starter hook positions (must match bootstrap.rs).
@@ -462,6 +463,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             // CCW visual in Y-down: vx = r*ω*sin(θ), vy = -r*ω*cos(θ)
                             let vx = ORBIT_R * ORBIT_OMEGA * theta.sin();
                             let vy = -(ORBIT_R * ORBIT_OMEGA * theta.cos());
+                            let in_space;
                             let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
                             if let Some(state_arc) = state_opt {
                                 let mut s = state_arc.lock().unwrap();
@@ -469,27 +471,32 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 s.vy = vy;
                                 s.hooked = false;
                                 let gdir = s.gravity_dir;
+                                in_space = s.in_space_mode;
+                                s.space_stasis_active = false;
                                 drop(s);
                                 if let Some(obj) = c.get_game_object_mut("player") {
                                     obj.momentum = (vx, vy);
                                     obj.gravity = GRAVITY * gdir;
                                 }
+                            } else {
+                                in_space = false;
                             }
                             if let Some(obj) = c.get_game_object_mut("rope") {
                                 obj.visible = false;
                             }
-                            // Release intro zoom anchor; tick_zoom will lerp back to normal.
-                            if let Some(cam) = c.camera_mut() {
-                                cam.zoom_anchor = None;
-                                cam.follow(Some(Target::name("player")));
-                                // Don't snap — let tick_zoom lerp smoothly from intro zoom.
+                            if !in_space {
+                                // Release intro zoom anchor; tick_zoom will lerp back to normal.
+                                if let Some(cam) = c.camera_mut() {
+                                    cam.zoom_anchor = None;
+                                    cam.follow(Some(Target::name("player")));
+                                    cam.snap_zoom(1.0);
+                                }
+                                // Force follow briefly to avoid any intro camera target desync.
+                                c.set_var("start_follow_force_ticks", 180i32);
+                                // Slow zoom recovery so the handoff feels smooth instead of abrupt.
+                                c.set_var("start_zoom_recover_ticks", 0i32);
                             }
-                            // Force follow briefly to avoid any intro camera target desync.
-                            c.set_var("start_follow_force_ticks", 180i32);
-                            // Slow zoom recovery so the handoff feels smooth instead of abrupt.
-                            c.set_var("start_zoom_recover_ticks", 240i32);
-                            // Sync input edge state so the first press after launch is detected.
-                            c.set_var("input_needs_edge_reset", true);
+                            // In space stasis: space_zone::tick_space_camera manages the camera.
                         }
                     } else if is_pause {
                         let animating = matches!(
@@ -731,6 +738,21 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_asteroid_rightmost: SPAWN_X,
 
                 hud_last_oxygen:          u32::MAX,
+
+                space_stasis_active:    false,
+                space_stasis_hook_id:   String::new(),
+                space_stasis_is_entry:  false,
+
+                space_red_coin_live:    Vec::new(),
+                space_red_coin_free:    space_red_coin_free.clone(),
+
+                space_gwell_timers:     Vec::new(),
+                space_entry_px:         0.0,
+                space_coin_spent:       Vec::new(),
+                space_red_coin_spent:   Vec::new(),
+                solar_surface_ratio:    SOLAR_SURFACE_RATIO_DEFAULT,
+                solar_anim_loaded:      false,
+                solar_anim_pending:     None,
             };
 
             // Reuse persistent Arc across respawns.
@@ -854,6 +876,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 cam.zoom_anchor = Some((start_hook.0, start_hook.1));
             }
 
+            // Reset solar death flag and ceiling visibility for fresh run.
+            canvas.set_var("died_to_sun", false);
+            if let Some(obj) = canvas.get_game_object_mut("solar_ceiling") {
+                obj.visible = false;
+            }
+
             canvas.set_var("start_prompt_active", true);
             canvas.set_var("game_paused", true);
             // Do not hard-pause the engine here: hard-pause skips
@@ -864,6 +892,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // ── Pre-warm rope texture cache (background thread) ──────────
             physics::prewarm_rope_fx_cache();
+            // Pre-warm solar GIF decode so corona is ready before space approach.
+            super::space_zone::prewarm_solar_decode(&state);
 
             // ── Pre-warm asteroid hook image cache (background thread) ───
             // Builds all 9 variants (3 buckets × 3 states) off the main thread
@@ -1099,6 +1129,61 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let bg_svsf = bg_zone_start_vivid_space_flip.clone();
                 let bg_pvsf = bg_zone_purple_vivid_space_flip.clone();
                 let bg_bvsf = bg_zone_black_vivid_space_flip.clone();
+                let mut prev_player_center: Option<(f32, f32)> = None;
+
+                canvas.on_update(move |c: &mut Canvas| {
+                    let (px, py, vx, vy) = if let Some(player) = c.get_game_object("player") {
+                        (
+                            player.position.0 + player.size.0 * 0.5,
+                            player.position.1 + player.size.1 * 0.5,
+                            player.momentum.0,
+                            player.momentum.1,
+                        )
+                    } else {
+                        return;
+                    };
+
+                    let speed = (vx * vx + vy * vy).sqrt();
+                    let Some(shield) = c.get_game_object_mut("airshield") else {
+                        return;
+                    };
+
+                    if speed < AIRSHIELD_SPEED_THRESHOLD {
+                        shield.visible = false;
+                        prev_player_center = Some((px, py));
+                        return;
+                    }
+
+                    // Direction source: post-crystalline net movement from solved
+                    // position delta this frame. Momentum is fallback only.
+                    let (mdx, mdy) = if let Some((lx, ly)) = prev_player_center {
+                        (px - lx, py - ly)
+                    } else {
+                        (vx, vy)
+                    };
+                    prev_player_center = Some((px, py));
+
+                    let motion_len = (mdx * mdx + mdy * mdy).sqrt();
+                    let (dx, dy) = if motion_len > 0.001 {
+                        (mdx / motion_len, mdy / motion_len)
+                    } else if speed > f32::EPSILON {
+                        (vx / speed, vy / speed)
+                    } else {
+                        (1.0, 0.0)
+                    };
+
+                    // Anchor the shield by its right-middle point (x=1.0, y=0.5),
+                    // then rotate so that point always lies in front of net motion.
+                    let ahead = PLAYER_R + AIRSHIELD_AHEAD_OFFSET;
+                    let ax = px + dx * ahead;
+                    let ay = py + dy * ahead;
+                    let cx = ax - dx * (shield.size.0 * 0.5);
+                    let cy = ay - dy * (shield.size.0 * 0.5);
+
+                    shield.position = (cx - shield.size.0 * 0.5, cy - shield.size.1 * 0.5);
+                    shield.rotation = dy.atan2(dx).to_degrees();
+                    shield.visible = true;
+                });
                 let tech_bounce_img = tech_bounce_static_img.clone();
 
                 canvas.on_update(move |c| {
@@ -1210,11 +1295,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 obj.momentum = (0.0, 0.0);
                                 obj.gravity = 0.0;
                             }
-                            // Maintain intro zoom anchored on hook_0.
-                            if let Some(cam) = c.camera_mut() {
-                                cam.zoom_lerp_speed = 0.06;
-                                cam.zoom_anchor = Some((hx, hy));
-                                cam.smooth_zoom(INTRO_ZOOM);
+                            let in_space = { st.lock().unwrap().in_space_mode };
+                            if in_space {
+                                // Space stasis: keep space camera tracking the player.
+                                super::space_zone::tick_space_camera_pub(c, &st);
+                            } else {
+                                // Normal intro orbit: maintain zoom anchored on hook.
+                                if let Some(cam) = c.camera_mut() {
+                                    cam.zoom_lerp_speed = 0.06;
+                                    cam.zoom_anchor = Some((hx, hy));
+                                    cam.smooth_zoom(INTRO_ZOOM);
+                                }
                             }
                             c.set_var("start_orbit_ticks", ticks as i32 + 1);
                         }
@@ -1534,7 +1625,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Death check ──────────────────────────────────────
                     let mut s = st.lock().unwrap();
-                    let dead_now = !s.god_mode && ((s.gravity_dir > 0.0
+                    // Solar death: set by tick_space_zone when player reaches solar ceiling.
+                    let died_to_sun = matches!(c.get_var("died_to_sun"), Some(Value::Bool(true)));
+                    let dead_now = !s.god_mode && (died_to_sun || (s.gravity_dir > 0.0
                         && s.py > VH + 150.0)
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {
@@ -1556,7 +1649,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         {
                             obj.visible = false;
                         }
-                        c.load_scene("gameover");
+                        if died_to_sun {
+                            c.set_var("died_to_sun", false);
+                            c.load_scene("gameover_sun");
+                        } else {
+                            c.load_scene("gameover");
+                        }
                     }
                 });
                 canvas.set_var("game_tick_registered", true);

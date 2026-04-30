@@ -136,9 +136,12 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.vx -= radial_v * nx * SWING_TENSION;
     s.vy -= radial_v * ny * SWING_TENSION;
 
-    // Apply tangential gravity + swing drag.
-    tangent_v += GRAVITY * gravity_scale * s.gravity_dir * ty;
-    tangent_v *= SWING_DRAG;
+    // In space, preserve tangential velocity exactly so rotation direction and
+    // speed stay constant while hooked. Normal mode keeps gravity + drag.
+    if !s.in_space_mode {
+        tangent_v += GRAVITY * gravity_scale * s.gravity_dir * ty;
+        tangent_v *= SWING_DRAG;
+    }
     s.vx = tx * tangent_v;
     s.vy = ty * tangent_v;
 
@@ -219,10 +222,11 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
 
     if !s.space_launch_active {
+        let cap = if s.in_space_mode { SPACE_MOMENTUM_CAP } else { MOMENTUM_CAP };
         let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
-        if speed > MOMENTUM_CAP {
-            s.vx = s.vx / speed * MOMENTUM_CAP;
-            s.vy = s.vy / speed * MOMENTUM_CAP;
+        if speed > cap {
+            s.vx = s.vx / speed * cap;
+            s.vy = s.vy / speed * cap;
         }
     }
 

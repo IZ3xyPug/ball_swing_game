@@ -94,6 +94,10 @@ pub fn tick_spawning(
     coin_spawn_anim: &Option<AnimatedSprite>,
     tech_bounce_img: &Image,
 ) {
+    if st.lock().unwrap().in_space_mode {
+        return;
+    }
+
     // Evict Poisson-disk points that have scrolled far behind the player.
     {
         let mut s = st.lock().unwrap();

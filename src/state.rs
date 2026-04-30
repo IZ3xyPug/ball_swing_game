@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use crate::constants::*;
 use image::RgbaImage;
+use quartz::AnimatedSprite;
 use crate::poisson::PoissonSampler;
 
 pub fn lcg(s: &mut u64) -> f32 {
@@ -192,6 +194,8 @@ pub struct State {
     pub space_cam_y:             f32,
     /// Background scale frozen at space entry (for parallax starfield effect).
     pub space_entry_bg_scale:    f32,
+    /// Player X at the moment they entered space — restored on return.
+    pub space_entry_px:          f32,
 
     // Rocket pads (rare in normal game)
     pub rocket_pad_live:         Vec<String>,
@@ -225,4 +229,32 @@ pub struct State {
 
     // HUD dirty for oxygen
     pub hud_last_oxygen:         u32,
+
+    // ── Space stasis (entry/exit orbit pause) ─────────────────────────────────
+    /// True while the player is in orbit stasis (entry or exit).
+    pub space_stasis_active:    bool,
+    /// ID of the hook the player is orbiting during space stasis.
+    pub space_stasis_hook_id:   String,
+    /// True = entry stasis (inside space), false = exit stasis (back in normal zone).
+    pub space_stasis_is_entry:  bool,
+
+    // ── Red (arc) coins in space ──────────────────────────────────────────────
+    pub space_red_coin_live:     Vec<String>,
+    pub space_red_coin_free:     Vec<String>,
+    /// Coins collected during this space visit — not re-spawned until next entry.
+    pub space_coin_spent:        Vec<String>,
+    pub space_red_coin_spent:    Vec<String>,
+
+    // ── Space gwell pulsing timers ────────────────────────────────────────────
+    /// (id, ticks_remaining, is_active) — mirrors normal gwell_timers for space
+    pub space_gwell_timers:      Vec<(String, u32, bool)>,
+
+    // ── Solar ceiling async decode ────────────────────────────────────────────
+    /// Pixel-derived y-ratio where the solar surface begins (from top of gif).
+    pub solar_surface_ratio: f32,
+    /// True once the solar animation has been attached to the scene object.
+    pub solar_anim_loaded: bool,
+    /// Set on first enter_space: background thread stores the decoded
+    /// AnimatedSprite here; tick_solar_pending swaps it onto the object.
+    pub solar_anim_pending: Option<Arc<Mutex<Option<AnimatedSprite>>>>,
 }

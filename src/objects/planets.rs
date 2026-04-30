@@ -9,11 +9,14 @@ use crate::images::*;
 /// * `id`         — registration key for the physics/gravity object
 /// * `x`, `y`     — world center position (negative y for space zone)
 /// * `visual_r`   — radius of the rendered planet body in pixels
-/// * `gravity_r`  — radius of the gravitational sphere of influence
+/// * `gravity_r`  — kept for call-site compat; no longer used for sizing
 /// * `color_idx`  — index into `C_SPACE_PLANET` palette
 ///
-/// The returned `GameObject` is sized to the gravity field (`gravity_r * 2` square)
-/// and carries both the planet image and the `gravity_well` physics attribute.
+/// The returned `GameObject` is sized to the visible body (`visual_r * 2` square).
+/// `.planet(visual_r)` sets solid-circle collision AND makes this object a gravity
+/// source via the engine's built-in planet system (no separate gravity_well needed).
+/// Objects with `.gravity_target("space_planet")` are pulled toward it; the field
+/// is bounded to `planet_radius × gravity_influence_mult` (default 3×) by the engine.
 pub fn make_planet(
     ctx: &mut Context,
     id: &str,
@@ -23,22 +26,26 @@ pub fn make_planet(
     gravity_r: f32,
     color_idx: usize,
 ) -> GameObject {
+    let _ = gravity_r; // sizing now driven by visual_r only
     let (pr, pg, pb) = C_SPACE_PLANET[color_idx % C_SPACE_PLANET.len()];
-    let img = planet_img_cached(visual_r, gravity_r, pr, pg, pb);
-    let d = gravity_r * 2.0;
+    // Body-only image: pass visual_r for both params so no extra ring padding
+    let img = planet_img_cached(visual_r, visual_r, pr, pg, pb);
+    let d = visual_r * 2.0;
 
     let mut obj = GameObject::build(id)
         .size(d, d)
-        .position(x - gravity_r, y - gravity_r)
+        .position(x - visual_r, y - visual_r)
         .image(Image {
             shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
             image: img,
             color: None,
         })
         .tag("space_planet")
-        // planet_radius = visual_r so the engine handles landing/collision on the
-        // visible surface. gravity_influence_mult (default 3×) extends the field.
-        .gravity_well(visual_r, SPACE_PLANET_GRAV_STRENGTH)
+        // .planet() sets solid_circle collision + registers as a gravity source.
+        // Receivers with gravity_target("space_planet") are attracted to this object.
+        // The engine bounds the field to planet_radius × gravity_influence_mult (3× default).
+        .planet(visual_r)
+        .gravity_strength(SPACE_PLANET_GRAV_STRENGTH)
         .build(ctx);
 
     // Subtle glow matching planet color
