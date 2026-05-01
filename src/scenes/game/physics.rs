@@ -15,6 +15,7 @@ const ROPE_LEN_QUANTUM_PX: u32 = 20;
 // How far the rope image extends past the hook center (away from player).
 // Enough to hide cleanly behind the hook sprite but not protrude past it.
 const ROPE_HOOK_PAD:   f32 = 62.0; // HOOK_R(38) + 24
+const ROPE_HOOK_PAD_MAX_BONUS: f32 = 27.0;
 // How far the rope image extends past the player center.
 // Must cover PLAYER_R + look-ahead motion at max swing speed.
 const ROPE_PLAYER_PAD: f32 = PLAYER_R + 35.0; // 75px
@@ -165,15 +166,19 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let unit_y = vis_rdy / vis_dist;
     let rope_ang = vis_rdy.atan2(vis_rdx).to_degrees();
 
-    // Rope draws from hook CENTER so the rectangle extends into the hook sprite,
-    // filling the gap. The far end extends ROPE_PLAYER_PAD past the player center.
+    // Extend farther behind hook as reach approaches max so long grapples
+    // still visually touch the hook node without overextending short grabs.
+    let reach_t = ((vis_dist - ROPE_LEN_MIN) / (ROPE_LEN_MAX - ROPE_LEN_MIN).max(1.0)).clamp(0.0, 1.0);
+    let hook_pad = ROPE_HOOK_PAD + ROPE_HOOK_PAD_MAX_BONUS * reach_t;
+    let start_x = hx - unit_x * hook_pad;
+    let start_y = hy - unit_y * hook_pad;
     let end_x = vis_px + unit_x * ROPE_PLAYER_PAD;
     let end_y = vis_py + unit_y * ROPE_PLAYER_PAD;
-    let seg_dx = end_x - hx;
-    let seg_dy = end_y - hy;
+    let seg_dx = end_x - start_x;
+    let seg_dy = end_y - start_y;
     let rope_draw_len = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt().max(1.0);
-    let rope_mid_x = (hx + end_x) * 0.5;
-    let rope_mid_y = (hy + end_y) * 0.5;
+    let rope_mid_x = (start_x + end_x) * 0.5;
+    let rope_mid_y = (start_y + end_y) * 0.5;
 
     let rope_beam = ROPE_THICKNESS.max(2.0);
     let rope_beam_px = rope_beam.round().max(2.0) as u32;

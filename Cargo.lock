@@ -2951,6 +2951,7 @@ version = "0.1.0"
 dependencies = [
  "image 0.25.9",
  "prism2",
+ "ramp2",
  "rand 0.8.5",
  "rodio",
  "wgpu_canvas",
