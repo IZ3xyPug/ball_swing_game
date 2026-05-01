@@ -748,6 +748,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_red_coin_free:    space_red_coin_free.clone(),
 
                 space_gwell_timers:     Vec::new(),
+                space_orbit_locked_planet: String::new(),
+                space_orbit_speed:       0.0,
                 space_entry_px:         0.0,
                 space_coin_spent:       Vec::new(),
                 space_red_coin_spent:   Vec::new(),
@@ -878,6 +880,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // Reset solar death flag and ceiling visibility for fresh run.
             canvas.set_var("died_to_sun", false);
+            canvas.set_var("died_to_oxygen", false);
             if let Some(obj) = canvas.get_game_object_mut("solar_ceiling") {
                 obj.visible = false;
             }
@@ -1611,6 +1614,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     let mut s = st.lock().unwrap();
                     // Solar death: set by tick_space_zone when player reaches solar ceiling.
                     let died_to_sun = matches!(c.get_var("died_to_sun"), Some(Value::Bool(true)));
+                    let died_to_oxygen = matches!(c.get_var("died_to_oxygen"), Some(Value::Bool(true)));
                     let dead_now = !s.god_mode && (died_to_sun || (s.gravity_dir > 0.0
                         && s.py > VH + 150.0)
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
@@ -1635,8 +1639,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         }
                         if died_to_sun {
                             c.set_var("died_to_sun", false);
+                            c.set_var("died_to_oxygen", false);
                             c.load_scene("gameover_sun");
                         } else {
+                            if !died_to_oxygen {
+                                c.set_var("died_to_oxygen", false);
+                            }
                             c.load_scene("gameover");
                         }
                     }

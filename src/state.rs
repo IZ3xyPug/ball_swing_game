@@ -226,6 +226,12 @@ pub struct State {
     /// (id, ticks_remaining, is_active) — mirrors normal gwell_timers for space
     pub space_gwell_timers:      Vec<(String, u32, bool)>,
 
+    // ── Space planet orbit lock ─────────────────────────────────────────────
+    /// Planet id currently locking orbit; empty means no orbit lock.
+    pub space_orbit_locked_planet: String,
+    /// Signed tangential orbit speed (sign encodes CW/CCW).
+    pub space_orbit_speed:         f32,
+
     // ── Solar ceiling async decode ────────────────────────────────────────────
     /// Pixel-derived y-ratio where the solar surface begins (from top of gif).
     pub solar_surface_ratio: f32,
