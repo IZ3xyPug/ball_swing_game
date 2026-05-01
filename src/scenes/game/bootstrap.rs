@@ -228,6 +228,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     dist_bar.ignore_zoom = true;
+    dist_bar.layer = 100;
 
     let mut coin_counter = GameObject::new_rect(
         ctx, "coin_counter".into(),
@@ -240,6 +241,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     coin_counter.ignore_zoom = true;
+    coin_counter.layer = 100;
     coin_counter.visible = false;
 
     let mut score_counter = GameObject::new_rect(
@@ -253,6 +255,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     score_counter.ignore_zoom = true;
+    score_counter.layer = 100;
 
     let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
@@ -265,6 +268,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     momentum_counter.ignore_zoom = true;
+    momentum_counter.layer = 100;
 
     let mut gravity_indicator = GameObject::new_rect(
         ctx, "gravity_indicator".into(),
@@ -277,6 +281,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     gravity_indicator.ignore_zoom = true;
+    gravity_indicator.layer = 100;
 
     let mut y_meter = GameObject::new_rect(
         ctx, "y_meter".into(),
@@ -289,6 +294,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     y_meter.ignore_zoom = true;
+    y_meter.layer = 100;
 
     let mut x_meter = GameObject::new_rect(
         ctx, "x_meter".into(),
@@ -301,6 +307,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     x_meter.ignore_zoom = true;
+    x_meter.layer = 100;
 
     let mut combo_flash = {
         let (w, h) = (420u32, 80u32);
@@ -317,6 +324,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     };
     combo_flash.visible = false;
     combo_flash.ignore_zoom = true;
+    combo_flash.layer = 100;
 
     let mut pause_overlay = {
         const PO_OVERSCAN: f32 = 400.0;
@@ -349,6 +357,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     flip_timer_hud.visible = false;
     flip_timer_hud.ignore_zoom = true;
+    flip_timer_hud.layer = 100;
 
     let mut zero_g_timer_hud = GameObject::new_rect(
         ctx, "zero_g_timer".into(),
@@ -362,6 +371,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     zero_g_timer_hud.visible = false;
     zero_g_timer_hud.ignore_zoom = true;
+    zero_g_timer_hud.layer = 100;
 
     let mut coin_magnet_radius = {
         let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;
@@ -751,6 +761,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     oxygen_bar_obj.visible = false;
     oxygen_bar_obj.ignore_zoom = true;
+    oxygen_bar_obj.layer = 100;
     scene = scene.with_object("oxygen_bar", oxygen_bar_obj);
 
     // Welcome text

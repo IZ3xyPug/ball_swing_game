@@ -326,7 +326,14 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     );
 
     let flipped = s.gravity_dir < 0.0;
-    let anchor_y = if flipped { 0.0 } else { VH };
+    let target_anchor_y: f32 = if flipped { 0.0 } else { VH };
+    let cur_anchor_y = match c.get_var("zoom_anchor_y") {
+        Some(Value::F32(v)) => v,
+        _ => target_anchor_y,
+    };
+    let new_anchor_y = cur_anchor_y + (target_anchor_y - cur_anchor_y) * 0.06;
+    c.set_var("zoom_anchor_y", new_anchor_y);
+    let anchor_y = new_anchor_y;
 
     let target_zoom = if flipped {
         let effective_y = s.py + s.vy.max(0.0) * ZOOM_LOOKAHEAD_T;
@@ -340,10 +347,11 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drop(s);
 
     if pending_space_exit_reset {
+        c.set_var("zoom_anchor_y", target_anchor_y);
         if let Some(cam) = c.camera_mut() {
             cam.follow(Some(Target::name("player")));
             cam.zoom_lerp_speed = ZOOM_OUT_LERP;
-            cam.zoom_anchor = Some((px, anchor_y));
+            cam.zoom_anchor = Some((px, target_anchor_y));
             cam.snap_zoom(target_zoom);
             // Keep the post-space handoff from inheriting stale negative-space Y.
             cam.position.1 = if flipped {

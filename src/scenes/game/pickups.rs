@@ -104,9 +104,9 @@ fn flip_mover_origins(s: &mut State) {
 
 fn mirror_player_for_flip(s: &mut State) {
     s.vy = -s.vy;
-    s.py = (VH - s.py).clamp(PLAYER_R, VH - PLAYER_R);
+    s.py = VH - s.py;
     if s.hooked {
-        s.hook_y = (VH - s.hook_y).clamp(HOOK_R, VH - HOOK_R);
+        s.hook_y = VH - s.hook_y;
     }
 }
 

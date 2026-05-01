@@ -198,6 +198,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("start_orbit_ticks", 0i32);
             canvas.set_var("start_follow_force_ticks", 0i32);
             canvas.set_var("start_zoom_recover_ticks", 0i32);
+            canvas.set_var("zoom_anchor_y", VH);
 
             // ── Background music (looped, switchable) ───────────────────
             if let Ok(mut slot) = bgm_handle_on_enter.lock() {
