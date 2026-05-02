@@ -254,7 +254,12 @@
                     obj.visible = true;
                     obj.set_image(Image {
                         shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
-                        image: pad_image_cached(),
+                        image: std::sync::Arc::new(crate::images::solid(
+                            crate::constants::C_PAD.0,
+                            crate::constants::C_PAD.1,
+                            crate::constants::C_PAD.2,
+                            255,
+                        )),
                         color: None,
                     });
                 }

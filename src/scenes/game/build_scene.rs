@@ -124,6 +124,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template: _,
+        tech_bounce_static_img,
+        tech_bounce_anim_frames,
+        pad_thruster_static_img,
+        pad_thruster_anim_template,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,
@@ -194,6 +198,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("start_orbit_ticks", 0i32);
             canvas.set_var("start_follow_force_ticks", 0i32);
             canvas.set_var("start_zoom_recover_ticks", 0i32);
+            canvas.set_var("zoom_anchor_y", VH);
 
             // ── Background music (looped, switchable) ───────────────────
             if let Ok(mut slot) = bgm_handle_on_enter.lock() {
@@ -643,7 +648,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 pad_free: pad_free.clone(),
                 pad_rightmost: SPAWN_X,
                 pad_origins: Vec::new(),
-                pad_bounce_count: 0,
                 spinner_live: Vec::new(),
                 spinner_free: spinner_free.clone(),
                 spinner_rightmost: SPAWN_X + VW * 0.65,
@@ -682,11 +686,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 turret_timers: Vec::new(),
                 bullet_live: Vec::new(),
                 bullet_free: bullet_free.clone(),
-                // Temporarily disable bounce pads.
-                bounce_enabled: true,
                 dark_mode: false,
                 god_mode: false,
                 glow_flashes: Vec::new(),
+                pad_bounce_anim: Vec::new(),
+                spawn_animations: Vec::new(),
 
                 hud_last_dist_fill:    u32::MAX,
                 hud_last_coins:        u32::MAX,
@@ -855,6 +859,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 &state,
                 &coin_spawn_image,
                 &coin_spawn_anim,
+                &tech_bounce_static_img,
+                &pad_thruster_static_img,
+                pad_thruster_anim_template.as_ref(),
             );
 
             // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
@@ -897,6 +904,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             physics::prewarm_rope_fx_cache();
             // Pre-warm solar GIF decode so corona is ready before space approach.
             super::space_zone::prewarm_solar_decode(&state);
+
+            // ── Pre-warm asteroid hook image cache (background thread) ───
+            // Builds all 9 variants (3 buckets × 3 states) off the main thread
+            // so the first frame of gameplay doesn't stall on disk I/O + resize.
+            std::thread::spawn(|| { hook_asteroid_img_for_id("hook_0", AsteroidHookState::Base); });
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -1182,6 +1194,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     shield.rotation = dy.atan2(dx).to_degrees();
                     shield.visible = true;
                 });
+                let tech_bounce_img = tech_bounce_static_img.clone();
+                let tech_bounce_anim = tech_bounce_anim_frames.clone();
+                let pad_thruster_static_img = pad_thruster_static_img.clone();
+                let pad_thruster_anim_template = pad_thruster_anim_template.clone();
 
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
@@ -1333,6 +1349,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         Some(Value::Bool(true))
                     );
                     let action_now = space_now || mouse_now;
+                    // After orbit launch, force "was" state to false so the held
+                    // space press is seen as a fresh rising edge on the first gameplay
+                    // frame — giving an immediate grab on that same space click.
+                    if matches!(c.get_var("input_needs_edge_reset"), Some(Value::Bool(true))) {
+                        space_was_down = false;
+                        mouse_was_down = false;
+                        c.set_var("input_needs_edge_reset", false);
+                    }
                     let action_was = space_was_down || mouse_was_down;
                     if action_now && !action_was {
                         c.run(Action::Custom {
@@ -1423,6 +1447,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &st,
                         &coin_spawn_image,
                         &coin_spawn_anim,
+                        &tech_bounce_img,
+                        &pad_thruster_static_img,
+                        pad_thruster_anim_template.as_ref(),
                     );
 
                     // ── Culling ──────────────────────────────────────────
@@ -1550,6 +1577,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &mut prev_nearest_hook,
                         &mut dark_mode_prev,
                         frame_counter,
+                        &tech_bounce_img,
+                        &tech_bounce_anim,
                     );
 
                     // ── Coin magnet radius debug visual ──────────────────
@@ -1615,7 +1644,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // Solar death: set by tick_space_zone when player reaches solar ceiling.
                     let died_to_sun = matches!(c.get_var("died_to_sun"), Some(Value::Bool(true)));
                     let died_to_oxygen = matches!(c.get_var("died_to_oxygen"), Some(Value::Bool(true)));
-                    let dead_now = !s.god_mode && (died_to_sun || (s.gravity_dir > 0.0
+                    let dead_now = !s.god_mode && (died_to_sun || died_to_oxygen || (s.gravity_dir > 0.0
                         && s.py > VH + 150.0)
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {
@@ -1641,6 +1670,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             c.set_var("died_to_sun", false);
                             c.set_var("died_to_oxygen", false);
                             c.load_scene("gameover_sun");
+                        } else if died_to_oxygen {
+                            c.set_var("died_to_oxygen", false);
+                            c.load_scene("gameover_oxygen");
                         } else {
                             if !died_to_oxygen {
                                 c.set_var("died_to_oxygen", false);

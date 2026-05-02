@@ -16,19 +16,81 @@ pub fn tick_visuals(
     prev_nearest_hook: &mut String,
     dark_mode_prev: &mut bool,
     frame_counter: u32,
+    tech_bounce_img: &Image,
+    tech_bounce_anim_frames: &[Image],
 ) {
-    tick_glow_flashes(c, st);
+    tick_pad_impact_animation(c, st, tech_bounce_img, tech_bounce_anim_frames);
+    tick_glow_flashes(c, st, tech_bounce_img);
     tick_nearest_hook_highlight(c, st, prev_nearest_hook);
-    tick_zone_palette(c, st, prev_zone_idx);
+    tick_zone_palette(c, st, prev_zone_idx, tech_bounce_img);
     tick_dark_mode(c, st, dark_mode_prev);
     tick_spinner_movers(c, st, frame_counter);
     tick_pad_movers(c, st, frame_counter);
+    tick_pad_thrusters(c, st);
     tick_zoom(c, st);
+}
+
+fn tick_pad_impact_animation(
+    c: &mut Canvas,
+    st: &Arc<Mutex<State>>,
+    tech_bounce_img: &Image,
+    tech_bounce_anim_frames: &[Image],
+) {
+    if tech_bounce_anim_frames.is_empty() {
+        let mut s = st.lock().unwrap();
+        s.pad_bounce_anim.clear();
+        return;
+    }
+
+    let frame_count = tech_bounce_anim_frames.len();
+    if frame_count <= 1 {
+        let mut s = st.lock().unwrap();
+        s.pad_bounce_anim.clear();
+        return;
+    }
+
+    let ticks_per_frame = (60.0 / TECH_BOUNCE_FPS.max(1.0)).round().max(1.0) as u32;
+    let mut s = st.lock().unwrap();
+    let mut keep: Vec<(String, usize, u32)> = Vec::with_capacity(s.pad_bounce_anim.len());
+    let active = std::mem::take(&mut s.pad_bounce_anim);
+    drop(s);
+
+    for (name, mut frame_idx, mut ticks_left) in active {
+        let mut finished = false;
+        if let Some(obj) = c.get_game_object_mut(&name) {
+            let idx = frame_idx.min(frame_count - 1);
+            obj.animated_sprite = None;
+            obj.set_image(tech_bounce_anim_frames[idx].clone());
+        } else {
+            finished = true;
+        }
+
+        if !finished {
+            if ticks_left > 0 {
+                ticks_left -= 1;
+            }
+            if ticks_left == 0 {
+                frame_idx += 1;
+                ticks_left = ticks_per_frame;
+            }
+            if frame_idx >= frame_count {
+                if let Some(obj) = c.get_game_object_mut(&name) {
+                    obj.animated_sprite = None;
+                    obj.set_image(tech_bounce_img.clone());
+                }
+            } else {
+                keep.push((name, frame_idx, ticks_left));
+            }
+        }
+    }
+
+    let mut s = st.lock().unwrap();
+    s.pad_bounce_anim = keep;
 }
 
 // ── Glow flash decay ────────────────────────────────────────────────────────
 
-fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>, _tech_bounce_img: &Image) {
     let mut s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
     let mut expired: Vec<String> = Vec::new();
@@ -44,15 +106,7 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     for name in &expired {
         if let Some(obj) = c.get_game_object_mut(name) {
-            if obj.tags.iter().any(|t| t == "pad") {
-                let (r, g, b) = pad_for_zone(zone_idx);
-                let corner_r = pad_corner_radius();
-                obj.set_image(Image {
-                    shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
-                    image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
-                    color: None,
-                });
-            } else if obj.tags.iter().any(|t| t == "hook") {
+            if obj.tags.iter().any(|t| t == "hook") {
                 if asteroid_mode {
                     obj.set_image(hook_asteroid_img_for_id(name, AsteroidHookState::Base));
                 } else {
@@ -128,7 +182,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
 
 // ── Zone-palette recolouring ────────────────────────────────────────────────
 
-fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usize) {
+fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usize, tech_bounce_img: &Image) {
     let s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
     if zone_idx == *prev_zone { return; }
@@ -153,13 +207,8 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     }
     for pid in &pads {
         if let Some(obj) = c.get_game_object_mut(pid) {
-            let (r, g, b) = pad_for_zone(zone_idx);
-            let corner_r = pad_corner_radius();
-            obj.set_image(Image {
-                shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, corner_r),
-                image: pad_cached(PAD_W as u32, PAD_H as u32, r, g, b),
-                color: None,
-            });
+            obj.animated_sprite = None;
+            obj.set_image(tech_bounce_img.clone());
         }
     }
     for sid in &spinners {
@@ -187,10 +236,15 @@ fn tick_dark_mode(c: &mut Canvas, _st: &Arc<Mutex<State>>, prev_dark: &mut bool)
 fn tick_spinner_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     let s = st.lock().unwrap();
     let origins = s.spinner_origins.clone();
+    // Collect IDs of objects still in a spawn animation (dormant or mid-drop).
+    let animating: std::collections::HashSet<String> = s.spawn_animations.iter()
+        .map(|a| a.id.clone())
+        .collect();
     drop(s);
 
     for (id, origin_y, amp, speed, phase) in &origins {
         if *amp == 0.0 { continue; }
+        if animating.contains(id) { continue; } // don't fight spawn anim
         let t = *phase + *speed * (frame as f32 / 60.0);
         let offset = amp * t.sin();
         if let Some(obj) = c.get_game_object_mut(id) {
@@ -204,16 +258,45 @@ fn tick_spinner_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 fn tick_pad_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     let s = st.lock().unwrap();
     let origins = s.pad_origins.clone();
+    // Collect IDs of objects still in a spawn animation (dormant or mid-drop).
+    let animating: std::collections::HashSet<String> = s.spawn_animations.iter()
+        .map(|a| a.id.clone())
+        .collect();
     drop(s);
 
     for (id, origin_x, amp, speed, phase) in &origins {
         if *amp == 0.0 { continue; }
+        if animating.contains(id) { continue; } // don't fight spawn anim
         // speed is stored as a small angular rate (radians per ~60 frames).
         // Divide frame by 60 to get a smooth time base so sin() changes gradually.
         let t = *phase + *speed * (frame as f32 / 60.0);
         let offset = amp * t.sin();
         if let Some(obj) = c.get_game_object_mut(id) {
             obj.position.0 = origin_x + offset;
+        }
+    }
+}
+
+fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let pad_ids = {
+        let s = st.lock().unwrap();
+        s.pad_live.clone()
+    };
+
+    for pad_id in &pad_ids {
+        let Some((px, py, vis, layer)) = c
+            .get_game_object(pad_id)
+            .map(|pad| (pad.position.0, pad.position.1, pad.visible, pad.layer))
+        else {
+            continue;
+        };
+
+        let thr_id = pad_thruster_id(pad_id);
+        if let Some(thr) = c.get_game_object_mut(&thr_id) {
+            thr.position.0 = px + (PAD_W - PAD_THRUSTER_W) * 0.5;
+            thr.position.1 = py + PAD_H - PAD_THRUSTER_HIDE_TOP - PAD_THRUSTER_RAISE_Y;
+            thr.layer = layer - 1;
+            thr.visible = vis;
         }
     }
 }
@@ -243,7 +326,14 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     );
 
     let flipped = s.gravity_dir < 0.0;
-    let anchor_y = if flipped { 0.0 } else { VH };
+    let target_anchor_y: f32 = if flipped { 0.0 } else { VH };
+    let cur_anchor_y = match c.get_var("zoom_anchor_y") {
+        Some(Value::F32(v)) => v,
+        _ => target_anchor_y,
+    };
+    let new_anchor_y = cur_anchor_y + (target_anchor_y - cur_anchor_y) * 0.06;
+    c.set_var("zoom_anchor_y", new_anchor_y);
+    let anchor_y = new_anchor_y;
 
     let target_zoom = if flipped {
         let effective_y = s.py + s.vy.max(0.0) * ZOOM_LOOKAHEAD_T;
@@ -257,10 +347,11 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drop(s);
 
     if pending_space_exit_reset {
+        c.set_var("zoom_anchor_y", target_anchor_y);
         if let Some(cam) = c.camera_mut() {
             cam.follow(Some(Target::name("player")));
             cam.zoom_lerp_speed = ZOOM_OUT_LERP;
-            cam.zoom_anchor = Some((px, anchor_y));
+            cam.zoom_anchor = Some((px, target_anchor_y));
             cam.snap_zoom(target_zoom);
             // Keep the post-space handoff from inheriting stale negative-space Y.
             cam.position.1 = if flipped {

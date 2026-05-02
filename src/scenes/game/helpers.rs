@@ -136,6 +136,36 @@ pub fn hook_on_for_zone(zone_idx: usize) -> (u8, u8, u8) {
     }
 }
 
+/// Circle/rounded-rectangle overlap using signed-distance math.
+/// Rectangle position is top-left (x, y) with size (w, h).
+#[inline]
+pub fn circle_overlaps_rounded_rect(
+    cx: f32,
+    cy: f32,
+    circle_r: f32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    corner_r: f32,
+) -> bool {
+    if w <= 0.0 || h <= 0.0 || circle_r < 0.0 {
+        return false;
+    }
+
+    let rr = corner_r.clamp(0.0, 0.5 * w.min(h));
+    let rcx = x + w * 0.5;
+    let rcy = y + h * 0.5;
+    let qx = (cx - rcx).abs() - (w * 0.5 - rr);
+    let qy = (cy - rcy).abs() - (h * 0.5 - rr);
+    let ox = qx.max(0.0);
+    let oy = qy.max(0.0);
+    let outside = (ox * ox + oy * oy).sqrt();
+    let inside = qx.max(qy).min(0.0);
+    let signed_dist = outside + inside - rr;
+    signed_dist <= circle_r
+}
+
 pub fn pad_for_zone(zone_idx: usize) -> (u8, u8, u8) {
     match zone_idx {
         1 => C_PAD_ZONE1,
@@ -158,4 +188,9 @@ pub fn spinner_for_zone(zone_idx: usize) -> (u8, u8, u8) {
         2 => C_SPINNER_ZONE2,
         _ => C_SPINNER,
     }
+}
+
+#[inline]
+pub fn pad_thruster_id(pad_id: &str) -> String {
+    format!("{pad_id}_thruster")
 }

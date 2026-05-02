@@ -706,3 +706,185 @@ pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
             canvas.register_custom_event("sun_go_menu".into(),  |c| c.load_scene("menu"));
         })
 }
+
+pub fn build_gameover_oxygen_scene(ctx: &mut Context) -> Scene {
+    let bg = GameObject::new_rect(
+        ctx, "oxy_go_bg".into(),
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW, VH)),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    let bg_tint = GameObject::new_rect(
+        ctx, "oxy_go_bg_tint".into(),
+        Some(tint_overlay(VW, VH, Color(30, 170, 210, 150))),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    let title = {
+        let (w, h) = (1700u32, 230u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let t = py as f32 / h as f32;
+            img.put_pixel(px, py, image::Rgba([(130.0 - 40.0 * t) as u8, 240, 255, 255]));
+        }}
+        GameObject::new_rect(
+            ctx, "oxy_go_title".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW / 2.0 - w as f32 / 2.0, VH * 0.20),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let dist_bar = GameObject::new_rect(
+        ctx, "oxy_go_dist_bar".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (600.0, 44.0), 0.0),
+            image: bar_img(600, 44, 0.0, 80, 220, 160).into(),
+            color: None,
+        }),
+        (600.0, 44.0), (VW / 2.0 - 300.0, VH * 0.37),
+        vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    let make_btn = |ctx: &mut Context, id: &str, (r, g, b): (u8, u8, u8), y: f32| {
+        let (w, h) = (520u32, 130u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px==0||px==w-1||py==0||py==h-1||px==1||px==w-2||py==1||py==h-2;
+            img.put_pixel(px, py, image::Rgba([r, g, b, if border { 255 } else { 200 }]));
+        }}
+        GameObject::new_rect(
+            ctx, id.to_string().into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW / 2.0 - w as f32 / 2.0, y),
+            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let retry_btn   = make_btn(ctx, "oxy_retry_btn",   (50, 160, 90), VH * 0.66);
+    let go_menu_btn = make_btn(ctx, "oxy_go_menu_btn", (50, 80, 160), VH * 0.80);
+
+    let oxy_go_title_text = GameObject::build("oxy_go_title_text")
+        .size(1700.0, 230.0)
+        .position(VW * 0.5 - 850.0, VH * 0.20 + (230.0 - 74.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let oxy_go_retry_text = GameObject::build("oxy_go_retry_text")
+        .size(520.0, 130.0)
+        .position(VW * 0.5 - 260.0, VH * 0.66 + (130.0 - 54.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let oxy_go_menu_text = GameObject::build("oxy_go_menu_text")
+        .size(520.0, 130.0)
+        .position(VW * 0.5 - 260.0, VH * 0.80 + (130.0 - 54.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let oxy_go_stats_text = GameObject::build("oxy_go_stats_text")
+        .size(1000.0, 180.0)
+        .position(VW * 0.5 - 500.0, VH * 0.44)
+        .tag("ui")
+        .build(ctx);
+
+    let oxy_go_stats_box = {
+        let (w, h) = (1060u32, 200u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
+            if border {
+                img.put_pixel(px, py, image::Rgba([120, 220, 255, 200]));
+            } else {
+                img.put_pixel(px, py, image::Rgba([8, 25, 35, 200]));
+            }
+        }}
+        GameObject::new_rect(
+            ctx, "oxy_go_stats_box".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW / 2.0 - w as f32 / 2.0, VH * 0.44 - 10.0),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    Scene::new("gameover_oxygen")
+        .with_object("oxy_go_bg",        bg)
+        .with_object("oxy_go_bg_tint",   bg_tint)
+        .with_object("oxy_go_title",     title)
+        .with_object("oxy_go_dist_bar",  dist_bar)
+        .with_object("oxy_go_stats_box", oxy_go_stats_box)
+        .with_object("oxy_retry_btn",    retry_btn)
+        .with_object("oxy_go_menu_btn",  go_menu_btn)
+        .with_object("oxy_go_title_text", oxy_go_title_text)
+        .with_object("oxy_go_retry_text", oxy_go_retry_text)
+        .with_object("oxy_go_menu_text",  oxy_go_menu_text)
+        .with_object("oxy_go_stats_text", oxy_go_stats_text)
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "oxy_go_retry".into() },
+                target: Target::name("oxy_retry_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("oxy_retry_btn"),
+        )
+        .with_event(
+            GameEvent::KeyPress {
+                key: Key::Named(NamedKey::Space),
+                action: Action::Custom { name: "oxy_go_retry".into() },
+                target: Target::name("oxy_retry_btn"),
+                modifiers: None,
+            },
+            Target::name("oxy_retry_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "oxy_go_menu".into() },
+                target: Target::name("oxy_go_menu_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("oxy_go_menu_btn"),
+        )
+        .on_enter(|canvas| {
+            let cam = Camera::new((VW, VH), (VW, VH));
+            canvas.set_camera(cam);
+
+            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+                let s = canvas.virtual_scale();
+                let last_distance = canvas.get_f32("last_distance");
+                let last_coins = canvas.get_i32("last_coins").max(0);
+                let dist_fill = (last_distance / 40000.0).clamp(0.0, 1.0);
+
+                if let Some(obj) = canvas.get_game_object_mut("oxy_go_dist_bar") {
+                    obj.set_image(Image {
+                        shape: ShapeType::Rectangle(0.0, (600.0, 44.0), 0.0),
+                        image: bar_img(600, 44, dist_fill, 80, 220, 160).into(),
+                        color: None,
+                    });
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("oxy_go_title_text") {
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "YOU RAN OUT OF OXYGEN",
+                        &font, 52.0 * s,
+                        Color(0, 0, 0, 255),
+                        1700.0 * s,
+                    )));
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("oxy_go_retry_text") {
+                    obj.set_drawable(Box::new(ui_text_spec("RETRY", &font, 42.0 * s, Color(255, 255, 255, 255), 520.0 * s)));
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("oxy_go_menu_text") {
+                    obj.set_drawable(Box::new(ui_text_spec("MENU", &font, 42.0 * s, Color(255, 255, 255, 255), 520.0 * s)));
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("oxy_go_stats_text") {
+                    let stats_line = format!("DISTANCE  {:05}\nCOINS  {:03}", last_distance as i32, last_coins);
+                    obj.set_drawable(Box::new(ui_text_spec(&stats_line, &font, 50.0 * s, Color(255, 255, 255, 255), 1000.0 * s)));
+                }
+            }
+
+            canvas.register_custom_event("oxy_go_retry".into(), |c| c.load_scene("game"));
+            canvas.register_custom_event("oxy_go_menu".into(),  |c| c.load_scene("menu"));
+        })
+}

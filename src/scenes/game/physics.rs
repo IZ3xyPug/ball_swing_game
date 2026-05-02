@@ -12,7 +12,13 @@ static ROPE_FX_FRAMES: OnceLock<Vec<Arc<image::RgbaImage>>> = OnceLock::new();
 static ROPE_FX_CACHE: OnceLock<Mutex<HashMap<(usize, u32, u32), Arc<image::RgbaImage>>>> = OnceLock::new();
 const ROPE_FX_SUPERSAMPLE: u32 = 1;
 const ROPE_LEN_QUANTUM_PX: u32 = 20;
-const ROPE_ENDPOINT_PAD: f32 = PLAYER_R + 28.0; // 68px — extends past both circle edges at all rope lengths
+// How far the rope image extends past the hook center (away from player).
+// Enough to hide cleanly behind the hook sprite but not protrude past it.
+const ROPE_HOOK_PAD:   f32 = 62.0; // HOOK_R(38) + 24
+const ROPE_HOOK_PAD_MAX_BONUS: f32 = 27.0;
+// How far the rope image extends past the player center.
+// Must cover PLAYER_R + look-ahead motion at max swing speed.
+const ROPE_PLAYER_PAD: f32 = PLAYER_R + 35.0; // 75px
 
 fn quantize_len_px(len_px: u32) -> u32 {
     let q = ROPE_LEN_QUANTUM_PX.max(1);
@@ -59,7 +65,7 @@ fn rope_fx_image(frame_idx: usize, rope_len_px: u32, beam_px: u32) -> Arc<image:
     let out = Arc::new(resized);
 
     let mut cache_guard = cache.lock().unwrap();
-    if cache_guard.len() > 200 {
+    if cache_guard.len() > 800 {
         cache_guard.clear();
     }
     cache_guard.insert(key, out.clone());
@@ -72,8 +78,10 @@ fn rope_fx_image(frame_idx: usize, rope_len_px: u32, beam_px: u32) -> Arc<image:
 pub fn prewarm_rope_fx_cache() {
     let beam_px = ROPE_THICKNESS.round().max(2.0) as u32;
     let n_frames = rope_fx_frames().len();
-    let max_draw = ROPE_LEN_MAX + ROPE_ENDPOINT_PAD * 2.0;
-    let min_q = quantize_len_px((ROPE_LEN_MIN as u32).saturating_sub(ROPE_LEN_QUANTUM_PX));
+    const VEL_LOOK: f32 = 1.0;
+    let min_draw = (ROPE_LEN_MIN + ROPE_PLAYER_PAD).max(1.0);
+    let max_draw = ROPE_LEN_MAX + ROPE_PLAYER_PAD + MOMENTUM_CAP * VEL_LOOK;
+    let min_q = quantize_len_px(min_draw as u32 - ROPE_LEN_QUANTUM_PX);
     let max_q = quantize_len_px(max_draw as u32 + ROPE_LEN_QUANTUM_PX);
     let step  = ROPE_LEN_QUANTUM_PX.max(1);
     std::thread::spawn(move || {
@@ -141,14 +149,38 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Update rope visual.
     let (rdx, rdy, hx, hy) = (s.px - s.hook_x, s.py - s.hook_y, s.hook_x, s.hook_y);
     let rope_tick = s.ticks;
-    let rope_len = (rdx * rdx + rdy * rdy).sqrt().max(1.0);
-    let rope_ang = rdy.atan2(rdx).to_degrees();
-    let rope_mid_x = hx + rdx * 0.5;
-    let rope_mid_y = hy + rdy * 0.5;
+    let rope_vx = s.vx;
+    let rope_vy = s.vy;
     drop(s);
 
+    // Velocity look-ahead: the engine applies obj.momentum to obj.position AFTER
+    // on_update, so the rendered player is 1 frame ahead of state. Project the
+    // player end forward by that amount so the rope tracks the ball at high speed.
+    const VEL_LOOK: f32 = 1.0;
+    let vis_px = hx + rdx + rope_vx * VEL_LOOK;
+    let vis_py = hy + rdy + rope_vy * VEL_LOOK;
+    let vis_rdx = vis_px - hx;
+    let vis_rdy = vis_py - hy;
+    let vis_dist = (vis_rdx * vis_rdx + vis_rdy * vis_rdy).sqrt().max(1.0);
+    let unit_x = vis_rdx / vis_dist;
+    let unit_y = vis_rdy / vis_dist;
+    let rope_ang = vis_rdy.atan2(vis_rdx).to_degrees();
+
+    // Extend farther behind hook as reach approaches max so long grapples
+    // still visually touch the hook node without overextending short grabs.
+    let reach_t = ((vis_dist - ROPE_LEN_MIN) / (ROPE_LEN_MAX - ROPE_LEN_MIN).max(1.0)).clamp(0.0, 1.0);
+    let hook_pad = ROPE_HOOK_PAD + ROPE_HOOK_PAD_MAX_BONUS * reach_t;
+    let start_x = hx - unit_x * hook_pad;
+    let start_y = hy - unit_y * hook_pad;
+    let end_x = vis_px + unit_x * ROPE_PLAYER_PAD;
+    let end_y = vis_py + unit_y * ROPE_PLAYER_PAD;
+    let seg_dx = end_x - start_x;
+    let seg_dy = end_y - start_y;
+    let rope_draw_len = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt().max(1.0);
+    let rope_mid_x = (start_x + end_x) * 0.5;
+    let rope_mid_y = (start_y + end_y) * 0.5;
+
     let rope_beam = ROPE_THICKNESS.max(2.0);
-    let rope_draw_len = rope_len + ROPE_ENDPOINT_PAD * 2.0;
     let rope_beam_px = rope_beam.round().max(2.0) as u32;
     let rope_len_px = rope_draw_len.round().max(1.0) as u32;
     let frame_idx = ((rope_tick as usize) / 2) % rope_fx_frames().len().max(1);

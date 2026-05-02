@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use crate::constants::*;
 use crate::state::*;
 use crate::gameplay::zone_index_for_distance;
+use super::helpers::pad_thruster_id;
 
 pub fn tick_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if st.lock().unwrap().in_space_mode {
@@ -67,10 +68,17 @@ fn cull_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3000.0, -3000.0); }
+        let thr_id = pad_thruster_id(name);
+        if let Some(thr) = c.get_game_object_mut(&thr_id) {
+            thr.visible = false;
+            thr.position = (-3000.0, -3000.0);
+            thr.animated_sprite = None;
+        }
     }
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.pad_live.retain(|n| !rm.contains(n.as_str()));
     for name in &to_remove { s.pad_origins.retain(|(n, _, _, _, _)| n != name); }
+    s.pad_bounce_anim.retain(|(id, _, _)| !rm.contains(id.as_str()));
     for name in to_remove { s.pad_free.push(name); }
 }
 

@@ -967,9 +967,87 @@ fn tick_space_spawning(c: &mut Canvas, st: &Arc<Mutex<State>>, _frame: u32) {
     spawn_space_hooks(c, st);
     spawn_space_planets(c, st);
     spawn_space_coins(c, st);
+    spawn_space_sun_bonus_clusters(c, st);
     spawn_space_red_coins(c, st);
     spawn_space_blackholes(c, st);
     spawn_space_asteroids(c, st);
+}
+
+fn spawn_space_coin_pick(c: &mut Canvas, st: &Arc<Mutex<State>>, x: f32, y: f32, high_chance: f32) {
+    let (id, is_high) = {
+        let mut s = st.lock().unwrap();
+        let roll = lcg(&mut s.seed);
+        let pick_high = roll < high_chance && !s.space_red_coin_free.is_empty();
+
+        if pick_high {
+            let Some(id) = s.space_red_coin_free.pop() else { return; };
+            s.space_red_coin_live.push(id.clone());
+            (id, true)
+        } else if let Some(id) = s.space_coin_free.pop() {
+            s.space_coin_live.push(id.clone());
+            if s.space_coin_rightmost < x {
+                s.space_coin_rightmost = x;
+            }
+            (id, false)
+        } else if let Some(id) = s.space_red_coin_free.pop() {
+            s.space_red_coin_live.push(id.clone());
+            (id, true)
+        } else {
+            return;
+        }
+    };
+
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        if is_high {
+            obj.position = (x - SPACE_RED_COIN_R, y - SPACE_RED_COIN_R);
+            obj.size = (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
+            obj.visible = true;
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
+                image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
+                color: None,
+            });
+            obj.set_glow(GlowConfig { color: Color(C_SPACE_COIN_HIGH.0, C_SPACE_COIN_HIGH.1, C_SPACE_COIN_HIGH.2, 170), width: 18.0 });
+        } else {
+            obj.position = (x - SPACE_COIN_R, y - SPACE_COIN_R);
+            obj.size = (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0);
+            obj.visible = true;
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0), 0.0),
+                image: space_coin_img_cached(SPACE_COIN_R as u32),
+                color: None,
+            });
+            obj.set_glow(GlowConfig { color: Color(C_SPACE_COIN.0, C_SPACE_COIN.1, C_SPACE_COIN.2, 140), width: 14.0 });
+        }
+    }
+}
+
+fn spawn_space_sun_bonus_clusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (spawn_cluster, center_x, center_y, count) = {
+        let mut s = st.lock().unwrap();
+        if lcg(&mut s.seed) > SPACE_SUN_BONUS_CLUSTER_CHANCE {
+            return;
+        }
+        let count = SPACE_SUN_BONUS_CLUSTER_COINS_MIN
+            + ((lcg(&mut s.seed) * (SPACE_SUN_BONUS_CLUSTER_COINS_MAX - SPACE_SUN_BONUS_CLUSTER_COINS_MIN + 1) as f32) as usize)
+                .min(SPACE_SUN_BONUS_CLUSTER_COINS_MAX - SPACE_SUN_BONUS_CLUSTER_COINS_MIN);
+        let center_x = s.px + GEN_AHEAD * (0.58 + lcg(&mut s.seed) * 0.30);
+        let y_min = SPACE_HOOK_SUN_SAFETY_BAND_MIN.max(SPACE_HOOK_SUN_ZONE_Y_MIN);
+        let y_max = SPACE_HOOK_SUN_SAFETY_BAND_MAX.min(SPACE_HOOK_SUN_ZONE_Y_MAX);
+        let center_y = lcg_range(&mut s.seed, y_min, y_max);
+        (true, center_x, center_y, count)
+    };
+
+    if !spawn_cluster {
+        return;
+    }
+
+    let start_x = center_x - SPACE_SUN_BONUS_CLUSTER_SPACING * (count as f32 - 1.0) * 0.5;
+    for i in 0..count {
+        let x = start_x + i as f32 * SPACE_SUN_BONUS_CLUSTER_SPACING;
+        let y = center_y + ((i as f32 * 1.7).sin() * 55.0);
+        spawn_space_coin_pick(c, st, x, y, SPACE_SUN_BONUS_RED_CHANCE);
+    }
 }
 
 fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -979,8 +1057,17 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.space_hook_free.is_empty()
         && s.space_hook_rightmost < s.px + GEN_AHEAD
     {
-        // 4 vertical bands; sun zone (band 3) uses tighter gaps for dense coverage.
-        let band = (lcg(&mut s.seed) * 4.0) as u32;
+        // 4 vertical bands, biased toward the solar safety zone for late recoveries.
+        let roll = lcg(&mut s.seed);
+        let band = if roll < 0.22 {
+            0
+        } else if roll < 0.46 {
+            1
+        } else if roll < 0.66 {
+            2
+        } else {
+            3
+        };
         let gap = match band {
             3 => lcg_range(&mut s.seed, SPACE_HOOK_SUN_GAP_MIN, SPACE_HOOK_SUN_GAP_MAX),
             _ => lcg_range(&mut s.seed, SPACE_HOOK_GAP_MIN, SPACE_HOOK_GAP_MAX),
@@ -992,7 +1079,7 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             0 => lcg_range(&mut s.seed, SPACE_HOOK_Y_SHALLOW_MIN, SPACE_HOOK_Y_SHALLOW_MAX),
             1 => lcg_range(&mut s.seed, SPACE_HOOK_Y_MID_MIN,     SPACE_HOOK_Y_MID_MAX),
             2 => lcg_range(&mut s.seed, SPACE_HOOK_Y_DEEP_MIN,    SPACE_HOOK_Y_DEEP_MAX),
-            _ => lcg_range(&mut s.seed, SPACE_HOOK_SUN_ZONE_Y_MIN, SPACE_HOOK_SUN_ZONE_Y_MAX),
+            _ => lcg_range(&mut s.seed, SPACE_HOOK_SUN_SAFETY_BAND_MIN, SPACE_HOOK_SUN_SAFETY_BAND_MAX),
         };
         let Some(id) = s.space_hook_free.pop() else { break; };
         s.space_hook_live.push(id.clone());
@@ -1131,11 +1218,13 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             ( visual_r + SPACE_PLANET_HOOK_OFFSET,  0.0),
             (0.0, -(visual_r + SPACE_PLANET_HOOK_OFFSET)),
         ];
+        let mut hook_points: Vec<(f32, f32)> = Vec::new();
         {
             let mut s = st.lock().unwrap();
             for (hook_id, &(ox, oy)) in hook_ids.iter().zip(offsets.iter()) {
                 let hx = x + ox;
                 let hy = y + oy;
+            hook_points.push((hx, hy));
                 s.space_hook_live.push(hook_id.clone());
                 if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
                 drop(s);
@@ -1146,6 +1235,22 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.set_image(hook_asteroid_img_for_id(hook_id, AsteroidHookState::Base));
                 }
                 s = st.lock().unwrap();
+            }
+        }
+
+        // Partial guide lines from one nearby hook toward another, so players
+        // can visually follow routes across hook nodes around each planet.
+        for pair in hook_points.windows(2) {
+            let (ax, ay) = pair[0];
+            let (bx, by) = pair[1];
+            for i in 0..SPACE_PLANET_HOOK_GUIDE_COINS {
+                let denom = (SPACE_PLANET_HOOK_GUIDE_COINS - 1).max(1) as f32;
+                let t01 = i as f32 / denom;
+                let t = SPACE_PLANET_HOOK_GUIDE_T_MIN
+                    + (SPACE_PLANET_HOOK_GUIDE_T_MAX - SPACE_PLANET_HOOK_GUIDE_T_MIN) * t01;
+                let cx = ax + (bx - ax) * t;
+                let cy = ay + (by - ay) * t;
+                spawn_space_coin_pick(c, st, cx, cy, SPACE_PLANET_HOOK_GUIDE_RED_CHANCE);
             }
         }
 

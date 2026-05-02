@@ -1,4 +1,5 @@
 use quartz::*;
+use image::{AnimationDecoder, ImageDecoder};
 
 use crate::constants::*;
 use crate::hud::*;
@@ -23,6 +24,10 @@ pub struct PoolSets {
     pub coin_anim_template:  Option<AnimatedSprite>,
     #[allow(dead_code)]
     pub score_x2_anim_template: Option<AnimatedSprite>,
+    pub tech_bounce_static_img: Image,
+    pub tech_bounce_anim_frames: Vec<Image>,
+    pub pad_thruster_static_img: Image,
+    pub pad_thruster_anim_template: Option<AnimatedSprite>,
     // ── Space zone pools
     pub rocket_pad_free:   Vec<String>,
     pub space_planet_free: Vec<String>,
@@ -32,6 +37,49 @@ pub struct PoolSets {
     pub space_asteroid_free: Vec<String>,
     pub space_red_coin_free: Vec<String>,
 }
+
+fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
+    let bytes = include_bytes!("../../../assets/tech_bounce.gif");
+    let cursor = std::io::Cursor::new(bytes.as_slice());
+    let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) else {
+        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+    };
+
+    let (gif_w, gif_h) = decoder.dimensions();
+    let mut composed = image::RgbaImage::from_pixel(gif_w.max(1), gif_h.max(1), image::Rgba([0, 0, 0, 0]));
+    let Ok(frames) = decoder.into_frames().collect_frames() else {
+        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+    };
+
+    let out_w = PAD_W.max(1.0).round() as u32;
+    let out_h = PAD_H.max(1.0).round() as u32;
+    let mut out: Vec<Image> = Vec::with_capacity(frames.len());
+
+    for frame in frames {
+        let left = frame.left();
+        let top = frame.top();
+        let patch = frame.into_buffer();
+        image::imageops::overlay(&mut composed, &patch, left as i64, top as i64);
+        let stretched = image::imageops::resize(
+            &composed,
+            out_w,
+            out_h,
+            image::imageops::FilterType::Nearest,
+        );
+        out.push(Image {
+            shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
+            image: stretched.into(),
+            color: None,
+        });
+    }
+
+    if out.is_empty() {
+        vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
+    } else {
+        out
+    }
+}
+
 pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Background images ────────────────────────────────────────────────
     let bg_texture_w = VW as u32;
@@ -88,7 +136,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     if let Ok(anim) = AnimatedSprite::new(
         include_bytes!("../../../assets/energy_hook_1.gif"),
         (ASTEROID_W, ASTEROID_H),
-        14.0,
+        8.0,
     ) {
         asteroid.set_image(anim.get_current_image());
         asteroid.set_animation(anim);
@@ -113,6 +161,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // Opt into gravity well forces.
     player.gravity_all_sources = true;
     player.gravity_falloff = GravityFalloff::InverseSquare;
+    // Collide with asteroids as a solid circle body.
+    player.collision_mode  = CollisionMode::solid_circle(PLAYER_R);
+    player.collision_layer = PLAYER_COLLISION_LAYER;
+    player.collision_mask  = ASTEROID_COLLISION_LAYER;
 
     // Velocity-facing air shield. The gif is mirrored on X once at load time,
     // then rotated each post-physics tick based on player net velocity.
@@ -176,6 +228,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     dist_bar.ignore_zoom = true;
+    dist_bar.layer = 100;
 
     let mut coin_counter = GameObject::new_rect(
         ctx, "coin_counter".into(),
@@ -188,6 +241,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     coin_counter.ignore_zoom = true;
+    coin_counter.layer = 100;
     coin_counter.visible = false;
 
     let mut score_counter = GameObject::new_rect(
@@ -201,6 +255,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     score_counter.ignore_zoom = true;
+    score_counter.layer = 100;
 
     let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
@@ -213,6 +268,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     momentum_counter.ignore_zoom = true;
+    momentum_counter.layer = 100;
 
     let mut gravity_indicator = GameObject::new_rect(
         ctx, "gravity_indicator".into(),
@@ -225,6 +281,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     gravity_indicator.ignore_zoom = true;
+    gravity_indicator.layer = 100;
 
     let mut y_meter = GameObject::new_rect(
         ctx, "y_meter".into(),
@@ -237,6 +294,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     y_meter.ignore_zoom = true;
+    y_meter.layer = 100;
 
     let mut x_meter = GameObject::new_rect(
         ctx, "x_meter".into(),
@@ -249,6 +307,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     x_meter.ignore_zoom = true;
+    x_meter.layer = 100;
 
     let mut combo_flash = {
         let (w, h) = (420u32, 80u32);
@@ -265,6 +324,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     };
     combo_flash.visible = false;
     combo_flash.ignore_zoom = true;
+    combo_flash.layer = 100;
 
     let mut pause_overlay = {
         const PO_OVERSCAN: f32 = 400.0;
@@ -297,6 +357,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     flip_timer_hud.visible = false;
     flip_timer_hud.ignore_zoom = true;
+    flip_timer_hud.layer = 100;
 
     let mut zero_g_timer_hud = GameObject::new_rect(
         ctx, "zero_g_timer".into(),
@@ -310,6 +371,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     zero_g_timer_hud.visible = false;
     zero_g_timer_hud.ignore_zoom = true;
+    zero_g_timer_hud.layer = 100;
 
     let mut coin_magnet_radius = {
         let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;
@@ -392,13 +454,51 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Pad pool ─────────────────────────────────────────────────────────
+    // Keep pad image + rounded corner geometry in sync so highlights and
+    // silhouette edges match the rendered bounce-pad art.
+    let tech_bounce_anim_frames = decode_tech_bounce_frames_stretched();
+    let tech_bounce_static_img = tech_bounce_anim_frames
+        .first()
+        .cloned()
+        .unwrap_or_else(|| load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
+    let pad_thruster_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/thruster1.gif"),
+        (PAD_THRUSTER_W, PAD_THRUSTER_H),
+        PAD_THRUSTER_FPS,
+    ).ok();
+    let pad_thruster_static_img = pad_thruster_anim_template
+        .as_ref()
+        .map(|a| a.get_current_image())
+        .unwrap_or_else(|| load_image_sized(ASSET_THRUSTER1_GIF, PAD_THRUSTER_W, PAD_THRUSTER_H));
     let mut pad_free: Vec<String> = Vec::new();
     for i in 0..PAD_POOL_SIZE {
         let id = format!("pad_{i}");
         let mut obj = make_pad(ctx, &id, -3000.0, -3000.0);
+        obj.set_image(tech_bounce_static_img.clone());
+        obj.layer = 5;
         obj.visible = false;
         pad_free.push(id.clone());
         scene = scene.with_object(id, obj);
+
+        let thr_id = format!("pad_{i}_thruster");
+        let mut thr = GameObject::new_rect(
+            ctx,
+            thr_id.clone(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (PAD_THRUSTER_W, PAD_THRUSTER_H), 0.0),
+                image: pad_thruster_static_img.image.clone(),
+                color: None,
+            }),
+            (PAD_THRUSTER_W, PAD_THRUSTER_H),
+            (-3000.0, -3000.0),
+            vec!["pad_thruster".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        thr.layer = 4;
+        thr.visible = false;
+        scene = scene.with_object(thr_id, thr);
     }
 
     // ── Spinner pool ─────────────────────────────────────────────────────
@@ -584,7 +684,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let asteroid_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/asteroid.gif"),
         (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
-        14.0,
+        8.0,
     ).ok();
     let mut space_asteroid_free: Vec<String> = Vec::new();
     for i in 0..SPACE_ASTEROID_POOL_SIZE {
@@ -607,10 +707,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         if let Some(anim) = &asteroid_anim_template {
             obj.set_animation(anim.clone());
         }
+        obj.collision_mode  = CollisionMode::solid_circle(SPACE_ASTEROID_SIZE_MIN * 0.5);
         obj.collision_layer = ASTEROID_COLLISION_LAYER;
-        obj.collision_mask  = ASTEROID_COLLISION_LAYER;
-        // Low density so asteroids float aside on contact rather than slamming back.
-        obj.material = PhysicsMaterial { elasticity: 0.2, friction: 0.3, density: 0.15 };
+        obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
         obj.visible = false;
         space_asteroid_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -662,6 +761,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     oxygen_bar_obj.visible = false;
     oxygen_bar_obj.ignore_zoom = true;
+    oxygen_bar_obj.layer = 100;
     scene = scene.with_object("oxygen_bar", oxygen_bar_obj);
 
     // Welcome text
@@ -794,6 +894,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         coin_static_sprite,
         coin_anim_template,
         score_x2_anim_template,
+        tech_bounce_static_img,
+        tech_bounce_anim_frames,
+        pad_thruster_static_img,
+        pad_thruster_anim_template,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,

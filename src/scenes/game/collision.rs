@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
-use crate::images::*;
 use crate::objects::*;
 use crate::state::*;
 use super::helpers::*;
@@ -164,56 +163,62 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let falling_down = s.gravity_dir > 0.0 && s.vy > 0.0;
     let falling_up   = s.gravity_dir < 0.0 && s.vy < 0.0;
-    if !s.bounce_enabled || !(falling_down || falling_up) { return; }
+    if !(falling_down || falling_up) { return; }
 
     let player_bottom = s.py + PLAYER_R;
     let player_top    = s.py - PLAYER_R;
-    let player_left   = s.px - PLAYER_R;
-    let player_right  = s.px + PLAYER_R;
-    let mut bounced_pad: Option<(String, f32, f32)> = None; // (name, pad_top, pad_bot)
+    let mut bounced_pad: Option<(String, f32, f32)> = None;
 
     for name in &s.pad_live {
         if let Some(obj) = c.get_game_object(name) {
-            let pad_top    = obj.position.1;
-            let pad_bottom = obj.position.1 + PAD_H;
+            if !obj.visible { continue; }
             let pad_left   = obj.position.0;
-            let pad_right  = obj.position.0 + PAD_W;
-            let overlap_x = player_right > pad_left && player_left < pad_right;
+            let pad_top    = obj.position.1;
+            let pad_bottom = pad_top + PAD_H;
+            let rounded_hit = circle_overlaps_rounded_rect(
+                s.px,
+                s.py,
+                PLAYER_R,
+                pad_left,
+                pad_top,
+                PAD_W,
+                PAD_H,
+                pad_corner_radius(),
+            );
             let hit = if falling_down {
-                overlap_x && player_bottom >= pad_top && player_bottom <= pad_top + PAD_H + s.vy.abs()
+                rounded_hit
+                    && player_bottom >= pad_top
+                    && player_bottom <= pad_top + PLAYER_R * 2.0 + s.vy.abs()
             } else {
-                overlap_x && player_top <= pad_bottom && player_top >= pad_bottom - PAD_H - s.vy.abs()
+                rounded_hit
+                    && player_top <= pad_bottom
+                    && player_top >= pad_bottom - PLAYER_R * 2.0 - s.vy.abs()
             };
             if hit { bounced_pad = Some((name.clone(), pad_top, pad_bottom)); break; }
         }
     }
 
     if let Some((pad_name, pad_top, pad_bottom)) = bounced_pad {
-        let bounce_factor = (1.0 - s.pad_bounce_count as f32 * PAD_BOUNCE_DECAY).max(PAD_BOUNCE_MIN_FACTOR);
-        s.vy = PAD_BOUNCE_VY_START * PAD_BOUNCE_VERTICAL_BOOST * bounce_factor * s.gravity_dir;
-        s.pad_bounce_count = s.pad_bounce_count.saturating_add(1);
-
+        s.vy = PAD_BOUNCE_VY * s.gravity_dir;
         if falling_down {
             s.py = pad_top - PLAYER_R;
         } else {
             s.py = pad_bottom + PLAYER_R;
         }
 
+        let (new_px, new_py, new_vx, new_vy) = (s.px, s.py, s.vx, s.vy);
         let unhook_ops = begin_unhook(&mut s);
-        let zone_idx = zone_index_for_distance(s.distance);
-        s.glow_flashes.push((pad_name.clone(), 12));
+        // Restart one-shot tech_bounce playback for this pad.
+        s.pad_bounce_anim.retain(|(id, _, _)| id != &pad_name);
+        s.pad_bounce_anim.push((pad_name.clone(), 1, 0));
         drop(s);
 
         if let Some(ref ops) = unhook_ops {
             apply_unhook(c, ops);
         }
-
-        if let Some(obj) = c.get_game_object_mut(&pad_name) {
-            let (pr, pg, pb) = pad_hit_for_zone(zone_idx);
-            obj.set_glow(GlowConfig {
-                color: Color(pr, pg, pb, 220),
-                width: 10.0,
-            });
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.position = (new_px - PLAYER_R, new_py - PLAYER_R);
+            obj.momentum = (new_vx, new_vy);
         }
     }
 }
@@ -293,7 +298,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if let Some(obj) = c.get_game_object(&name) {
                 let ax = obj.position.0 + obj.size.0 * 0.5;
                 let ay = obj.position.1 + obj.size.1 * 0.5;
-                let asteroid_r = obj.size.0 * 0.38;
+                let asteroid_r = obj.size.0 * 0.30;
                 let min_dist = PLAYER_R + 6.0 + asteroid_r;
                 let dx = s.px - ax;
                 let dy = s.py - ay;

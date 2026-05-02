@@ -866,41 +866,34 @@ pub fn black_hole_img_cached(radius: f32) -> Arc<image::RgbaImage> {
     img
 }
 
-/// Space coin image: bright golden star shape for high-value space collectibles.
-pub fn space_coin_img(radius: u32) -> image::RgbaImage {
-    let d = radius * 2;
-    let mut img = image::RgbaImage::new(d, d);
-    let ctr = radius as f32;
-    let r = radius as f32;
-    let inner_r = r * 0.42;
-    let outer_r = r * 0.90;
-    let points = 6u32;
+fn coin_gif_tinted_img(radius: u32, tint: (u8, u8, u8)) -> image::RgbaImage {
+    let d = radius.saturating_mul(2).max(2);
+    let base = image::load_from_memory(include_bytes!("../assets/coin.gif"))
+        .map(|img| img.into_rgba8())
+        .unwrap_or_else(|_| circle_img(radius.max(2), 255, 255, 255));
+    let mut out = image::imageops::resize(&base, d, d, image::imageops::FilterType::CatmullRom);
 
-    for py in 0..d {
-        for px in 0..d {
-            let dx = px as f32 + 0.5 - ctr;
-            let dy = py as f32 + 0.5 - ctr;
-            let dist = (dx * dx + dy * dy).sqrt();
-            if dist > r { continue; }
-
-            // Star mask: interpolate between inner and outer radius by angle
-            let angle = dy.atan2(dx);
-            let sector = (angle / (std::f32::consts::TAU / points as f32)) * 2.0;
-            let frac = sector - sector.floor();
-            let star_r = inner_r + (outer_r - inner_r) * (1.0 - (frac - 0.5).abs() * 2.0);
-
-            if dist <= star_r {
-                let t = dist / star_r;
-                // Gold gradient: bright center → warm edge
-                let luma = 1.0 - t * 0.45;
-                let gold_r = (C_SPACE_COIN.0 as f32 * luma).min(255.0) as u8;
-                let gold_g = (C_SPACE_COIN.1 as f32 * luma).min(255.0) as u8;
-                let gold_b = (C_SPACE_COIN.2 as f32 * luma * 0.4).min(255.0) as u8;
-                img.put_pixel(px, py, image::Rgba([gold_r, gold_g, gold_b, 255]));
-            }
+    for p in out.pixels_mut() {
+        let a = p[3];
+        if a == 0 {
+            continue;
         }
+        let luma = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0;
+        let shade = 0.55 + 0.45 * luma;
+        let tr = (tint.0 as f32 * shade).clamp(0.0, 255.0);
+        let tg = (tint.1 as f32 * shade).clamp(0.0, 255.0);
+        let tb = (tint.2 as f32 * shade).clamp(0.0, 255.0);
+        p[0] = ((tr * 0.85) + (p[0] as f32 * 0.15)).clamp(0.0, 255.0) as u8;
+        p[1] = ((tg * 0.85) + (p[1] as f32 * 0.15)).clamp(0.0, 255.0) as u8;
+        p[2] = ((tb * 0.85) + (p[2] as f32 * 0.15)).clamp(0.0, 255.0) as u8;
     }
-    img
+
+    out
+}
+
+/// Space coin image: regular coin.gif tinted for normal-value space pickups.
+pub fn space_coin_img(radius: u32) -> image::RgbaImage {
+    coin_gif_tinted_img(radius, C_SPACE_COIN)
 }
 
 /// Cached space coin image keyed by radius.
@@ -916,40 +909,9 @@ pub fn space_coin_img_cached(radius: u32) -> Arc<image::RgbaImage> {
     img
 }
 
-/// Red arc-coin image: same star shape as space_coin_img but crimson/scarlet.
+/// High-value space coin image: regular coin.gif with a distinct high-value tint.
 pub fn red_coin_img(radius: u32) -> image::RgbaImage {
-    let d = radius * 2;
-    let mut img = image::RgbaImage::new(d, d);
-    let ctr = radius as f32;
-    let r = radius as f32;
-    let inner_r = r * 0.42;
-    let outer_r = r * 0.90;
-    let points = 6u32;
-
-    for py in 0..d {
-        for px in 0..d {
-            let dx = px as f32 + 0.5 - ctr;
-            let dy = py as f32 + 0.5 - ctr;
-            let dist = (dx * dx + dy * dy).sqrt();
-            if dist > r { continue; }
-
-            let angle = dy.atan2(dx);
-            let sector = (angle / (std::f32::consts::TAU / points as f32)) * 2.0;
-            let frac = sector - sector.floor();
-            let star_r = inner_r + (outer_r - inner_r) * (1.0 - (frac - 0.5).abs() * 2.0);
-
-            if dist <= star_r {
-                let t = dist / star_r;
-                let luma = 1.0 - t * 0.50;
-                // Crimson-to-orange gradient
-                let cr = (255.0_f32 * luma).min(255.0) as u8;
-                let cg = ((55.0 + 40.0 * (1.0 - t)) * luma).min(255.0) as u8;
-                let cb = (20.0_f32 * luma).min(255.0) as u8;
-                img.put_pixel(px, py, image::Rgba([cr, cg, cb, 255]));
-            }
-        }
-    }
-    img
+    coin_gif_tinted_img(radius, C_SPACE_COIN_HIGH)
 }
 
 /// Cached red arc-coin image keyed by radius.

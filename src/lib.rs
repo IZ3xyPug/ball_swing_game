@@ -15,7 +15,12 @@ mod scenes;
 #[cfg(test)]
 mod sim_tests;
 
-use menu::{build_gameover_scene, build_gameover_sun_scene, build_menu_scene};
+use menu::{
+    build_gameover_oxygen_scene,
+    build_gameover_scene,
+    build_gameover_sun_scene,
+    build_menu_scene,
+};
 use scenes::game::build_game_scene;
 
 pub struct App;
@@ -27,6 +32,7 @@ impl App {
         canvas.add_scene(build_game_scene(ctx));
         canvas.add_scene(build_gameover_scene(ctx));
         canvas.add_scene(build_gameover_sun_scene(ctx));
+        canvas.add_scene(build_gameover_oxygen_scene(ctx));
         canvas.load_scene("menu");
         canvas
     }
