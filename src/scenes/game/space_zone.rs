@@ -178,6 +178,10 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     tick_solar_pending(c, st);
     tick_solar_screen_pos(c, st);
 
+    // Near-surface orbit capture for space planets. Keeps the player circling
+    // just above the surface instead of being pulled into repeated impacts.
+    tick_space_planet_orbit_capture(c, st);
+
     // ── Solar ceiling kill zone ───────────────────────────────────────────────
     let (py, kill_y) = {
         let s = st.lock().unwrap();
@@ -241,6 +245,8 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_oxygen        = SPACE_OXYGEN_TICKS;
         s.space_welcome_ticks = SPACE_WELCOME_TICKS;
         s.space_return_delay  = 0;
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
 
         // Seed space object rightmosts from current player x
         let px = s.px;
@@ -358,11 +364,7 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (hx - HOOK_R, hy - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: asteroid_hook_image_cached(),
-                color: None,
-            });
+            obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::Base));
         }
 
         {
@@ -480,11 +482,7 @@ fn spawn_catch_planet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (hx - HOOK_R, hy - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: asteroid_hook_image_cached(),
-                color: None,
-            });
+            obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::Base));
         }
         s = st.lock().unwrap();
     }
@@ -497,6 +495,8 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
         s.in_space_mode = false;
         s.space_stasis_active = false;
         s.space_gwell_timers.clear();
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
     }
 
     // Hide solar ceiling
@@ -677,8 +677,8 @@ fn tick_solar_pending(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 fn tick_solar_screen_pos(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    // Distance-based reveal: far away it is oversized and fully off-screen,
-    // then it zooms/slides into view as the player nears the killline.
+    // Distance-based reveal: keep native resolution and only slide vertically
+    // from off-screen as the player nears the killline.
     let (py, kill_y) = {
         let s = st.lock().unwrap();
         (s.py, solar_kill_y(&s))
@@ -771,8 +771,23 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if needs_return {
+        let (dist, coins) = {
+            let mut s = st.lock().unwrap();
+            s.dead = true;
+            (s.distance, s.coin_count as i32)
+        };
+        c.set_var("last_distance", dist);
+        c.set_var("last_coins", coins.max(0));
         c.set_var("died_to_oxygen", true);
-        exit_space(c, st, true);
+        c.set_var("died_to_sun", false);
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.visible = false;
+        }
+        if let Some(obj) = c.get_game_object_mut("rope") {
+            obj.visible = false;
+        }
+        c.load_scene("gameover");
+        return;
     }
 }
 
@@ -792,6 +807,128 @@ fn tick_space_welcome_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.visible = false;
         }
     }
+}
+
+// ── Planet orbit capture (space mode) ───────────────────────────────────────
+fn tick_space_planet_orbit_capture(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.in_space_mode || s.space_stasis_active {
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+        return;
+    }
+    if s.hooked {
+        // Hook grab explicitly breaks orbit lock so grapple can pull free.
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+        return;
+    }
+
+    let (px, py, vx, vy) = (s.px, s.py, s.vx, s.vy);
+    let planet_ids: Vec<String> = s.space_planet_live.clone();
+    let locked_id = s.space_orbit_locked_planet.clone();
+    let locked_speed = s.space_orbit_speed;
+    drop(s);
+
+    // If already locked, stay on that orbit every tick for a smooth perfect ring.
+    if !locked_id.is_empty() {
+        if let Some(obj) = c.get_game_object(&locked_id) {
+            if obj.visible {
+                let surface_r = obj.planet_radius.unwrap_or(obj.size.0 * 0.5);
+                let cx = obj.position.0 + surface_r;
+                let cy = obj.position.1 + surface_r;
+                let dx = px - cx;
+                let dy = py - cy;
+                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+                let nx = dx / dist;
+                let ny = dy / dist;
+                let tx = -ny;
+                let ty = nx;
+                let mut tangential_v = if locked_speed.abs() >= SPACE_PLANET_ORBIT_MIN_TANGENTIAL {
+                    locked_speed
+                } else {
+                    let cross = dx * vy - dy * vx;
+                    let sign = if cross.abs() > 0.001 { cross.signum() } else { 1.0 };
+                    SPACE_PLANET_ORBIT_MIN_TANGENTIAL * sign
+                };
+                tangential_v = tangential_v.clamp(
+                    -SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+                    SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+                );
+
+                let orbit_r = surface_r + PLAYER_R + SPACE_PLANET_ORBIT_ALT_PAD;
+                let mut s = st.lock().unwrap();
+                s.px = cx + nx * orbit_r;
+                s.py = cy + ny * orbit_r;
+                s.vx = tx * tangential_v;
+                s.vy = ty * tangential_v;
+                s.space_orbit_speed = tangential_v;
+                return;
+            }
+        }
+
+        // Locked planet went away; clear lock and allow reacquire.
+        let mut s = st.lock().unwrap();
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+    }
+
+    // Acquire lock only when entering near a planet surface.
+    let mut best: Option<(String, f32, f32, f32, f32)> = None; // (id, dist, cx, cy, surface_r)
+    for id in &planet_ids {
+        let Some(obj) = c.get_game_object(id) else { continue; };
+        if !obj.visible {
+            continue;
+        }
+        let surface_r = obj.planet_radius.unwrap_or(obj.size.0 * 0.5);
+        let cx = obj.position.0 + surface_r;
+        let cy = obj.position.1 + surface_r;
+        let dx = px - cx;
+        let dy = py - cy;
+        let dist = (dx * dx + dy * dy).sqrt();
+        let capture_r = surface_r + PLAYER_R + SPACE_PLANET_ORBIT_CAPTURE_PAD;
+        if dist > capture_r {
+            continue;
+        }
+
+        match &best {
+            Some((_, best_dist, _, _, _)) if dist >= *best_dist => {}
+            _ => best = Some((id.clone(), dist, cx, cy, surface_r)),
+        }
+    }
+
+    let Some((planet_id, dist, cx, cy, surface_r)) = best else { return; };
+    let safe_dist = dist.max(1.0);
+    let nx = (px - cx) / safe_dist;
+    let ny = (py - cy) / safe_dist;
+    let tx = -ny;
+    let ty = nx;
+
+    let mut tangential_v = vx * tx + vy * ty;
+    if tangential_v.abs() < SPACE_PLANET_ORBIT_MIN_TANGENTIAL {
+        let cross = (px - cx) * vy - (py - cy) * vx;
+        let sign = if cross.abs() > 0.001 {
+            cross.signum()
+        } else if tangential_v >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        tangential_v = SPACE_PLANET_ORBIT_MIN_TANGENTIAL * sign;
+    }
+    tangential_v = tangential_v.clamp(
+        -SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+        SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+    );
+
+    let orbit_r = surface_r + PLAYER_R + SPACE_PLANET_ORBIT_ALT_PAD;
+    let mut s = st.lock().unwrap();
+    s.px = cx + nx * orbit_r;
+    s.py = cy + ny * orbit_r;
+    s.vx = tx * tangential_v;
+    s.vy = ty * tangential_v;
+    s.space_orbit_locked_planet = planet_id;
+    s.space_orbit_speed = tangential_v;
 }
 
 // ── Planet pulse ──────────────────────────────────────────────────────────────
@@ -954,11 +1091,7 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (x - HOOK_R, y - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: asteroid_hook_image_cached(),
-                color: None,
-            });
+            obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
         }
 
         s = st.lock().unwrap();
@@ -1099,11 +1232,7 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.position = (hx - HOOK_R, hy - HOOK_R);
                     obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
                     obj.visible  = true;
-                    obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                        image: asteroid_hook_image_cached(),
-                        color: None,
-                    });
+                    obj.set_image(hook_asteroid_img_for_id(hook_id, AsteroidHookState::Base));
                 }
                 s = st.lock().unwrap();
             }
@@ -1197,6 +1326,9 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position      = (x - visual_r, y - visual_r);
             obj.size          = (d, d);
             obj.planet_radius = Some(radius); // starts active
+            if !obj.tags.iter().any(|t| t == "space_planet") {
+                obj.tags.push("space_planet".to_string());
+            }
             obj.visible       = true;
             obj.set_image(Image {
                 shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
@@ -1226,11 +1358,7 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.position = (hx - HOOK_R, hy - HOOK_R);
                     obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
                     obj.visible  = true;
-                    obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                        image: asteroid_hook_image_cached(),
-                        color: None,
-                    });
+                    obj.set_image(hook_asteroid_img_for_id(hook_id, AsteroidHookState::Base));
                 }
                 s = st.lock().unwrap();
             }

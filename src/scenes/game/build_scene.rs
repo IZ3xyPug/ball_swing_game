@@ -752,6 +752,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_red_coin_free:    space_red_coin_free.clone(),
 
                 space_gwell_timers:     Vec::new(),
+                space_orbit_locked_planet: String::new(),
+                space_orbit_speed:       0.0,
                 space_entry_px:         0.0,
                 space_coin_spent:       Vec::new(),
                 space_red_coin_spent:   Vec::new(),
@@ -1666,11 +1668,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         }
                         if died_to_sun {
                             c.set_var("died_to_sun", false);
+                            c.set_var("died_to_oxygen", false);
                             c.load_scene("gameover_sun");
                         } else if died_to_oxygen {
                             c.set_var("died_to_oxygen", false);
                             c.load_scene("gameover_oxygen");
                         } else {
+                            if !died_to_oxygen {
+                                c.set_var("died_to_oxygen", false);
+                            }
                             c.load_scene("gameover");
                         }
                     }

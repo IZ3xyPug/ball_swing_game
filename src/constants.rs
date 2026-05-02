@@ -558,7 +558,7 @@ pub const SPAWN_ANIM_DROP:  f32 = 600.0;
 
 // Camera behavior during space transition
 pub const SPACE_CAM_LERP_IN:    f32 = 0.048;  // slower lerp (dramatic ascent)
-pub const SPACE_CAM_ZOOM_IN:    f32 = 1.05;   // slight zoom toward player in space
+pub const SPACE_CAM_ZOOM_IN:    f32 = 0.82;   // pull back in space for wider visibility/scale
 pub const SPACE_CAM_Y_LEAD:     f32 = VH * 0.12; // lead camera above player
 
 // Space color palette
@@ -585,7 +585,7 @@ pub const C_OXY_LOW:     (u8,u8,u8) = (220, 55,  55);
 // ── Space zone — new features ─────────────────────────────────────────────────
 
 /// Momentum cap while in space mode (2/3 of the normal cap).
-pub const SPACE_MOMENTUM_CAP: f32 = MOMENTUM_CAP * 2.0 / 3.0;
+pub const SPACE_MOMENTUM_CAP: f32 = MOMENTUM_CAP * 0.5;
 
 /// Y coordinate of the solar ceiling (5 screen-heights above space entry).
 /// Solar gif is placed here; crossing into the dense surface zone triggers sun-death.
@@ -598,8 +598,8 @@ pub const SPACE_SOLAR_H: f32 = VH * 1.0;
 /// Distance from the killline where the solar ceiling reveal starts.
 /// Set to cover the entire space zone so corona is visible from entry.
 pub const SPACE_SOLAR_REVEAL_DIST: f32 = VH * 4.2;
-/// Far-away scale: corona is slightly wider than the screen when distant.
-pub const SPACE_SOLAR_FAR_SCALE: f32 = 1.35;
+/// Far-away scale: keep corona at native screen width (no zoom-in effect).
+pub const SPACE_SOLAR_FAR_SCALE: f32 = 1.0;
 /// Bottom Y of the corona in screen-space when the player is far from the sun.
 /// VH*0.08 delays initial visibility so the sun does not appear too early.
 pub const SPACE_SOLAR_FAR_BOTTOM_OFFSET: f32 = VH * 0.08;
@@ -642,6 +642,18 @@ pub const SPACE_PLANET_HOOK_OFFSET:    f32   = 340.0;
 pub const SPACE_GWELL_NEARBY_HOOKS:   usize = 2;
 /// Offset from well centre to nearby hook positions (px).
 pub const SPACE_GWELL_HOOK_OFFSET:    f32   = 500.0;
+
+// Space planet orbit capture (near-surface autopilot)
+/// Distance from planet surface where orbit capture begins (px).
+pub const SPACE_PLANET_ORBIT_CAPTURE_PAD: f32 = 120.0;
+/// Locked orbit altitude from planet surface while captured (px).
+pub const SPACE_PLANET_ORBIT_ALT_PAD: f32 = 140.0;
+/// Minimum tangential speed retained for stable CW/CCW orbit (px/tick).
+pub const SPACE_PLANET_ORBIT_MIN_TANGENTIAL: f32 = 8.0;
+/// Maximum tangential speed allowed while orbiting (px/tick).
+pub const SPACE_PLANET_ORBIT_MAX_TANGENTIAL: f32 = 42.0;
+/// Tangential drag while orbiting (keeps long orbits stable).
+pub const SPACE_PLANET_ORBIT_DRAG: f32 = 0.997;
 
 // Asteroid drift — velocity components added when an asteroid is spawned.
 pub const SPACE_ASTEROID_VX_MIN: f32 = -4.0;
