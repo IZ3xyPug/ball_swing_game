@@ -567,8 +567,8 @@ pub const SPACE_SOLAR_H: f32 = VH * 1.0;
 /// Distance from the killline where the solar ceiling reveal starts.
 /// Set to cover the entire space zone so corona is visible from entry.
 pub const SPACE_SOLAR_REVEAL_DIST: f32 = VH * 4.2;
-/// Far-away scale: corona is slightly wider than the screen when distant.
-pub const SPACE_SOLAR_FAR_SCALE: f32 = 1.35;
+/// Far-away scale: keep corona at native screen width (no zoom-in effect).
+pub const SPACE_SOLAR_FAR_SCALE: f32 = 1.0;
 /// Bottom Y of the corona in screen-space when the player is far from the sun.
 /// VH*0.08 delays initial visibility so the sun does not appear too early.
 pub const SPACE_SOLAR_FAR_BOTTOM_OFFSET: f32 = VH * 0.08;

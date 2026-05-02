@@ -677,8 +677,8 @@ fn tick_solar_pending(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 fn tick_solar_screen_pos(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    // Distance-based reveal: far away it is oversized and fully off-screen,
-    // then it zooms/slides into view as the player nears the killline.
+    // Distance-based reveal: keep native resolution and only slide vertically
+    // from off-screen as the player nears the killline.
     let (py, kill_y) = {
         let s = st.lock().unwrap();
         (s.py, solar_kill_y(&s))
