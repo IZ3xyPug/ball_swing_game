@@ -12,7 +12,9 @@
 // follow behaviour resumes.
 
 use quartz::*;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::sync::OnceLock;
 use std::thread;
 
 use crate::constants::*;
@@ -20,6 +22,70 @@ use crate::images::*;
 use crate::objects::*;
 use crate::state::*;
 use super::helpers::*;
+
+const SPACE_COIN_KIND_CAT: u8 = 0;
+const SPACE_COIN_KIND_CAT_BLUE: u8 = 1;
+const SPACE_COIN_KIND_CAT_RED: u8 = 2;
+
+fn catcoin_anim_bytes(kind: u8) -> &'static [u8] {
+    match kind {
+        SPACE_COIN_KIND_CAT_BLUE => include_bytes!("../../../assets/catcoinblue.gif"),
+        SPACE_COIN_KIND_CAT_RED => include_bytes!("../../../assets/catcoinred.gif"),
+        _ => include_bytes!("../../../assets/catcoin.gif"),
+    }
+}
+
+fn catcoin_image_path(kind: u8) -> &'static str {
+    match kind {
+        SPACE_COIN_KIND_CAT_BLUE => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
+        SPACE_COIN_KIND_CAT_RED => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinred.gif"),
+        _ => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
+    }
+}
+
+fn cached_space_coin_static(kind: u8, radius: f32) -> Image {
+    static CACHE: OnceLock<Mutex<HashMap<(u8, u32), Image>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let d = (radius * 2.0).max(2.0).round() as u32;
+    let key = (kind, d);
+
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(existing) = guard.get(&key) {
+            return existing.clone();
+        }
+    }
+
+    let built = load_image_sized(catcoin_image_path(kind), d as f32, d as f32);
+    cache.lock().unwrap().insert(key, built.clone());
+    built
+}
+
+fn cached_space_coin_anim(kind: u8, radius: f32) -> Option<AnimatedSprite> {
+    static CACHE: OnceLock<Mutex<HashMap<(u8, u32), Option<AnimatedSprite>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let d = (radius * 2.0).max(2.0).round() as u32;
+    let key = (kind, d);
+
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(existing) = guard.get(&key) {
+            return existing.clone();
+        }
+    }
+
+    let built = AnimatedSprite::new(catcoin_anim_bytes(kind), (d as f32, d as f32), SPACE_COIN_ANIM_FPS).ok();
+    cache.lock().unwrap().insert(key, built.clone());
+    built
+}
+
+pub fn prewarm_space_coin_decode() {
+    let _ = cached_space_coin_anim(SPACE_COIN_KIND_CAT, SPACE_COIN_R);
+    let _ = cached_space_coin_anim(SPACE_COIN_KIND_CAT_BLUE, SPACE_RED_COIN_R);
+    let _ = cached_space_coin_anim(SPACE_COIN_KIND_CAT_RED, SPACE_RED_COIN_R);
+}
 
 fn solar_surface_ratio_from_gif_bytes(solar_bytes: &[u8]) -> f32 {
     use image::AnimationDecoder;
@@ -77,6 +143,77 @@ fn solar_surface_ratio_from_gif_bytes(solar_bytes: &[u8]) -> f32 {
 fn solar_kill_y(s: &State) -> f32 {
     let surface_ratio = s.solar_surface_ratio.clamp(0.0, 1.0);
     SPACE_UPPER_LIMIT_Y + SPACE_SOLAR_H * surface_ratio
+}
+
+#[inline]
+fn blackhole_visual_r(core_r: f32) -> f32 {
+    core_r * SPACE_BLACKHOLE_VISUAL_RADIUS_MULT
+}
+
+#[inline]
+fn blackhole_influence_r(core_r: f32) -> f32 {
+    core_r * SPACE_BLACKHOLE_INFLUENCE_RADIUS_MULT
+}
+
+fn reset_coin_anim_frame(obj: &mut GameObject, frame: usize) {
+    if let Some(anim) = obj.animated_sprite.as_mut() {
+        let max_frame = anim.frame_count().saturating_sub(1);
+        anim.set_frame(frame.min(max_frame));
+    }
+}
+
+fn current_space_coin_kind(obj: &GameObject) -> Option<u8> {
+    if obj.tags.iter().any(|t| t == "space_catcoin_red") {
+        Some(SPACE_COIN_KIND_CAT_RED)
+    } else if obj.tags.iter().any(|t| t == "space_catcoin_blue") {
+        Some(SPACE_COIN_KIND_CAT_BLUE)
+    } else if obj.tags.iter().any(|t| t == "space_catcoin") {
+        Some(SPACE_COIN_KIND_CAT)
+    } else {
+        None
+    }
+}
+
+fn apply_space_coin_visual(obj: &mut GameObject, kind: u8, radius: f32) {
+    let prev_kind = current_space_coin_kind(obj);
+    let kind_changed = prev_kind != Some(kind);
+
+    obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
+    let tag = match kind {
+        SPACE_COIN_KIND_CAT_BLUE => "space_catcoin_blue",
+        SPACE_COIN_KIND_CAT_RED => "space_catcoin_red",
+        _ => "space_catcoin",
+    };
+    obj.tags.push(tag.to_string());
+
+    // Match the working lower-area coin setup: static image first.
+    obj.set_image(cached_space_coin_static(kind, radius));
+
+    if let Some(anim) = cached_space_coin_anim(kind, radius) {
+        if kind_changed || obj.animated_sprite.is_none() {
+            obj.set_animation(anim);
+        }
+        if let Some(a) = obj.animated_sprite.as_mut() {
+            a.set_frame(0);
+        }
+    } else {
+        obj.animated_sprite = None;
+    }
+
+    obj.set_glow(GlowConfig {
+        color: Color(0, 0, 0, 0),
+        width: 0.0,
+    });
+}
+
+fn score_for_space_coin_obj(obj: &GameObject) -> u32 {
+    if obj.tags.iter().any(|t| t == "space_catcoin_red") {
+        SPACE_CATCOIN_RED_SCORE
+    } else if obj.tags.iter().any(|t| t == "space_catcoin_blue") {
+        SPACE_CATCOIN_BLUE_SCORE
+    } else {
+        SPACE_CATCOIN_SCORE
+    }
 }
 
 fn queue_solar_decode_if_needed(st: &Arc<Mutex<State>>) {
@@ -178,6 +315,10 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     tick_solar_pending(c, st);
     tick_solar_screen_pos(c, st);
 
+    // Near-surface orbit capture for space planets. Keeps the player circling
+    // just above the surface instead of being pulled into repeated impacts.
+    tick_space_planet_orbit_capture(c, st);
+
     // ── Solar ceiling kill zone ───────────────────────────────────────────────
     let (py, kill_y) = {
         let s = st.lock().unwrap();
@@ -203,6 +344,8 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     tick_space_camera(c, st);
     tick_space_oxygen(c, st);
     tick_space_gwells(c, st, frame);
+    tick_space_blackhole_teleport(c, st);
+    tick_space_left_boundary_teleport(c, st);
     tick_space_spawning(c, st, frame);
     tick_space_culling(c, st);
     tick_space_coin_collect(c, st);
@@ -241,6 +384,8 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_oxygen        = SPACE_OXYGEN_TICKS;
         s.space_welcome_ticks = SPACE_WELCOME_TICKS;
         s.space_return_delay  = 0;
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
 
         // Seed space object rightmosts from current player x
         let px = s.px;
@@ -256,6 +401,8 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // Return any leftover spent coins from a prior visit to the free pool
         let _sc: Vec<String> = s.space_coin_spent.drain(..).collect();
         s.space_coin_free.extend(_sc);
+        let _sbc: Vec<String> = s.space_blue_coin_spent.drain(..).collect();
+        s.space_blue_coin_free.extend(_sbc);
         let _src: Vec<String> = s.space_red_coin_spent.drain(..).collect();
         s.space_red_coin_free.extend(_src);
         // Set near-zero gravity
@@ -358,11 +505,7 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (hx - HOOK_R, hy - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: asteroid_hook_image_cached(),
-                color: None,
-            });
+            obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::Base));
         }
 
         {
@@ -480,11 +623,7 @@ fn spawn_catch_planet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (hx - HOOK_R, hy - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: asteroid_hook_image_cached(),
-                color: None,
-            });
+            obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::Base));
         }
         s = st.lock().unwrap();
     }
@@ -497,6 +636,8 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
         s.in_space_mode = false;
         s.space_stasis_active = false;
         s.space_gwell_timers.clear();
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
     }
 
     // Hide solar ceiling
@@ -677,8 +818,8 @@ fn tick_solar_pending(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 fn tick_solar_screen_pos(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    // Distance-based reveal: far away it is oversized and fully off-screen,
-    // then it zooms/slides into view as the player nears the killline.
+    // Distance-based reveal: keep native resolution and only slide vertically
+    // from off-screen as the player nears the killline.
     let (py, kill_y) = {
         let s = st.lock().unwrap();
         (s.py, solar_kill_y(&s))
@@ -771,8 +912,23 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if needs_return {
+        let (dist, coins) = {
+            let mut s = st.lock().unwrap();
+            s.dead = true;
+            (s.distance, s.coin_count as i32)
+        };
+        c.set_var("last_distance", dist);
+        c.set_var("last_coins", coins.max(0));
         c.set_var("died_to_oxygen", true);
-        exit_space(c, st, true);
+        c.set_var("died_to_sun", false);
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.visible = false;
+        }
+        if let Some(obj) = c.get_game_object_mut("rope") {
+            obj.visible = false;
+        }
+        c.load_scene("gameover");
+        return;
     }
 }
 
@@ -792,6 +948,128 @@ fn tick_space_welcome_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.visible = false;
         }
     }
+}
+
+// ── Planet orbit capture (space mode) ───────────────────────────────────────
+fn tick_space_planet_orbit_capture(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.in_space_mode || s.space_stasis_active {
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+        return;
+    }
+    if s.hooked {
+        // Hook grab explicitly breaks orbit lock so grapple can pull free.
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+        return;
+    }
+
+    let (px, py, vx, vy) = (s.px, s.py, s.vx, s.vy);
+    let planet_ids: Vec<String> = s.space_planet_live.clone();
+    let locked_id = s.space_orbit_locked_planet.clone();
+    let locked_speed = s.space_orbit_speed;
+    drop(s);
+
+    // If already locked, stay on that orbit every tick for a smooth perfect ring.
+    if !locked_id.is_empty() {
+        if let Some(obj) = c.get_game_object(&locked_id) {
+            if obj.visible {
+                let surface_r = obj.planet_radius.unwrap_or(obj.size.0 * 0.5);
+                let cx = obj.position.0 + surface_r;
+                let cy = obj.position.1 + surface_r;
+                let dx = px - cx;
+                let dy = py - cy;
+                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+                let nx = dx / dist;
+                let ny = dy / dist;
+                let tx = -ny;
+                let ty = nx;
+                let mut tangential_v = if locked_speed.abs() >= SPACE_PLANET_ORBIT_MIN_TANGENTIAL {
+                    locked_speed
+                } else {
+                    let cross = dx * vy - dy * vx;
+                    let sign = if cross.abs() > 0.001 { cross.signum() } else { 1.0 };
+                    SPACE_PLANET_ORBIT_MIN_TANGENTIAL * sign
+                };
+                tangential_v = tangential_v.clamp(
+                    -SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+                    SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+                );
+
+                let orbit_r = surface_r + PLAYER_R + SPACE_PLANET_ORBIT_ALT_PAD;
+                let mut s = st.lock().unwrap();
+                s.px = cx + nx * orbit_r;
+                s.py = cy + ny * orbit_r;
+                s.vx = tx * tangential_v;
+                s.vy = ty * tangential_v;
+                s.space_orbit_speed = tangential_v;
+                return;
+            }
+        }
+
+        // Locked planet went away; clear lock and allow reacquire.
+        let mut s = st.lock().unwrap();
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+    }
+
+    // Acquire lock only when entering near a planet surface.
+    let mut best: Option<(String, f32, f32, f32, f32)> = None; // (id, dist, cx, cy, surface_r)
+    for id in &planet_ids {
+        let Some(obj) = c.get_game_object(id) else { continue; };
+        if !obj.visible {
+            continue;
+        }
+        let surface_r = obj.planet_radius.unwrap_or(obj.size.0 * 0.5);
+        let cx = obj.position.0 + surface_r;
+        let cy = obj.position.1 + surface_r;
+        let dx = px - cx;
+        let dy = py - cy;
+        let dist = (dx * dx + dy * dy).sqrt();
+        let capture_r = surface_r + PLAYER_R + SPACE_PLANET_ORBIT_CAPTURE_PAD;
+        if dist > capture_r {
+            continue;
+        }
+
+        match &best {
+            Some((_, best_dist, _, _, _)) if dist >= *best_dist => {}
+            _ => best = Some((id.clone(), dist, cx, cy, surface_r)),
+        }
+    }
+
+    let Some((planet_id, dist, cx, cy, surface_r)) = best else { return; };
+    let safe_dist = dist.max(1.0);
+    let nx = (px - cx) / safe_dist;
+    let ny = (py - cy) / safe_dist;
+    let tx = -ny;
+    let ty = nx;
+
+    let mut tangential_v = vx * tx + vy * ty;
+    if tangential_v.abs() < SPACE_PLANET_ORBIT_MIN_TANGENTIAL {
+        let cross = (px - cx) * vy - (py - cy) * vx;
+        let sign = if cross.abs() > 0.001 {
+            cross.signum()
+        } else if tangential_v >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        tangential_v = SPACE_PLANET_ORBIT_MIN_TANGENTIAL * sign;
+    }
+    tangential_v = tangential_v.clamp(
+        -SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+        SPACE_PLANET_ORBIT_MAX_TANGENTIAL,
+    );
+
+    let orbit_r = surface_r + PLAYER_R + SPACE_PLANET_ORBIT_ALT_PAD;
+    let mut s = st.lock().unwrap();
+    s.px = cx + nx * orbit_r;
+    s.py = cy + ny * orbit_r;
+    s.vx = tx * tangential_v;
+    s.vy = ty * tangential_v;
+    s.space_orbit_locked_planet = planet_id;
+    s.space_orbit_speed = tangential_v;
 }
 
 // ── Planet pulse ──────────────────────────────────────────────────────────────
@@ -837,56 +1115,85 @@ fn tick_space_spawning(c: &mut Canvas, st: &Arc<Mutex<State>>, _frame: u32) {
 }
 
 fn spawn_space_coin_pick(c: &mut Canvas, st: &Arc<Mutex<State>>, x: f32, y: f32, high_chance: f32) {
-    let (id, is_high) = {
+    let (id, radius) = {
         let mut s = st.lock().unwrap();
         let roll = lcg(&mut s.seed);
-        let pick_high = roll < high_chance && !s.space_red_coin_free.is_empty();
-
-        if pick_high {
-            let Some(id) = s.space_red_coin_free.pop() else { return; };
-            s.space_red_coin_live.push(id.clone());
-            (id, true)
-        } else if let Some(id) = s.space_coin_free.pop() {
-            s.space_coin_live.push(id.clone());
-            if s.space_coin_rightmost < x {
-                s.space_coin_rightmost = x;
-            }
-            (id, false)
-        } else if let Some(id) = s.space_red_coin_free.pop() {
-            s.space_red_coin_live.push(id.clone());
-            (id, true)
+        let blue_chance = (SPACE_CATCOIN_BLUE_CHANCE + high_chance * 0.20).clamp(0.0, 0.65);
+        let red_chance = (SPACE_CATCOIN_RED_CHANCE + high_chance * 0.24).clamp(0.0, 0.35);
+        let rare_roll = roll;
+        let kind = if rare_roll < red_chance {
+            SPACE_COIN_KIND_CAT_RED
+        } else if rare_roll < red_chance + blue_chance {
+            SPACE_COIN_KIND_CAT_BLUE
         } else {
-            return;
+            SPACE_COIN_KIND_CAT
+        };
+
+        match kind {
+            SPACE_COIN_KIND_CAT => {
+                if let Some(id) = s.space_coin_free.pop() {
+                    s.space_coin_live.push(id.clone());
+                    if s.space_coin_rightmost < x {
+                        s.space_coin_rightmost = x;
+                    }
+                    (id, SPACE_COIN_R)
+                } else if let Some(id) = s.space_blue_coin_free.pop() {
+                    s.space_blue_coin_live.push(id.clone());
+                    (id, SPACE_RED_COIN_R)
+                } else if let Some(id) = s.space_red_coin_free.pop() {
+                    s.space_red_coin_live.push(id.clone());
+                    (id, SPACE_RED_COIN_R)
+                } else {
+                    return;
+                }
+            }
+            SPACE_COIN_KIND_CAT_BLUE => {
+                if let Some(id) = s.space_blue_coin_free.pop() {
+                    s.space_blue_coin_live.push(id.clone());
+                    (id, SPACE_RED_COIN_R)
+                } else if let Some(id) = s.space_coin_free.pop() {
+                    s.space_coin_live.push(id.clone());
+                    if s.space_coin_rightmost < x {
+                        s.space_coin_rightmost = x;
+                    }
+                    (id, SPACE_COIN_R)
+                } else if let Some(id) = s.space_red_coin_free.pop() {
+                    s.space_red_coin_live.push(id.clone());
+                    (id, SPACE_RED_COIN_R)
+                } else {
+                    return;
+                }
+            }
+            _ => {
+                if let Some(id) = s.space_red_coin_free.pop() {
+                    s.space_red_coin_live.push(id.clone());
+                    (id, SPACE_RED_COIN_R)
+                } else if let Some(id) = s.space_blue_coin_free.pop() {
+                    s.space_blue_coin_live.push(id.clone());
+                    (id, SPACE_RED_COIN_R)
+                } else if let Some(id) = s.space_coin_free.pop() {
+                    s.space_coin_live.push(id.clone());
+                    if s.space_coin_rightmost < x {
+                        s.space_coin_rightmost = x;
+                    }
+                    (id, SPACE_COIN_R)
+                } else {
+                    return;
+                }
+            }
         }
     };
 
     if let Some(obj) = c.get_game_object_mut(&id) {
-        if is_high {
-            obj.position = (x - SPACE_RED_COIN_R, y - SPACE_RED_COIN_R);
-            obj.size = (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
-            obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
-                image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
-                color: None,
-            });
-            obj.set_glow(GlowConfig { color: Color(C_SPACE_COIN_HIGH.0, C_SPACE_COIN_HIGH.1, C_SPACE_COIN_HIGH.2, 170), width: 18.0 });
-        } else {
-            obj.position = (x - SPACE_COIN_R, y - SPACE_COIN_R);
-            obj.size = (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0);
-            obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0), 0.0),
-                image: space_coin_img_cached(SPACE_COIN_R as u32),
-                color: None,
-            });
-            obj.set_glow(GlowConfig { color: Color(C_SPACE_COIN.0, C_SPACE_COIN.1, C_SPACE_COIN.2, 140), width: 14.0 });
-        }
+        obj.position = (x - radius, y - radius);
+        obj.size = (radius * 2.0, radius * 2.0);
+        obj.visible = true;
+        reset_coin_anim_frame(obj, 0);
     }
 }
 
 fn spawn_space_sun_bonus_clusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (spawn_cluster, center_x, center_y, count) = {
+    let (spawn_cluster, hook_ids, px, seed_snapshot, count) = {
         let mut s = st.lock().unwrap();
         if lcg(&mut s.seed) > SPACE_SUN_BONUS_CLUSTER_CHANCE {
             return;
@@ -894,21 +1201,46 @@ fn spawn_space_sun_bonus_clusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let count = SPACE_SUN_BONUS_CLUSTER_COINS_MIN
             + ((lcg(&mut s.seed) * (SPACE_SUN_BONUS_CLUSTER_COINS_MAX - SPACE_SUN_BONUS_CLUSTER_COINS_MIN + 1) as f32) as usize)
                 .min(SPACE_SUN_BONUS_CLUSTER_COINS_MAX - SPACE_SUN_BONUS_CLUSTER_COINS_MIN);
-        let center_x = s.px + GEN_AHEAD * (0.58 + lcg(&mut s.seed) * 0.30);
-        let y_min = SPACE_HOOK_SUN_SAFETY_BAND_MIN.max(SPACE_HOOK_SUN_ZONE_Y_MIN);
-        let y_max = SPACE_HOOK_SUN_SAFETY_BAND_MAX.min(SPACE_HOOK_SUN_ZONE_Y_MAX);
-        let center_y = lcg_range(&mut s.seed, y_min, y_max);
-        (true, center_x, center_y, count)
+        let hook_ids = s.space_hook_live.clone();
+        (true, hook_ids, s.px, s.seed, count)
     };
 
     if !spawn_cluster {
         return;
     }
 
-    let start_x = center_x - SPACE_SUN_BONUS_CLUSTER_SPACING * (count as f32 - 1.0) * 0.5;
+    let y_min = SPACE_HOOK_SUN_SAFETY_BAND_MIN.max(SPACE_HOOK_SUN_ZONE_Y_MIN);
+    let y_max = SPACE_HOOK_SUN_SAFETY_BAND_MAX.min(SPACE_HOOK_SUN_ZONE_Y_MAX);
+    let mut candidates: Vec<(f32, f32)> = Vec::new();
+    for id in &hook_ids {
+        let Some(obj) = c.get_game_object(id) else { continue; };
+        if !obj.visible {
+            continue;
+        }
+        let hx = obj.position.0 + HOOK_R;
+        let hy = obj.position.1 + HOOK_R;
+        if hx < px + VW * 0.2 || hx > px + GEN_AHEAD {
+            continue;
+        }
+        if hy < y_min || hy > y_max {
+            continue;
+        }
+        candidates.push((hx, hy));
+    }
+    if candidates.is_empty() {
+        return;
+    }
+
+    let mut local_seed = seed_snapshot ^ 0x9E37_79B9_7F4A_7C15;
+    let pick = (lcg(&mut local_seed) * candidates.len() as f32) as usize;
+    let (center_x, center_y) = candidates[pick.min(candidates.len() - 1)];
+    let ring_r = SPACE_SUN_BONUS_CLUSTER_RING_R;
+    let phase = lcg(&mut local_seed) * std::f32::consts::TAU;
     for i in 0..count {
-        let x = start_x + i as f32 * SPACE_SUN_BONUS_CLUSTER_SPACING;
-        let y = center_y + ((i as f32 * 1.7).sin() * 55.0);
+        let t = i as f32 / count as f32;
+        let theta = phase + t * std::f32::consts::TAU;
+        let x = center_x + ring_r * theta.cos();
+        let y = center_y + ring_r * theta.sin();
         spawn_space_coin_pick(c, st, x, y, SPACE_SUN_BONUS_RED_CHANCE);
     }
 }
@@ -954,11 +1286,7 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (x - HOOK_R, y - HOOK_R);
             obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible  = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: asteroid_hook_image_cached(),
-                color: None,
-            });
+            obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
         }
 
         s = st.lock().unwrap();
@@ -986,23 +1314,41 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let Some(id) = s.space_planet_free.pop() else { break; };
         s.space_planet_live.push(id.clone());
         s.space_planet_data.push((id.clone(), gravity_r, SPACE_PLANET_GRAV_STRENGTH));
+        let prev_planet_id = if s.space_planet_live.len() >= 2 {
+            Some(s.space_planet_live[s.space_planet_live.len() - 2].clone())
+        } else {
+            None
+        };
         s.space_planet_rightmost = x;
         spawned += 1;
 
-        // Collect coin arc IDs (mix of normal and red) and nearby hook IDs
+        // Collect coin arc IDs (fixed variant per dedicated pool) and nearby hook IDs
         let arc_count = SPACE_COIN_ARC_COUNT;
         let red_count = (arc_count as f32 * SPACE_COIN_ARC_RED_FRAC).floor() as usize;
         let normal_count = arc_count - red_count;
-        let arc_coin_ids: Vec<(String, bool)> = {
-            let mut ids: Vec<(String, bool)> = Vec::new();
+        let arc_coin_ids: Vec<(String, u8)> = {
+            let mut ids: Vec<(String, u8)> = Vec::new();
             for _ in 0..normal_count {
                 if let Some(cid) = s.space_coin_free.pop() {
-                    ids.push((cid, false));
+                    ids.push((cid, SPACE_COIN_KIND_CAT));
                 }
             }
             for _ in 0..red_count {
-                if let Some(cid) = s.space_red_coin_free.pop() {
-                    ids.push((cid, true));
+                let kind = if lcg(&mut s.seed) < 0.30 {
+                    SPACE_COIN_KIND_CAT_RED
+                } else {
+                    SPACE_COIN_KIND_CAT_BLUE
+                };
+                let picked = if kind == SPACE_COIN_KIND_CAT_RED {
+                    s.space_red_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_RED))
+                } else {
+                    s.space_blue_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_BLUE))
+                }
+                .or_else(|| s.space_blue_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_BLUE)))
+                .or_else(|| s.space_red_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_RED)))
+                .or_else(|| s.space_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT)));
+                if let Some(entry) = picked {
+                    ids.push(entry);
                 }
             }
             ids
@@ -1031,47 +1377,40 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.set_glow(GlowConfig { color: Color(pr, pg, pb, 55), width: 18.0 });
         }
 
-        // Place coin arc around planet
-        let arc_r = visual_r * SPACE_COIN_ARC_RADIUS_MULT;
+        // Place coin arc around planet. Clamp to at least planet surface + coin radius
+        // so no orbit coin can land inside the planet body.
+        let arc_r = (visual_r * SPACE_COIN_ARC_RADIUS_MULT).max(visual_r + SPACE_COIN_R + 24.0);
         let n_arc = arc_coin_ids.len();
         let step = if n_arc > 0 { std::f32::consts::TAU / n_arc as f32 } else { 0.0 };
         let phase_offset: f32 = std::f32::consts::FRAC_PI_2; // start at top
-        for (i, (cid, is_red)) in arc_coin_ids.iter().enumerate() {
+        for (i, (cid, kind)) in arc_coin_ids.iter().enumerate() {
             let theta = phase_offset + step * i as f32;
             let cx = x + arc_r * theta.cos();
             let cy = y + arc_r * theta.sin();
-            if *is_red {
-                if let Some(obj) = c.get_game_object_mut(cid) {
-                    obj.position = (cx - SPACE_RED_COIN_R, cy - SPACE_RED_COIN_R);
-                    obj.size     = (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
-                    obj.visible  = true;
-                    obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
-                        image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
-                        color: None,
-                    });
-                    obj.set_glow(GlowConfig { color: Color(255, 60, 20, 160), width: 18.0 });
-                }
-            } else {
+            if *kind == SPACE_COIN_KIND_CAT {
                 if let Some(obj) = c.get_game_object_mut(cid) {
                     obj.position = (cx - SPACE_COIN_R, cy - SPACE_COIN_R);
                     obj.size     = (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0);
                     obj.visible  = true;
-                    obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0), 0.0),
-                        image: space_coin_img_cached(SPACE_COIN_R as u32),
-                        color: None,
-                    });
-                    obj.set_glow(GlowConfig { color: Color(C_SPACE_COIN.0, C_SPACE_COIN.1, 60, 140), width: 14.0 });
+                    reset_coin_anim_frame(obj, 0);
+                }
+            } else {
+                if let Some(obj) = c.get_game_object_mut(cid) {
+                    obj.position = (cx - SPACE_RED_COIN_R, cy - SPACE_RED_COIN_R);
+                    obj.size     = (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
+                    obj.visible  = true;
+                    reset_coin_anim_frame(obj, 0);
                 }
             }
         }
         // Register arc coins
         {
             let mut s = st.lock().unwrap();
-            for (cid, is_red) in arc_coin_ids {
-                if is_red {
+            for (cid, kind) in arc_coin_ids {
+                if kind == SPACE_COIN_KIND_CAT_RED {
                     s.space_red_coin_live.push(cid);
+                } else if kind == SPACE_COIN_KIND_CAT_BLUE {
+                    s.space_blue_coin_live.push(cid);
                 } else {
                     s.space_coin_live.push(cid);
                     if s.space_coin_rightmost < x { s.space_coin_rightmost = x; }
@@ -1099,29 +1438,29 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.position = (hx - HOOK_R, hy - HOOK_R);
                     obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
                     obj.visible  = true;
-                    obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                        image: asteroid_hook_image_cached(),
-                        color: None,
-                    });
+                    obj.set_image(hook_asteroid_img_for_id(hook_id, AsteroidHookState::Base));
                 }
                 s = st.lock().unwrap();
             }
         }
 
-        // Partial guide lines from one nearby hook toward another, so players
-        // can visually follow routes across hook nodes around each planet.
-        for pair in hook_points.windows(2) {
-            let (ax, ay) = pair[0];
-            let (bx, by) = pair[1];
-            for i in 0..SPACE_PLANET_HOOK_GUIDE_COINS {
-                let denom = (SPACE_PLANET_HOOK_GUIDE_COINS - 1).max(1) as f32;
-                let t01 = i as f32 / denom;
-                let t = SPACE_PLANET_HOOK_GUIDE_T_MIN
-                    + (SPACE_PLANET_HOOK_GUIDE_T_MAX - SPACE_PLANET_HOOK_GUIDE_T_MIN) * t01;
-                let cx = ax + (bx - ax) * t;
-                let cy = ay + (by - ay) * t;
-                spawn_space_coin_pick(c, st, cx, cy, SPACE_PLANET_HOOK_GUIDE_RED_CHANCE);
+        // Intra-planet hook-to-hook guide lines are intentionally omitted; the
+        // straight segments visually cut through planet centers.
+
+        if let Some(prev_id) = &prev_planet_id {
+            if let Some(prev) = c.get_game_object(prev_id) {
+                let pa = (prev.position.0 + prev.size.0 * 0.5, prev.position.1 + prev.size.1 * 0.5);
+                let pb = (x, y);
+                for i in 0..SPACE_PLANET_LINK_COINS {
+                    let denom = (SPACE_PLANET_LINK_COINS - 1).max(1) as f32;
+                    let t01 = i as f32 / denom;
+                    let t = SPACE_PLANET_LINK_T_MIN
+                        + (SPACE_PLANET_LINK_T_MAX - SPACE_PLANET_LINK_T_MIN) * t01;
+                    let cx = pa.0 + (pb.0 - pa.0) * t;
+                    let cy_mid = pa.1 + (pb.1 - pa.1) * t;
+                    let wave = ((t01 * std::f32::consts::PI).sin() - 0.5) * 46.0;
+                    spawn_space_coin_pick(c, st, cx, cy_mid + wave, SPACE_PLANET_LINK_RED_CHANCE);
+                }
             }
         }
 
@@ -1137,31 +1476,35 @@ fn spawn_space_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && s.space_coin_rightmost < s.px + GEN_AHEAD
     {
         let gap = lcg_range(&mut s.seed, SPACE_COIN_GAP_MIN, SPACE_COIN_GAP_MAX);
-        let x   = s.space_coin_rightmost + gap;
-        // Place coins near existing planets or at random space y
-        let y = lcg_range(&mut s.seed, SPACE_PLANET_Y_MAX * 0.95, SPACE_PLANET_Y_MAX * 0.10);
-        let Some(id) = s.space_coin_free.pop() else { break; };
-        s.space_coin_live.push(id.clone());
-        s.space_coin_rightmost = x;
+        let x_start = s.space_coin_rightmost + gap;
+        let y_base = lcg_range(&mut s.seed, SPACE_COIN_FORMATION_Y_MIN, SPACE_COIN_FORMATION_Y_MAX);
+        let mut ids: Vec<String> = Vec::new();
+        for _ in 0..SPACE_COIN_FORMATION_COUNT {
+            let Some(id) = s.space_coin_free.pop() else { break; };
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            break;
+        }
+        let x_end = x_start + SPACE_COIN_FORMATION_SPACING * (ids.len().saturating_sub(1) as f32);
+        s.space_coin_rightmost = x_end;
         spawned += 1;
         drop(s);
 
-        if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x - SPACE_COIN_R, y - SPACE_COIN_R);
-            obj.size     = (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0);
-            obj.visible  = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0), 0.0),
-                image: space_coin_img_cached(SPACE_COIN_R as u32),
-                color: None,
-            });
-            obj.set_glow(GlowConfig {
-                color: Color(C_SPACE_COIN.0, C_SPACE_COIN.1, 60, 140),
-                width: 14.0,
-            });
+        for (i, id) in ids.iter().enumerate() {
+            let x = x_start + i as f32 * SPACE_COIN_FORMATION_SPACING;
+            let wave = (i as f32 / (SPACE_COIN_FORMATION_COUNT.max(2) - 1) as f32) * std::f32::consts::PI;
+            let y = y_base + wave.sin() * SPACE_COIN_FORMATION_ARC_RISE;
+            if let Some(obj) = c.get_game_object_mut(id) {
+                obj.position = (x - SPACE_COIN_R, y - SPACE_COIN_R);
+                obj.size     = (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0);
+                obj.visible  = true;
+                reset_coin_anim_frame(obj, 0);
+            }
         }
 
         s = st.lock().unwrap();
+        s.space_coin_live.extend(ids.into_iter());
     }
 }
 
@@ -1191,12 +1534,17 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         drop(s);
 
         // Use gravity well ring visual (semi-transparent, visible but subtle)
-        let visual_r = radius * 3.0; // display rings at 3× gravity radius
+        let visual_r = blackhole_visual_r(radius);
         let d = visual_r * 2.0;
         if let Some(obj) = c.get_game_object_mut(&id) {
             obj.position      = (x - visual_r, y - visual_r);
             obj.size          = (d, d);
-            obj.planet_radius = Some(radius); // starts active
+            // Include black holes in the player's gravity_target="space_planet"
+            // filter; radius is the gravity-core radius (visual ring is 3x radius).
+            obj.planet_radius = Some(blackhole_influence_r(radius));
+            if !obj.tags.iter().any(|t| t == "space_planet") {
+                obj.tags.push("space_planet".to_string());
+            }
             obj.visible       = true;
             obj.set_image(Image {
                 shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
@@ -1226,11 +1574,7 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.position = (hx - HOOK_R, hy - HOOK_R);
                     obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
                     obj.visible  = true;
-                    obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                        image: asteroid_hook_image_cached(),
-                        color: None,
-                    });
+                    obj.set_image(hook_asteroid_img_for_id(hook_id, AsteroidHookState::Base));
                 }
                 s = st.lock().unwrap();
             }
@@ -1245,8 +1589,12 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     let mut s = st.lock().unwrap();
     let mut toggle_ids: Vec<(String, bool)> = Vec::new();
+    let marker_ids: Vec<String> = s.space_bh_teleport_fx.iter().map(|(id, _, _)| id.clone()).collect();
 
     for (id, remaining, active) in s.space_gwell_timers.iter_mut() {
+        if marker_ids.iter().any(|mid| mid == id) {
+            continue;
+        }
         if *remaining > 0 { *remaining -= 1; }
         if *remaining == 0 {
             *active = !*active;
@@ -1256,14 +1604,20 @@ fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     }
 
     let timers = s.space_gwell_timers.clone();
+    let bh_data = s.space_blackhole_data.clone();
     drop(s);
 
     for (id, now_active) in &toggle_ids {
         if let Some(obj) = c.get_game_object_mut(id) {
             let visual_r = obj.size.0 * 0.5;
             let d = visual_r * 2.0;
+            let gravity_r = bh_data
+                .iter()
+                .find(|(bid, _, _)| bid == id)
+                .map(|(_, r, _)| *r)
+                .unwrap_or(SPACE_BLACKHOLE_RADIUS_MIN);
             if *now_active {
-                obj.planet_radius = Some(obj.planet_radius.unwrap_or(SPACE_BLACKHOLE_RADIUS_MIN));
+                obj.planet_radius = Some(blackhole_influence_r(gravity_r));
                 obj.set_image(Image {
                     shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
                     image: gwell_ring_cached(visual_r, C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, GWELL_RING_COUNT, 200.0),
@@ -1284,7 +1638,7 @@ fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 
     // Pulse active wells
     for (id, _, active) in &timers {
-        if !active { continue; }
+        if !active || marker_ids.iter().any(|mid| mid == id) { continue; }
         if let Some(obj) = c.get_game_object_mut(id) {
             let t = frame as f32 * GWELL_PULSE_SPEED;
             let pulse = GWELL_PULSE_MIN + (1.0 - GWELL_PULSE_MIN) * ((t.sin() + 1.0) * 0.5);
@@ -1293,6 +1647,342 @@ fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
                 width: 14.0 * pulse,
             });
         }
+    }
+}
+
+fn tick_space_blackhole_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (hooked, stasis, px, py, bh_data, timers, marker_ids) = {
+        let s = st.lock().unwrap();
+        (
+            s.hooked,
+            s.space_stasis_active,
+            s.px,
+            s.py,
+            s.space_blackhole_data.clone(),
+            s.space_gwell_timers.clone(),
+            s.space_bh_teleport_fx.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>(),
+        )
+    };
+
+    if !hooked && !stasis {
+        let mut trigger_id: Option<String> = None;
+        let mut trigger_core_r = SPACE_BLACKHOLE_RADIUS_MIN;
+        for (id, core_r, _strength) in &bh_data {
+            if marker_ids.iter().any(|mid| mid == id) {
+                continue;
+            }
+            let is_active = timers
+                .iter()
+                .find(|(tid, _, _)| tid == id)
+                .map(|(_, _, active)| *active)
+                .unwrap_or(false);
+            if !is_active {
+                continue;
+            }
+            let Some(obj) = c.get_game_object(id) else { continue; };
+            if !obj.visible {
+                continue;
+            }
+            let cx = obj.position.0 + obj.size.0 * 0.5;
+            let cy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = px - cx;
+            let dy = py - cy;
+            let core_hit_r = core_r * SPACE_BLACKHOLE_TELEPORT_CORE_FRAC;
+            if dx * dx + dy * dy <= core_hit_r * core_hit_r {
+                trigger_id = Some(id.clone());
+                trigger_core_r = *core_r;
+                break;
+            }
+        }
+
+        if let Some(hit_id) = trigger_id {
+            let (tx, ty, nvx, nvy, cam_x, cam_y) = {
+                let mut s = st.lock().unwrap();
+                let kill_y = solar_kill_y(&s);
+                let y_min = kill_y + SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_SUN;
+                let y_max = SPACE_RETURN_Y - SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_RETURN;
+                let y_dir = if lcg(&mut s.seed) < 0.5 { -1.0 } else { 1.0 };
+                let y_offset = lcg_range(
+                    &mut s.seed,
+                    SPACE_BLACKHOLE_TELEPORT_Y_OFFSET_MIN,
+                    SPACE_BLACKHOLE_TELEPORT_Y_OFFSET_MAX,
+                );
+                let safe_y = (s.py + y_dir * y_offset).clamp(y_min, y_max);
+
+                let mut x_dir = if s.vx >= 0.0 { 1.0 } else { -1.0 };
+                if lcg(&mut s.seed) < 0.33 {
+                    x_dir *= -1.0;
+                }
+                let mut tx = s.px + x_dir * lcg_range(
+                    &mut s.seed,
+                    SPACE_BLACKHOLE_TELEPORT_X_OFFSET_MIN,
+                    SPACE_BLACKHOLE_TELEPORT_X_OFFSET_MAX,
+                );
+                let min_dx = VW * 0.15;
+                if (tx - s.px).abs() < min_dx {
+                    tx = s.px + x_dir * min_dx;
+                }
+
+                let visible_w = VW;
+                let visible_h = VH;
+                let cam_x = tx - visible_w * 0.5;
+                let cam_y = safe_y - visible_h * 0.5 - SPACE_CAM_Y_LEAD;
+
+                s.px = tx;
+                s.py = safe_y;
+                s.vx *= 0.72;
+                s.vy *= 0.72;
+                s.space_cam_y = cam_y;
+                s.space_orbit_locked_planet.clear();
+                s.space_orbit_speed = 0.0;
+                for (id, remaining, active) in &mut s.space_gwell_timers {
+                    if id == &hit_id {
+                        *active = false;
+                        *remaining = GWELL_OFF_TICKS;
+                    }
+                }
+                if !s.space_bh_teleport_fx.iter().any(|(id, _, _)| id == &hit_id) {
+                    s.space_bh_teleport_fx.push((hit_id.clone(), SPACE_BLACKHOLE_TELEPORT_BLUE_TICKS, 0));
+                }
+                let mut out_vx = s.vx;
+                let mut out_vy = s.vy;
+                let speed = (out_vx * out_vx + out_vy * out_vy).sqrt().clamp(7.5, 18.0);
+                let mut best: Option<(f32, f32, f32)> = None;
+                for pid in &s.space_planet_live {
+                    let Some(p) = c.get_game_object(pid) else { continue; };
+                    if !p.visible {
+                        continue;
+                    }
+                    let pcx = p.position.0 + p.size.0 * 0.5;
+                    let pcy = p.position.1 + p.size.1 * 0.5;
+                    let dx = pcx - s.px;
+                    let dy = pcy - s.py;
+                    let d2 = dx * dx + dy * dy;
+                    match best {
+                        Some((bd2, _, _)) if d2 >= bd2 => {}
+                        _ => best = Some((d2, dx, dy)),
+                    }
+                }
+                if let Some((_d2, dx, dy)) = best {
+                    let mag = (dx * dx + dy * dy).sqrt().max(0.001);
+                    out_vx = dx / mag * speed;
+                    out_vy = dy / mag * speed;
+                    s.vx = out_vx;
+                    s.vy = out_vy;
+                }
+                (s.px, s.py, out_vx, out_vy, cam_x, cam_y)
+            };
+
+            let visual_r = blackhole_visual_r(trigger_core_r);
+            let d = visual_r * 2.0;
+            if let Some(obj) = c.get_game_object_mut(&hit_id) {
+                obj.position = (tx - visual_r, ty - visual_r);
+                obj.size = (d, d);
+                obj.planet_radius = None;
+                obj.visible = true;
+                obj.set_image(Image {
+                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                    image: gwell_ring_cached(visual_r, C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, GWELL_RING_COUNT, 220.0),
+                    color: None,
+                });
+                obj.set_glow(GlowConfig {
+                    color: Color(C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, 210),
+                    width: 16.0,
+                });
+            }
+            if let Some(player) = c.get_game_object_mut("player") {
+                player.position = (tx - PLAYER_R, ty - PLAYER_R);
+                player.momentum = (nvx, nvy);
+                player.visible = true;
+            }
+            if let Some(cam) = c.camera_mut() {
+                cam.position.0 = cam_x;
+                cam.position.1 = cam_y;
+                cam.flash_with(
+                    Color(C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, 120),
+                    0.35,
+                    FlashMode::Pulse,
+                    FlashEase::Sharp,
+                    0.95,
+                    0.0,
+                );
+            }
+        }
+    }
+
+    let (to_dormant, to_clear) = {
+        let mut s = st.lock().unwrap();
+        let mut dormant: Vec<String> = Vec::new();
+        let mut clear: Vec<String> = Vec::new();
+        for (id, ticks, phase) in &mut s.space_bh_teleport_fx {
+            if *ticks > 0 {
+                *ticks -= 1;
+            }
+            if *ticks == 0 {
+                if *phase == 0 {
+                    *phase = 1;
+                    *ticks = SPACE_BLACKHOLE_TELEPORT_DORMANT_TICKS;
+                    dormant.push(id.clone());
+                } else {
+                    clear.push(id.clone());
+                }
+            }
+        }
+        if !clear.is_empty() {
+            s.space_bh_teleport_fx.retain(|(id, _, _)| !clear.contains(id));
+            s.space_blackhole_live.retain(|id| !clear.contains(id));
+            s.space_blackhole_data.retain(|(id, _, _)| !clear.contains(id));
+            s.space_gwell_timers.retain(|(id, _, _)| !clear.contains(id));
+            for id in &clear {
+                s.space_blackhole_free.push(id.clone());
+            }
+        }
+        (dormant, clear)
+    };
+
+    for id in &to_dormant {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            let visual_r = obj.size.0 * 0.5;
+            let d = visual_r * 2.0;
+            obj.planet_radius = None;
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                image: gwell_ring_cached(visual_r, C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, GWELL_RING_COUNT, 90.0),
+                color: None,
+            });
+            obj.set_glow(GlowConfig {
+                color: Color(C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, 90),
+                width: 8.0,
+            });
+        }
+    }
+
+    for id in &to_clear {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = false;
+            obj.planet_radius = None;
+            obj.position = (-12000.0, -12000.0);
+        }
+    }
+}
+
+fn tick_space_left_boundary_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let cam_left = c.camera().map(|cam| cam.position.0).unwrap_or(f32::NEG_INFINITY);
+    let (hooked, stasis, px, entry_px) = {
+        let s = st.lock().unwrap();
+        (s.hooked, s.space_stasis_active, s.px, s.space_entry_px)
+    };
+    if hooked || stasis {
+        return;
+    }
+
+    let left_limit = entry_px - SPACE_LEFT_BOUNDARY_MARGIN;
+    let fully_off_left = px + PLAYER_R < cam_left;
+    if px >= left_limit || !fully_off_left {
+        return;
+    }
+
+    let (tx, ty, nvx, nvy, cam_x, cam_y, marker_spawn) = {
+        let mut s = st.lock().unwrap();
+        let kill_y = solar_kill_y(&s);
+        let y_min = kill_y + SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_SUN;
+        let y_max = SPACE_RETURN_Y - SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_RETURN;
+
+        let tx = entry_px + lcg_range(&mut s.seed, SPACE_LEFT_TELEPORT_X_MIN, SPACE_LEFT_TELEPORT_X_MAX);
+        let safe_y = if y_max > y_min {
+            lcg_range(&mut s.seed, y_min, y_max)
+        } else {
+            (y_min + y_max) * 0.5
+        };
+
+        s.px = tx;
+        s.py = safe_y;
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+
+        let mut out_vx = s.vx;
+        let mut out_vy = s.vy;
+        let speed = (out_vx * out_vx + out_vy * out_vy).sqrt().clamp(8.0, 18.0);
+        let mut best: Option<(f32, f32, f32)> = None;
+        for pid in &s.space_planet_live {
+            let Some(p) = c.get_game_object(pid) else { continue; };
+            if !p.visible {
+                continue;
+            }
+            let pcx = p.position.0 + p.size.0 * 0.5;
+            let pcy = p.position.1 + p.size.1 * 0.5;
+            let dx = pcx - s.px;
+            let dy = pcy - s.py;
+            let d2 = dx * dx + dy * dy;
+            match best {
+                Some((bd2, _, _)) if d2 >= bd2 => {}
+                _ => best = Some((d2, dx, dy)),
+            }
+        }
+        if let Some((_d2, dx, dy)) = best {
+            let mag = (dx * dx + dy * dy).sqrt().max(0.001);
+            out_vx = dx / mag * speed;
+            out_vy = dy / mag * speed;
+            s.vx = out_vx;
+            s.vy = out_vy;
+        }
+
+        let visible_w = VW;
+        let visible_h = VH;
+        let cam_x = tx - visible_w * 0.5;
+        let cam_y = safe_y - visible_h * 0.5 - SPACE_CAM_Y_LEAD;
+        s.space_cam_y = cam_y;
+
+        let marker_spawn = if let Some(mid) = s.space_blackhole_free.pop() {
+            let core_r = lcg_range(&mut s.seed, SPACE_BLACKHOLE_RADIUS_MIN, SPACE_BLACKHOLE_RADIUS_MAX);
+            s.space_blackhole_live.push(mid.clone());
+            s.space_blackhole_data.push((mid.clone(), core_r, SPACE_BLACKHOLE_GRAV_STRENGTH));
+            s.space_gwell_timers.push((mid.clone(), SPACE_BLACKHOLE_TELEPORT_DORMANT_TICKS, false));
+            s.space_bh_teleport_fx.push((mid.clone(), SPACE_BLACKHOLE_TELEPORT_BLUE_TICKS, 0));
+            Some((mid, core_r))
+        } else {
+            None
+        };
+
+        (s.px, s.py, out_vx, out_vy, cam_x, cam_y, marker_spawn)
+    };
+
+    if let Some((marker_id, core_r)) = marker_spawn {
+        let visual_r = blackhole_visual_r(core_r);
+        let d = visual_r * 2.0;
+        if let Some(obj) = c.get_game_object_mut(&marker_id) {
+            obj.position = (tx - visual_r, ty - visual_r);
+            obj.size = (d, d);
+            obj.planet_radius = None;
+            obj.visible = true;
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                image: gwell_ring_cached(visual_r, C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, GWELL_RING_COUNT, 220.0),
+                color: None,
+            });
+            obj.set_glow(GlowConfig {
+                color: Color(C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, 210),
+                width: 16.0,
+            });
+        }
+    }
+
+    if let Some(player) = c.get_game_object_mut("player") {
+        player.position = (tx - PLAYER_R, ty - PLAYER_R);
+        player.momentum = (nvx, nvy);
+        player.visible = true;
+    }
+    if let Some(cam) = c.camera_mut() {
+        cam.position.0 = cam_x;
+        cam.position.1 = cam_y;
+        cam.flash_with(
+            Color(140, 210, 255, 120),
+            0.30,
+            FlashMode::Pulse,
+            FlashEase::Sharp,
+            0.92,
+            0.0,
+        );
     }
 }
 
@@ -1354,23 +2044,34 @@ fn spawn_space_red_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let roll = lcg(&mut s.seed);
     if roll > 0.004 { return; } // ~0.4% per tick = one every ~25 sec at 60fps
 
-    let Some(id) = s.space_red_coin_free.pop() else { return; };
+    let kind = if lcg(&mut s.seed) < 0.35 {
+        SPACE_COIN_KIND_CAT_RED
+    } else {
+        SPACE_COIN_KIND_CAT_BLUE
+    };
+    let picked = if kind == SPACE_COIN_KIND_CAT_RED {
+        s.space_red_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_RED))
+    } else {
+        s.space_blue_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_BLUE))
+    }
+    .or_else(|| s.space_blue_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_BLUE)))
+    .or_else(|| s.space_red_coin_free.pop().map(|id| (id, SPACE_COIN_KIND_CAT_RED)));
+    let Some((id, picked_kind)) = picked else { return; };
 
     let x = s.px + GEN_AHEAD * (0.6 + lcg(&mut s.seed) * 0.4);
     let y = lcg_range(&mut s.seed, SPACE_PLANET_Y_MIN, SPACE_PLANET_Y_MAX);
-    s.space_red_coin_live.push(id.clone());
+    if picked_kind == SPACE_COIN_KIND_CAT_RED {
+        s.space_red_coin_live.push(id.clone());
+    } else {
+        s.space_blue_coin_live.push(id.clone());
+    }
     drop(s);
 
     if let Some(obj) = c.get_game_object_mut(&id) {
         obj.position = (x - SPACE_RED_COIN_R, y - SPACE_RED_COIN_R);
         obj.size     = (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
         obj.visible  = true;
-        obj.set_image(Image {
-            shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
-            image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
-            color: None,
-        });
-        obj.set_glow(GlowConfig { color: Color(255, 60, 20, 160), width: 18.0 });
+        reset_coin_anim_frame(obj, 0);
     }
 }
 
@@ -1380,6 +2081,7 @@ fn tick_space_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     cull_space_hooks(c, st);
     cull_space_planets(c, st);
     cull_space_coins(c, st);
+    cull_space_blue_coins(c, st);
     cull_space_red_coins(c, st);
     cull_space_blackholes(c, st);
     cull_space_asteroids(c, st);
@@ -1463,6 +2165,7 @@ fn cull_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.space_blackhole_live.retain(|n| !to_remove.contains(n));
     s.space_blackhole_data.retain(|(n, _, _)| !to_remove.contains(n));
     s.space_gwell_timers.retain(|(id, _, _)| !to_remove.contains(id));
+    s.space_bh_teleport_fx.retain(|(id, _, _)| !to_remove.contains(id));
     for name in to_remove { s.space_blackhole_free.push(name); }
 }
 
@@ -1482,6 +2185,24 @@ fn cull_space_red_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     s.space_red_coin_live.retain(|n| !to_remove.contains(n));
     for name in to_remove { s.space_red_coin_free.push(name); }
+}
+
+fn cull_space_blue_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let cutoff = s.px - VW * 1.5;
+    let to_remove: Vec<String> = s.space_blue_coin_live.iter()
+        .filter(|n| c.get_game_object(n)
+            .map(|o| o.position.0 + SPACE_RED_COIN_R * 2.0 < cutoff)
+            .unwrap_or(true))
+        .cloned().collect();
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible   = false;
+            obj.position  = (-9500.0, -9500.0);
+        }
+    }
+    s.space_blue_coin_live.retain(|n| !to_remove.contains(n));
+    for name in to_remove { s.space_blue_coin_free.push(name); }
 }
 
 fn cull_space_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -1541,11 +2262,18 @@ fn cull_all_space_objects(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     s.space_blackhole_data.clear();
     s.space_gwell_timers.clear();
+    s.space_bh_teleport_fx.clear();
 
     let red_coins: Vec<String> = s.space_red_coin_live.drain(..).collect();
     for n in &red_coins {
         if let Some(obj) = c.get_game_object_mut(n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
         s.space_red_coin_free.push(n.clone());
+    }
+
+    let blue_coins: Vec<String> = s.space_blue_coin_live.drain(..).collect();
+    for n in &blue_coins {
+        if let Some(obj) = c.get_game_object_mut(n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
+        s.space_blue_coin_free.push(n.clone());
     }
 
     let asteroids: Vec<String> = s.space_asteroid_live.drain(..).collect();
@@ -1560,6 +2288,8 @@ fn cull_all_space_objects(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Return spent coins to free pool (can respawn on next space visit)
     let spent: Vec<String> = s.space_coin_spent.drain(..).collect();
     for n in spent { s.space_coin_free.push(n); }
+    let spent_blue: Vec<String> = s.space_blue_coin_spent.drain(..).collect();
+    for n in spent_blue { s.space_blue_coin_free.push(n); }
     let spent_red: Vec<String> = s.space_red_coin_spent.drain(..).collect();
     for n in spent_red { s.space_red_coin_free.push(n); }
 }
@@ -1586,7 +2316,11 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
     for name in &collected {
-        s.score = s.score.saturating_add(SPACE_COIN_SCORE * score_mult);
+        let add = c
+            .get_game_object(name)
+            .map(score_for_space_coin_obj)
+            .unwrap_or(SPACE_CATCOIN_SCORE);
+        s.score = s.score.saturating_add(add * score_mult);
         s.space_coin_live.retain(|n| n != name);
         s.space_coin_spent.push(name.clone()); // won't respawn until next space entry
     }
@@ -1614,6 +2348,32 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let mut s = st.lock().unwrap();
         let collect_r = PLAYER_R + SPACE_RED_COIN_R + 10.0;
+
+        let blue_live = s.space_blue_coin_live.clone();
+        let mut blue_collected: Vec<String> = Vec::new();
+        for name in &blue_live {
+            if let Some(obj) = c.get_game_object(name) {
+                let cx = obj.position.0 + SPACE_RED_COIN_R;
+                let cy = obj.position.1 + SPACE_RED_COIN_R;
+                let dx = s.px - cx;
+                let dy = s.py - cy;
+                if dx * dx + dy * dy < collect_r * collect_r {
+                    blue_collected.push(name.clone());
+                }
+            }
+        }
+
+        let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+        for name in &blue_collected {
+            let add = c
+                .get_game_object(name)
+                .map(score_for_space_coin_obj)
+                .unwrap_or(SPACE_CATCOIN_BLUE_SCORE);
+            s.score = s.score.saturating_add(add * score_mult);
+            s.space_blue_coin_live.retain(|n| n != name);
+            s.space_blue_coin_spent.push(name.clone());
+        }
+
         let live = s.space_red_coin_live.clone();
         let mut red_collected: Vec<String> = Vec::new();
         for name in &live {
@@ -1627,13 +2387,27 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
             }
         }
-        let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
         for name in &red_collected {
-            s.score = s.score.saturating_add(SPACE_RED_COIN_SCORE * score_mult);
+            let add = c
+                .get_game_object(name)
+                .map(score_for_space_coin_obj)
+                .unwrap_or(SPACE_CATCOIN_BLUE_SCORE);
+            s.score = s.score.saturating_add(add * score_mult);
             s.space_red_coin_live.retain(|n| n != name);
             s.space_red_coin_spent.push(name.clone()); // won't respawn until next space entry
         }
         drop(s);
+
+        for name in &blue_collected {
+            if let Some(obj) = c.get_game_object_mut(name) {
+                obj.visible = false;
+                obj.position = (-9500.0, -9500.0);
+            }
+            if let Some(cam) = c.camera_mut() {
+                cam.flash_with(Color(90, 180, 255, 100), 0.3, FlashMode::Pulse, FlashEase::Sharp, 0.85, 0.0);
+            }
+        }
+
         for name in &red_collected {
             if let Some(obj) = c.get_game_object_mut(name) {
                 obj.visible = false;
@@ -1643,7 +2417,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 cam.flash_with(Color(255, 80, 20, 100), 0.3, FlashMode::Pulse, FlashEase::Sharp, 0.9, 0.0);
             }
         }
-        if !red_collected.is_empty() {
+        if !blue_collected.is_empty() || !red_collected.is_empty() {
             c.play_sound_with(
                 crate::constants::ASSET_COIN_SFX_2,
                 SoundOptions::new().volume(0.45),

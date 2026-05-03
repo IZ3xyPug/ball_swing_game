@@ -6,6 +6,18 @@ use crate::hud::*;
 use crate::images::*;
 use crate::objects::*;
 
+const LAYER_SOLAR_CEILING: i32 = 12;
+const LAYER_SPACE_BLACKHOLE: i32 = 18;
+const LAYER_SPACE_PLANET: i32 = 19;
+const LAYER_SPACE_ASTEROID: i32 = 20;
+const LAYER_SPACE_HOOK: i32 = 21;
+const LAYER_SPACE_COIN: i32 = 22;
+const LAYER_SPACE_RED_COIN: i32 = 23;
+const LAYER_ROPE: i32 = 20;
+const LAYER_PLAYER: i32 = 42;
+const LAYER_AIRSHIELD: i32 = 43;
+const LAYER_ENERGY_HOOK_REF: i32 = 150;
+
 /// All pools and starter hook names created during scene construction.
 pub struct PoolSets {
     pub starter_names: Vec<String>,
@@ -35,13 +47,14 @@ pub struct PoolSets {
     pub space_planet_free: Vec<String>,
     pub space_hook_free:   Vec<String>,
     pub space_coin_free:   Vec<String>,
+    pub space_blue_coin_free: Vec<String>,
     pub space_bh_free:     Vec<String>,
     pub space_asteroid_free: Vec<String>,
     pub space_red_coin_free: Vec<String>,
 }
 
 fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
-    let bytes = include_bytes!("../../../assets/tech_bounce.gif");
+    let bytes = include_bytes!("../../../assets/techbouncer.gif");
     let cursor = std::io::Cursor::new(bytes.as_slice());
     let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) else {
         return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
@@ -55,22 +68,87 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
 
     let out_w = PAD_W.max(1.0).round() as u32;
     let out_h = PAD_H.max(1.0).round() as u32;
-    let mut out: Vec<Image> = Vec::with_capacity(frames.len());
+    let mut composed_frames: Vec<image::RgbaImage> = Vec::with_capacity(frames.len());
 
     for frame in frames {
         let left = frame.left();
         let top = frame.top();
         let patch = frame.into_buffer();
         image::imageops::overlay(&mut composed, &patch, left as i64, top as i64);
-        let stretched = image::imageops::resize(
-            &composed,
-            out_w,
-            out_h,
+        composed_frames.push(composed.clone());
+    }
+
+    let mut min_x = gif_w;
+    let mut min_y = gif_h;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+
+    for frame in &composed_frames {
+        for y in 0..frame.height() {
+            for x in 0..frame.width() {
+                if frame.get_pixel(x, y).0[3] > 0 {
+                    found = true;
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+    }
+
+    let crop_bounds = if found {
+        let pad = 2u32;
+        let crop_x = min_x.saturating_sub(pad);
+        let crop_y = min_y.saturating_sub(pad);
+        let crop_right = (max_x + pad).min(gif_w.saturating_sub(1));
+        let crop_bottom = (max_y + pad).min(gif_h.saturating_sub(1));
+        (
+            crop_x,
+            crop_y,
+            crop_right.saturating_sub(crop_x).saturating_add(1),
+            crop_bottom.saturating_sub(crop_y).saturating_add(1),
+        )
+    } else {
+        (0, 0, gif_w.max(1), gif_h.max(1))
+    };
+
+    // Preserve gameplay footprint while keeping art scale proportional
+    // to the source frame occupancy so the visible pad does not overfill PAD_W/PAD_H.
+    let draw_w = ((out_w as f32) * (crop_bounds.2 as f32 / gif_w.max(1) as f32))
+        .round()
+        .clamp(1.0, out_w as f32) as u32;
+    // Keep approximately the same total width while restoring vertical proportion
+    // from the cropped source aspect ratio so the pad is not overly squashed.
+    let draw_h = ((draw_w as f32) * (crop_bounds.3 as f32 / crop_bounds.2.max(1) as f32))
+        .round()
+        .clamp(1.0, out_h as f32) as u32;
+    let offset_x = (out_w.saturating_sub(draw_w) / 2) as i64;
+    // Top-anchor so pad collisions begin at the first visible top pixels.
+    let offset_y = 0i64;
+
+    let mut out: Vec<Image> = Vec::with_capacity(composed_frames.len());
+    for frame in composed_frames {
+        let cropped = image::imageops::crop_imm(
+            &frame,
+            crop_bounds.0,
+            crop_bounds.1,
+            crop_bounds.2,
+            crop_bounds.3,
+        )
+        .to_image();
+        let scaled = image::imageops::resize(
+            &cropped,
+            draw_w,
+            draw_h,
             image::imageops::FilterType::Nearest,
         );
+        let mut framed = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([0, 0, 0, 0]));
+        image::imageops::overlay(&mut framed, &scaled, offset_x, offset_y);
         out.push(Image {
             shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
-            image: stretched.into(),
+            image: framed.into(),
             color: None,
         });
     }
@@ -144,6 +222,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         asteroid.set_animation(anim);
     }
     asteroid.ignore_zoom = true;
+    asteroid.layer = LAYER_ENERGY_HOOK_REF;
 
     // ── Player — engine-native gravity ───────────────────────────────────
     let mut player = GameObject::new_rect(
@@ -167,6 +246,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     player.collision_mode  = CollisionMode::solid_circle(PLAYER_R);
     player.collision_layer = PLAYER_COLLISION_LAYER;
     player.collision_mask  = ASTEROID_COLLISION_LAYER;
+    player.layer = LAYER_PLAYER;
 
     // Velocity-facing air shield. The gif is mirrored on X once at load time,
     // then rotated each post-physics tick based on player net velocity.
@@ -191,7 +271,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         airshield.set_animation(anim);
     }
     airshield.visible = false;
-    airshield.layer = 18;
+    airshield.layer = LAYER_AIRSHIELD;
 
     // Rope visual is driven each tick in physics.rs (dynamic width-matched beam).
     let rope_beam_h = ROPE_THICKNESS;
@@ -205,6 +285,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (4.0, rope_beam_h), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     rope.visible = false;
+    rope.layer = LAYER_ROPE;
 
     // Danger floor
     let mut floor = GameObject::new_rect(
@@ -446,6 +527,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         } else {
             make_hook(ctx, &id, -2000.0, -2000.0)
         };
+        obj.layer = LAYER_SPACE_HOOK;
         if i < starter_hooks.len() {
             starter_names.push(id.clone());
         } else {
@@ -644,6 +726,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         let mut obj = make_planet(ctx, &id, -5500.0, -5500.0,
             SPACE_PLANET_RADIUS_SM_MIN, SPACE_PLANET_RADIUS_SM_MIN * SPACE_PLANET_GRAV_R_MULT, 0);
         obj.visible = false;
+        obj.layer = LAYER_SPACE_PLANET;
         obj.planet_radius = None;
         space_planet_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -655,22 +738,70 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         let id = format!("space_hook_{i}");
         let mut obj = make_hook(ctx, &id, -5700.0, -5700.0);
         obj.visible = false;
+        obj.layer = LAYER_SPACE_HOOK;
         space_hook_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
 
     // ── Space coin pool ───────────────────────────────────────────────────
+    let space_cat_static = load_image_sized(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
+        SPACE_COIN_R * 2.0,
+        SPACE_COIN_R * 2.0,
+    );
+    let space_cat_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/catcoin.gif"),
+        (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0),
+        SPACE_COIN_ANIM_FPS,
+    ).ok();
+
     let mut space_coin_free: Vec<String> = Vec::new();
     for i in 0..SPACE_COIN_POOL_SIZE {
         let id = format!("space_coin_{i}");
         let mut obj = make_coin(ctx, &id, -5900.0, -5900.0);
-        obj.set_image(Image {
-            shape: ShapeType::Ellipse(0.0, (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0), 0.0),
-            image: space_coin_img_cached(SPACE_COIN_R as u32),
-            color: None,
-        });
+        obj.set_image(space_cat_static.clone());
+        if let Some(anim) = &space_cat_anim_template {
+            obj.set_animation(anim.clone());
+            if let Some(a) = obj.animated_sprite.as_mut() {
+                a.set_frame(0);
+            }
+        }
+        obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
+        obj.tags.push("space_catcoin".to_string());
         obj.visible = false;
+        obj.layer = LAYER_SPACE_COIN;
         space_coin_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Space blue-coin pool ─────────────────────────────────────────────
+    let space_cat_blue_static = load_image_sized(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
+        SPACE_RED_COIN_R * 2.0,
+        SPACE_RED_COIN_R * 2.0,
+    );
+    let space_cat_blue_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/catcoinblue.gif"),
+        (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0),
+        SPACE_COIN_ANIM_FPS,
+    ).ok();
+
+    let mut space_blue_coin_free: Vec<String> = Vec::new();
+    for i in 0..SPACE_BLUE_COIN_POOL_SIZE {
+        let id = format!("space_blue_coin_{i}");
+        let mut obj = make_coin(ctx, &id, -6450.0, -6450.0);
+        obj.set_image(space_cat_blue_static.clone());
+        if let Some(anim) = &space_cat_blue_anim_template {
+            obj.set_animation(anim.clone());
+            if let Some(a) = obj.animated_sprite.as_mut() {
+                a.set_frame(0);
+            }
+        }
+        obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
+        obj.tags.push("space_catcoin_blue".to_string());
+        obj.visible = false;
+        obj.layer = LAYER_SPACE_RED_COIN;
+        space_blue_coin_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
 
@@ -680,6 +811,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         let id = format!("space_bh_{i}");
         let mut obj = make_black_hole(ctx, &id, -6100.0, -6100.0, SPACE_BLACKHOLE_RADIUS_MIN);
         obj.visible = false;
+        obj.layer = LAYER_SPACE_BLACKHOLE;
         obj.planet_radius = None;
         space_bh_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -720,21 +852,38 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         obj.collision_layer = ASTEROID_COLLISION_LAYER;
         obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
         obj.visible = false;
+        obj.layer = LAYER_SPACE_ASTEROID;
         space_asteroid_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
 
     // ── Space red-coin pool ───────────────────────────────────────────────
+    let space_cat_red_static = load_image_sized(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinred.gif"),
+        SPACE_RED_COIN_R * 2.0,
+        SPACE_RED_COIN_R * 2.0,
+    );
+    let space_cat_red_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/catcoinred.gif"),
+        (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0),
+        SPACE_COIN_ANIM_FPS,
+    ).ok();
+
     let mut space_red_coin_free: Vec<String> = Vec::new();
     for i in 0..SPACE_RED_COIN_POOL_SIZE {
         let id = format!("space_red_coin_{i}");
         let mut obj = make_coin(ctx, &id, -6500.0, -6500.0);
-        obj.set_image(Image {
-            shape: ShapeType::Ellipse(0.0, (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0), 0.0),
-            image: red_coin_img_cached(SPACE_RED_COIN_R as u32),
-            color: None,
-        });
+        obj.set_image(space_cat_red_static.clone());
+        if let Some(anim) = &space_cat_red_anim_template {
+            obj.set_animation(anim.clone());
+            if let Some(a) = obj.animated_sprite.as_mut() {
+                a.set_frame(0);
+            }
+        }
+        obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
+        obj.tags.push("space_catcoin_red".to_string());
         obj.visible = false;
+        obj.layer = LAYER_SPACE_RED_COIN;
         space_red_coin_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
@@ -751,7 +900,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
         );
         solar_ceiling.visible     = false;
-        solar_ceiling.layer       = 120; // above world objects, below HUD overlays
+        solar_ceiling.layer       = LAYER_SOLAR_CEILING; // behind gameplay objects; still above background
         solar_ceiling.ignore_zoom = true; // screen-space: slides in from top as player approaches
         scene = scene.with_object("solar_ceiling", solar_ceiling);
     }
@@ -913,6 +1062,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_planet_free,
         space_hook_free,
         space_coin_free,
+        space_blue_coin_free,
         space_bh_free,
         space_asteroid_free,
         space_red_coin_free,

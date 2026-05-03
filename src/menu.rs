@@ -478,6 +478,7 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
                 let s = canvas.virtual_scale();
                 let last_distance = canvas.get_f32("last_distance");
                 let last_coins = canvas.get_i32("last_coins").max(0);
+                let died_to_oxygen = matches!(canvas.get_var("died_to_oxygen"), Some(Value::Bool(true)));
                 let dist_fill = (last_distance / 40000.0).clamp(0.0, 1.0);
 
                 if let Some(obj) = canvas.get_game_object_mut("go_dist_bar") {
@@ -489,7 +490,9 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
                 }
 
                 if let Some(obj) = canvas.get_game_object_mut("go_title_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("YOU FELL", &font, 58.0 * s, Color(0, 0, 0, 255), 1300.0 * s)));
+                    let title = if died_to_oxygen { "YOU RAN OUT OF OXYGEN" } else { "YOU FELL" };
+                    let title_size = if died_to_oxygen { 50.0 * s } else { 58.0 * s };
+                    obj.set_drawable(Box::new(ui_text_spec(title, &font, title_size, Color(0, 0, 0, 255), 1300.0 * s)));
                 }
 
                 if let Some(obj) = canvas.get_game_object_mut("go_retry_text") {
@@ -503,6 +506,10 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
                 if let Some(obj) = canvas.get_game_object_mut("go_stats_text") {
                     let stats_line = format!("DISTANCE  {:05}\nCOINS  {:03}", last_distance as i32, last_coins);
                     obj.set_drawable(Box::new(ui_text_spec(&stats_line, &font, 50.0 * s, Color(255, 255, 255, 255), 1000.0 * s)));
+                }
+
+                if died_to_oxygen {
+                    canvas.set_var("died_to_oxygen", false);
                 }
             }
 

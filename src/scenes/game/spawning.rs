@@ -151,7 +151,15 @@ fn hook_overlaps_hazards(c: &Canvas, s: &State, hx: f32, hy: f32) -> bool {
 
     for pad_name in &s.pad_live {
         if let Some(pad) = c.get_game_object(pad_name) {
-            if circle_overlaps_aabb(hx, hy, r, pad.position.0, pad.position.1, PAD_W, PAD_H) {
+            if circle_overlaps_aabb(
+                hx,
+                hy,
+                r,
+                pad_collision_left(pad.position.0),
+                pad.position.1,
+                pad_collision_w(),
+                PAD_H,
+            ) {
                 return true;
             }
         }
@@ -427,6 +435,7 @@ fn spawn_pads(
             restore_rotation_momentum: 0.0,
         });
 
+        let flipped = s.gravity_dir < 0.0;
         let zone_idx = zone_index_for_distance(s.distance);
         let _ = zone_idx; // reserved for future zone-tinted pads
         let s_gravity_dir = s.gravity_dir;
@@ -438,10 +447,12 @@ fn spawn_pads(
             obj.position = (x, y + drop_offset); // start off-screen on the gravity-entry side
             obj.visible = false; // hidden until animation starts
             obj.animated_sprite = None;
-            obj.set_image(pad_img.clone());
+            obj.rotation = if flipped { 180.0 } else { 0.0 };
+            obj.set_image(tech_bounce_img.clone());
         }
         let thr_id = pad_thruster_id(&id);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
+            let thruster_embed = PAD_THRUSTER_HIDE_TOP + PAD_THRUSTER_RAISE_Y;
             thr.position.0 = x + (PAD_W - PAD_THRUSTER_W) * 0.5;
             thr.position.1 = (y + drop_offset) + PAD_H - PAD_THRUSTER_HIDE_TOP - PAD_THRUSTER_RAISE_Y;
             thr.visible = false;

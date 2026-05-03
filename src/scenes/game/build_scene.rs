@@ -134,6 +134,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_planet_free,
         space_hook_free,
         space_coin_free,
+        space_blue_coin_free,
         space_bh_free,
         space_asteroid_free,
         space_red_coin_free,
@@ -735,6 +736,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_coin_free:          space_coin_free.clone(),
                 space_coin_rightmost:     SPAWN_X,
 
+                space_blue_coin_live:   Vec::new(),
+                space_blue_coin_free:   space_blue_coin_free.clone(),
+
                 space_blackhole_live:     Vec::new(),
                 space_blackhole_free:     space_bh_free.clone(),
                 space_blackhole_rightmost: SPAWN_X,
@@ -754,8 +758,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_red_coin_free:    space_red_coin_free.clone(),
 
                 space_gwell_timers:     Vec::new(),
+                space_bh_teleport_fx:   Vec::new(),
+                space_orbit_locked_planet: String::new(),
+                space_orbit_speed:       0.0,
                 space_entry_px:         0.0,
                 space_coin_spent:       Vec::new(),
+                space_blue_coin_spent:  Vec::new(),
                 space_red_coin_spent:   Vec::new(),
                 solar_surface_ratio:    SOLAR_SURFACE_RATIO_DEFAULT,
                 solar_anim_loaded:      false,
@@ -905,6 +913,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             physics::prewarm_rope_fx_cache();
             // Pre-warm solar GIF decode so corona is ready before space approach.
             super::space_zone::prewarm_solar_decode(&state);
+            // Pre-warm catcoin GIF decode so first space coin spawn does not hitch.
+            super::space_zone::prewarm_space_coin_decode();
 
             // ── Pre-warm asteroid hook image cache (background thread) ───
             // Builds all 9 variants (3 buckets × 3 states) off the main thread
@@ -1684,11 +1694,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         }
                         if died_to_sun {
                             c.set_var("died_to_sun", false);
+                            c.set_var("died_to_oxygen", false);
                             c.load_scene("gameover_sun");
                         } else if died_to_oxygen {
                             c.set_var("died_to_oxygen", false);
                             c.load_scene("gameover_oxygen");
                         } else {
+                            if !died_to_oxygen {
+                                c.set_var("died_to_oxygen", false);
+                            }
                             c.load_scene("gameover");
                         }
                     }
