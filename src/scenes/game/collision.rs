@@ -172,7 +172,8 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for name in &s.pad_live {
         if let Some(obj) = c.get_game_object(name) {
             if !obj.visible { continue; }
-            let pad_left   = obj.position.0;
+            let pad_left   = pad_collision_left(obj.position.0);
+            let pad_w      = pad_collision_w();
             let pad_top    = obj.position.1;
             let pad_bottom = pad_top + PAD_H;
             let rounded_hit = circle_overlaps_rounded_rect(
@@ -181,7 +182,7 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 PLAYER_R,
                 pad_left,
                 pad_top,
-                PAD_W,
+                pad_w,
                 PAD_H,
                 pad_corner_radius(),
             );

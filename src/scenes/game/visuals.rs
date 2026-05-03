@@ -278,10 +278,13 @@ fn tick_pad_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 }
 
 fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let pad_ids = {
+    let (pad_ids, flipped) = {
         let s = st.lock().unwrap();
-        s.pad_live.clone()
+        (s.pad_live.clone(), s.gravity_dir < 0.0)
     };
+
+    let pad_rotation = if flipped { 180.0 } else { 0.0 };
+    let thruster_embed = PAD_THRUSTER_HIDE_TOP + PAD_THRUSTER_RAISE_Y;
 
     for pad_id in &pad_ids {
         let Some((px, py, vis, layer)) = c
@@ -291,10 +294,19 @@ fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             continue;
         };
 
+        if let Some(pad) = c.get_game_object_mut(pad_id) {
+            pad.rotation = pad_rotation;
+        }
+
         let thr_id = pad_thruster_id(pad_id);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
             thr.position.0 = px + (PAD_W - PAD_THRUSTER_W) * 0.5;
-            thr.position.1 = py + PAD_H - PAD_THRUSTER_HIDE_TOP - PAD_THRUSTER_RAISE_Y;
+            thr.position.1 = if flipped {
+                py - PAD_THRUSTER_H + thruster_embed
+            } else {
+                py + PAD_H - thruster_embed
+            };
+            thr.rotation = pad_rotation;
             thr.layer = layer - 1;
             thr.visible = vis;
         }

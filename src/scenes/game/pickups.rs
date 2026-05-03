@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::state::*;
+use super::helpers::pad_thruster_id;
 
 pub fn tick_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_coin_magnet(c, st);
@@ -18,6 +19,8 @@ pub fn tick_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Mirror all live obstacles around VH centre on gravity flip ──────────────
 
 fn flip_all_live_objects(c: &mut Canvas, s: &State) {
+    let flipped = s.gravity_dir < 0.0;
+    let pad_rotation = if flipped { 180.0 } else { 0.0 };
     // Mirror helper: new_y = VH - old_y - height
     // Hooks
     for name in &s.live_hooks {
@@ -29,6 +32,12 @@ fn flip_all_live_objects(c: &mut Canvas, s: &State) {
     for name in &s.pad_live {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.position.1 = VH - obj.position.1 - obj.size.1;
+            obj.rotation = pad_rotation;
+        }
+        let thr_id = pad_thruster_id(name);
+        if let Some(thr) = c.get_game_object_mut(&thr_id) {
+            thr.position.1 = VH - thr.position.1 - thr.size.1;
+            thr.rotation = pad_rotation;
         }
     }
     // Spinners

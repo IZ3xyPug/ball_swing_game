@@ -106,10 +106,23 @@ pub const PAD_POOL_SIZE:  usize = 32;
 pub const PAD_GAP_MIN:    f32 = 5000.0;
 pub const PAD_GAP_MAX:    f32 = 9000.0;
 
-// tech_bounce.gif displayed geometry: +50% width, with a taller pad profile so
-// the stretched gif reads clearly without vertical squish.
+// techbouncer.gif is decoded into this fixed gameplay footprint.
+// Art scaling changes should happen in the loader, not by changing pad geometry.
 pub const PAD_W:          f32 = 1162.5;
 pub const PAD_H:          f32 = 420.0;
+/// techbouncer.gif visual occupancy ratio inside the 256px source frame.
+/// Used to keep bounce collision width aligned to visible pad art.
+pub const PAD_COLLISION_WIDTH_FACTOR: f32 = 170.0 / 256.0;
+
+#[inline]
+pub fn pad_collision_w() -> f32 {
+    PAD_W * PAD_COLLISION_WIDTH_FACTOR
+}
+
+#[inline]
+pub fn pad_collision_left(pad_left: f32) -> f32 {
+    pad_left + (PAD_W - pad_collision_w()) * 0.5
+}
 
 /// How close (px) in X a pad must be to a hook before the Y floor is applied.
 pub const PAD_HOOK_NEAR_X:      f32 = 2200.0;
@@ -328,7 +341,7 @@ pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 // ── Asset paths ──────────────────────────────────────────────────────────────
 pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin.gif");
 pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
-pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/tech_bounce.gif");
+pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/techbouncer.gif");
 pub const TECH_BOUNCE_FPS: f32 = 12.0;
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
@@ -347,7 +360,8 @@ pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/asse
 pub const PAD_THRUSTER_FPS: f32 = 12.0;
 pub const PAD_THRUSTER_W: f32 = PAD_W * 0.24;
 pub const PAD_THRUSTER_H: f32 = PAD_H * 0.775;
-pub const PAD_THRUSTER_HIDE_TOP: f32 = 3.0;
+// Extra top embed so the thruster visually tucks into the pad body.
+pub const PAD_THRUSTER_HIDE_TOP: f32 = 56.0;
 pub const PAD_THRUSTER_RAISE_Y: f32 = PAD_THRUSTER_H * 0.30 + PLAYER_R + 20.0;
 
 // ── Generation — Gravity Wells ────────────────────────────────────────────────
@@ -446,6 +460,11 @@ pub const SPACE_ENTRY_Y:           f32 = -(VH * 1.35);
 pub const SPACE_SETTLE_Y:          f32 = -(VH * 2.1);  // ~-4536 at VH=2160
 /// Player py rising back above this (less negative) while in space triggers return.
 pub const SPACE_RETURN_Y:          f32 = -(VH * 0.05);
+/// If player drifts this far left of the space entry anchor, rescue-teleport.
+pub const SPACE_LEFT_BOUNDARY_MARGIN: f32 = VW * 0.95;
+/// Target X range (relative to entry anchor) for left-boundary rescue teleport.
+pub const SPACE_LEFT_TELEPORT_X_MIN: f32 = VW * 0.45;
+pub const SPACE_LEFT_TELEPORT_X_MAX: f32 = VW * 1.05;
 /// Global gravity scale while in space — effectively zero. Planet and
 /// black hole gravity wells supply all meaningful attraction in space.
 pub const SPACE_GRAVITY_SCALE:     f32 = 0.002;
@@ -468,7 +487,7 @@ pub const SPACE_ASTEROID_POOL_SIZE:  usize = 40;
 // Space object spawn budgets per tick
 pub const SPACE_PLANET_SPAWN_BUDGET:    usize = 2;
 pub const SPACE_HOOK_SPAWN_BUDGET:      usize = 8;  // one per Y-band per spawn tick
-pub const SPACE_COIN_SPAWN_BUDGET:      usize = 3;
+pub const SPACE_COIN_SPAWN_BUDGET:      usize = 0;
 pub const SPACE_BLACKHOLE_SPAWN_BUDGET: usize = 1;
 pub const SPACE_ASTEROID_SPAWN_BUDGET:  usize = 3;
 
@@ -510,18 +529,34 @@ pub const SPACE_HOOK_SUN_GAP_MIN:    f32 = 140.0;
 pub const SPACE_HOOK_SUN_GAP_MAX:    f32 = 260.0;
 
 // Space coin parameters
-pub const SPACE_COIN_GAP_MIN:  f32 = 580.0;
-pub const SPACE_COIN_GAP_MAX:  f32 = 1200.0;
+pub const SPACE_COIN_GAP_MIN:  f32 = 1400.0;
+pub const SPACE_COIN_GAP_MAX:  f32 = 2600.0;
 pub const SPACE_COIN_SCORE:    u32 = 1000;
-pub const SPACE_COIN_R:        f32 = 56.0;
+pub const SPACE_CATCOIN_SCORE:      u32 = SPACE_COIN_SCORE * 2;
+pub const SPACE_CATCOIN_BLUE_SCORE: u32 = SPACE_COIN_SCORE * 5;
+pub const SPACE_CATCOIN_RED_SCORE:  u32 = SPACE_COIN_SCORE * 25;
+pub const SPACE_CATCOIN_BLUE_CHANCE: f32 = 0.22;
+pub const SPACE_CATCOIN_RED_CHANCE:  f32 = 0.08;
+pub const SPACE_COIN_ANIM_FPS: f32 = 12.0;
+pub const SPACE_COIN_R:        f32 = 27.0;
+pub const SPACE_COIN_FORMATION_COUNT: usize = 4;
+pub const SPACE_COIN_FORMATION_SPACING: f32 = 210.0;
+pub const SPACE_COIN_FORMATION_ARC_RISE: f32 = 62.0;
+pub const SPACE_COIN_FORMATION_Y_MIN: f32 = -(VH * 3.6);
+pub const SPACE_COIN_FORMATION_Y_MAX: f32 = -(VH * 0.95);
 pub const SPACE_PLANET_HOOK_GUIDE_COINS: usize = 4;
 pub const SPACE_PLANET_HOOK_GUIDE_RED_CHANCE: f32 = 0.20;
 pub const SPACE_PLANET_HOOK_GUIDE_T_MIN: f32 = 0.20;
 pub const SPACE_PLANET_HOOK_GUIDE_T_MAX: f32 = 0.75;
-pub const SPACE_SUN_BONUS_CLUSTER_CHANCE: f32 = 0.012;
-pub const SPACE_SUN_BONUS_CLUSTER_COINS_MIN: usize = 4;
-pub const SPACE_SUN_BONUS_CLUSTER_COINS_MAX: usize = 8;
-pub const SPACE_SUN_BONUS_CLUSTER_SPACING: f32 = 105.0;
+pub const SPACE_PLANET_LINK_COINS: usize = 8;
+pub const SPACE_PLANET_LINK_RED_CHANCE: f32 = 0.16;
+pub const SPACE_PLANET_LINK_T_MIN: f32 = 0.18;
+pub const SPACE_PLANET_LINK_T_MAX: f32 = 0.82;
+pub const SPACE_SUN_BONUS_CLUSTER_CHANCE: f32 = 0.022;
+pub const SPACE_SUN_BONUS_CLUSTER_COINS_MIN: usize = 6;
+pub const SPACE_SUN_BONUS_CLUSTER_COINS_MAX: usize = 10;
+pub const SPACE_SUN_BONUS_CLUSTER_SPACING: f32 = 96.0;
+pub const SPACE_SUN_BONUS_CLUSTER_RING_R: f32 = 170.0;
 pub const SPACE_SUN_BONUS_RED_CHANCE: f32 = 0.18;
 
 // Black hole parameters
@@ -530,6 +565,17 @@ pub const SPACE_BLACKHOLE_GAP_MAX:       f32 = 9000.0;
 pub const SPACE_BLACKHOLE_RADIUS_MIN:    f32 = 100.0;
 pub const SPACE_BLACKHOLE_RADIUS_MAX:    f32 = 200.0;
 pub const SPACE_BLACKHOLE_GRAV_STRENGTH: f32 = 0.7;
+pub const SPACE_BLACKHOLE_VISUAL_RADIUS_MULT: f32 = 3.0;
+pub const SPACE_BLACKHOLE_INFLUENCE_RADIUS_MULT: f32 = 2.2;
+pub const SPACE_BLACKHOLE_TELEPORT_CORE_FRAC: f32 = 0.34;
+pub const SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_SUN: f32 = 520.0;
+pub const SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_RETURN: f32 = 680.0;
+pub const SPACE_BLACKHOLE_TELEPORT_X_OFFSET_MIN: f32 = VW * 0.18;
+pub const SPACE_BLACKHOLE_TELEPORT_X_OFFSET_MAX: f32 = VW * 0.45;
+pub const SPACE_BLACKHOLE_TELEPORT_Y_OFFSET_MIN: f32 = VH * 0.95;
+pub const SPACE_BLACKHOLE_TELEPORT_Y_OFFSET_MAX: f32 = VH * 2.2;
+pub const SPACE_BLACKHOLE_TELEPORT_BLUE_TICKS: u32 = 52;
+pub const SPACE_BLACKHOLE_TELEPORT_DORMANT_TICKS: u32 = 62;
 pub const SPACE_BLACKHOLE_Y_MIN:         f32 = -(VH * 2.8);
 pub const SPACE_BLACKHOLE_Y_MAX:         f32 = -(VH * 0.55);
 
@@ -574,6 +620,7 @@ pub const C_SPACE_COIN_HIGH: (u8,u8,u8) = (120, 255, 220);
 pub const C_SPACE_HOOK:  (u8,u8,u8) = (155, 115, 255);
 pub const C_SPACE_HOOK_ON: (u8,u8,u8) = (210, 185, 255);
 pub const C_BLACKHOLE:   (u8,u8,u8) = (18,  8,   26);
+pub const C_GWELL_TELEPORT: (u8,u8,u8) = (90, 170, 255);
 
 // Oxygen HUD bar
 pub const OXYGEN_BAR_W:  f32 = 700.0;
@@ -619,17 +666,18 @@ pub const ASSET_SOLAR_GIF: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/assets/corona_v5.gif");
 
 // Red (arc) coins
+pub const SPACE_BLUE_COIN_POOL_SIZE: usize = 20;
 pub const SPACE_RED_COIN_POOL_SIZE: usize = 20;
 /// Score awarded for collecting a red space coin.
 pub const SPACE_RED_COIN_SCORE:     u32   = 3000;
 /// Visual radius of a red space coin (slightly larger than normal space coin).
-pub const SPACE_RED_COIN_R:         f32   = 60.0;
+pub const SPACE_RED_COIN_R:         f32   = 29.0;
 
 // Planet coin arcs — when a space planet spawns it places coins in a ring.
 /// Number of coins placed in the arc around each planet.
-pub const SPACE_COIN_ARC_COUNT:        usize = 7;
+pub const SPACE_COIN_ARC_COUNT:        usize = 5;
 /// Fraction of arc coins that are red (floored to whole coins).
-pub const SPACE_COIN_ARC_RED_FRAC:     f32   = 0.30;
+pub const SPACE_COIN_ARC_RED_FRAC:     f32   = 0.20;
 /// Distance from planet centre where the arc coins are placed (×visual_r).
 pub const SPACE_COIN_ARC_RADIUS_MULT:  f32   = 1.85;
 /// Number of hooks placed near each newly spawned space planet.

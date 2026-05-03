@@ -866,34 +866,17 @@ pub fn black_hole_img_cached(radius: f32) -> Arc<image::RgbaImage> {
     img
 }
 
-fn coin_gif_tinted_img(radius: u32, tint: (u8, u8, u8)) -> image::RgbaImage {
+fn gif_resized_img(bytes: &[u8], radius: u32) -> image::RgbaImage {
     let d = radius.saturating_mul(2).max(2);
-    let base = image::load_from_memory(include_bytes!("../assets/coin.gif"))
+    let base = image::load_from_memory(bytes)
         .map(|img| img.into_rgba8())
         .unwrap_or_else(|_| circle_img(radius.max(2), 255, 255, 255));
-    let mut out = image::imageops::resize(&base, d, d, image::imageops::FilterType::CatmullRom);
-
-    for p in out.pixels_mut() {
-        let a = p[3];
-        if a == 0 {
-            continue;
-        }
-        let luma = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0;
-        let shade = 0.55 + 0.45 * luma;
-        let tr = (tint.0 as f32 * shade).clamp(0.0, 255.0);
-        let tg = (tint.1 as f32 * shade).clamp(0.0, 255.0);
-        let tb = (tint.2 as f32 * shade).clamp(0.0, 255.0);
-        p[0] = ((tr * 0.85) + (p[0] as f32 * 0.15)).clamp(0.0, 255.0) as u8;
-        p[1] = ((tg * 0.85) + (p[1] as f32 * 0.15)).clamp(0.0, 255.0) as u8;
-        p[2] = ((tb * 0.85) + (p[2] as f32 * 0.15)).clamp(0.0, 255.0) as u8;
-    }
-
-    out
+    image::imageops::resize(&base, d, d, image::imageops::FilterType::Nearest)
 }
 
-/// Space coin image: regular coin.gif tinted for normal-value space pickups.
+/// Space coin image: untinted regular coin.gif for space pickups.
 pub fn space_coin_img(radius: u32) -> image::RgbaImage {
-    coin_gif_tinted_img(radius, C_SPACE_COIN)
+    gif_resized_img(include_bytes!("../assets/coin.gif"), radius)
 }
 
 /// Cached space coin image keyed by radius.
@@ -909,9 +892,9 @@ pub fn space_coin_img_cached(radius: u32) -> Arc<image::RgbaImage> {
     img
 }
 
-/// High-value space coin image: regular coin.gif with a distinct high-value tint.
+/// High-value space coin image: also uses regular untinted coin.gif.
 pub fn red_coin_img(radius: u32) -> image::RgbaImage {
-    coin_gif_tinted_img(radius, C_SPACE_COIN_HIGH)
+    gif_resized_img(include_bytes!("../assets/coin.gif"), radius)
 }
 
 /// Cached red arc-coin image keyed by radius.

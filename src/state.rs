@@ -242,15 +242,21 @@ pub struct State {
     pub space_stasis_is_entry:  bool,
 
     // ── Red (arc) coins in space ──────────────────────────────────────────────
+    pub space_blue_coin_live:    Vec<String>,
+    pub space_blue_coin_free:    Vec<String>,
     pub space_red_coin_live:     Vec<String>,
     pub space_red_coin_free:     Vec<String>,
     /// Coins collected during this space visit — not re-spawned until next entry.
     pub space_coin_spent:        Vec<String>,
+    pub space_blue_coin_spent:   Vec<String>,
     pub space_red_coin_spent:    Vec<String>,
 
     // ── Space gwell pulsing timers ────────────────────────────────────────────
     /// (id, ticks_remaining, is_active) — mirrors normal gwell_timers for space
     pub space_gwell_timers:      Vec<(String, u32, bool)>,
+    /// Temporary teleport marker lifecycle: (id, ticks_remaining, phase)
+    /// phase 0 = blue marker, phase 1 = dormant marker.
+    pub space_bh_teleport_fx:    Vec<(String, u32, u8)>,
 
     // ── Space planet orbit lock ─────────────────────────────────────────────
     /// Planet id currently locking orbit; empty means no orbit lock.
