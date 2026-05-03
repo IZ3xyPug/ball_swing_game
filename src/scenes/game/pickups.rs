@@ -98,10 +98,29 @@ fn flip_all_live_objects(c: &mut Canvas, s: &State) {
             obj.position.1 = VH - obj.position.1 - obj.size.1;
         }
     }
+    // Pad thrusters — flip position and bake the vertical flip into the frames
+    // (flip_vertical_frames is O(n_frames) at flip time vs the old mirror_vertical
+    // flag which applied imageops::flip_vertical to each ~280×325 px frame every
+    // single rendered frame, causing the persistent post-flip performance drop).
+    for pad_id in &s.pad_live {
+        let thr_id = super::helpers::pad_thruster_id(pad_id);
+        if let Some(thr) = c.get_game_object_mut(&thr_id) {
+            thr.position.1 = VH - thr.position.1 - thr.size.1;
+            if let Some(anim) = thr.animated_sprite.as_mut() {
+                anim.flip_vertical_frames();
+            }
+        }
+    }
+    // Asteroids
+    for name in &s.space_asteroid_live {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+        }
+    }
 }
 
 /// Also mirror the mover origin Y values so animated movers stay in sync.
-fn flip_mover_origins(s: &mut State) {
+fn flip_mover_origins(c: &mut Canvas, s: &mut State) {
     // Spinner origins: (id, origin_y, amp, speed, phase)
     for entry in s.spinner_origins.iter_mut() {
         entry.1 = VH - entry.1 - SPINNER_H;
@@ -109,6 +128,31 @@ fn flip_mover_origins(s: &mut State) {
     // Pad origins: (id, origin_x, amp, speed, phase) — pads move horizontally,
     // but their Y is set by position so we don't need to flip origin_x.
     // However pad positions are already flipped above, so nothing extra needed.
+
+    // SpawnAnim: gravity_dir is already the NEW direction when this is called.
+    // For STARTED animations: snap immediately to the flipped target so there is
+    // no push-down artifact from mid-flight interpolation fighting the flip.
+    // For NOT-YET-STARTED animations: flip the target and recompute start_y so
+    // the drop-in comes from the correct off-screen side for the new gravity.
+    let drop_sign: f32 = if s.gravity_dir < 0.0 { -1.0 } else { 1.0 };
+    for anim in s.spawn_animations.iter_mut() {
+        let h = c.get_game_object(&anim.id).map(|o| o.size.1).unwrap_or(0.0);
+        let new_target = VH - anim.target_y - h;
+        if anim.started {
+            // Snap: set position directly and mark animation complete.
+            anim.target_y = new_target;
+            anim.start_y  = new_target;
+            anim.elapsed  = anim.total;
+            if let Some(obj) = c.get_game_object_mut(&anim.id) {
+                obj.position.1 = new_target;
+            }
+        } else {
+            // Not started: flip target, recompute start so entry comes from
+            // the correct off-screen side (above in normal, below in flipped).
+            anim.target_y = new_target;
+            anim.start_y  = new_target - drop_sign * SPAWN_ANIM_DROP;
+        }
+    }
 }
 
 fn mirror_player_for_flip(s: &mut State) {
@@ -122,7 +166,7 @@ fn mirror_player_for_flip(s: &mut State) {
 fn apply_flip_transform(c: &mut Canvas, s: &mut State) {
     mirror_player_for_flip(s);
     flip_all_live_objects(c, s);
-    flip_mover_origins(s);
+    flip_mover_origins(c, s);
     // Negate bullet vertical velocities so they keep flying in the right direction.
     for (_, _, vy, _) in s.bullet_live.iter_mut() {
         *vy = -*vy;

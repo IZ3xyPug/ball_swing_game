@@ -37,7 +37,9 @@ pub struct PoolSets {
     #[allow(dead_code)]
     pub score_x2_anim_template: Option<AnimatedSprite>,
     pub tech_bounce_static_img: Image,
+    pub tech_bounce_static_img_flipped: Image,
     pub tech_bounce_anim_frames: Vec<Image>,
+    pub tech_bounce_anim_frames_flipped: Vec<Image>,
     pub pad_thruster_static_img: Image,
     pub pad_thruster_anim_template: Option<AnimatedSprite>,
     // ── Space zone pools
@@ -543,6 +545,13 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .first()
         .cloned()
         .unwrap_or_else(|| load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
+    let tech_bounce_anim_frames_flipped: Vec<Image> = tech_bounce_anim_frames.iter()
+        .map(|img| flip_vertical(img.clone()))
+        .collect();
+    let tech_bounce_static_img_flipped = tech_bounce_anim_frames_flipped
+        .first()
+        .cloned()
+        .unwrap_or_else(|| flip_vertical(tech_bounce_static_img.clone()));
     let pad_thruster_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/thruster1.gif"),
         (PAD_THRUSTER_W, PAD_THRUSTER_H),
@@ -1044,7 +1053,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         coin_anim_template,
         score_x2_anim_template,
         tech_bounce_static_img,
+        tech_bounce_static_img_flipped,
         tech_bounce_anim_frames,
+        tech_bounce_anim_frames_flipped,
         pad_thruster_static_img,
         pad_thruster_anim_template,
         rocket_pad_free,

@@ -18,11 +18,13 @@ pub fn tick_visuals(
     frame_counter: u32,
     tech_bounce_img: &Image,
     tech_bounce_anim_frames: &[Image],
+    tech_bounce_img_flipped: &Image,
+    tech_bounce_anim_frames_flipped: &[Image],
 ) {
-    tick_pad_impact_animation(c, st, tech_bounce_img, tech_bounce_anim_frames);
+    tick_pad_impact_animation(c, st, tech_bounce_img, tech_bounce_anim_frames, tech_bounce_img_flipped, tech_bounce_anim_frames_flipped);
     tick_glow_flashes(c, st, tech_bounce_img);
     tick_nearest_hook_highlight(c, st, prev_nearest_hook);
-    tick_zone_palette(c, st, prev_zone_idx, tech_bounce_img);
+    tick_zone_palette(c, st, prev_zone_idx, tech_bounce_img, tech_bounce_img_flipped);
     tick_dark_mode(c, st, dark_mode_prev);
     tick_spinner_movers(c, st, frame_counter);
     tick_pad_movers(c, st, frame_counter);
@@ -35,14 +37,22 @@ fn tick_pad_impact_animation(
     st: &Arc<Mutex<State>>,
     tech_bounce_img: &Image,
     tech_bounce_anim_frames: &[Image],
+    tech_bounce_img_flipped: &Image,
+    tech_bounce_anim_frames_flipped: &[Image],
 ) {
-    if tech_bounce_anim_frames.is_empty() {
+    let gravity_dir = st.lock().unwrap().gravity_dir;
+    let (frames, base_img) = if gravity_dir < 0.0 {
+        (tech_bounce_anim_frames_flipped, tech_bounce_img_flipped)
+    } else {
+        (tech_bounce_anim_frames, tech_bounce_img)
+    };
+    if frames.is_empty() {
         let mut s = st.lock().unwrap();
         s.pad_bounce_anim.clear();
         return;
     }
 
-    let frame_count = tech_bounce_anim_frames.len();
+    let frame_count = frames.len();
     if frame_count <= 1 {
         let mut s = st.lock().unwrap();
         s.pad_bounce_anim.clear();
@@ -60,7 +70,7 @@ fn tick_pad_impact_animation(
         if let Some(obj) = c.get_game_object_mut(&name) {
             let idx = frame_idx.min(frame_count - 1);
             obj.animated_sprite = None;
-            obj.set_image(tech_bounce_anim_frames[idx].clone());
+            obj.set_image(frames[idx].clone());
         } else {
             finished = true;
         }
@@ -76,7 +86,7 @@ fn tick_pad_impact_animation(
             if frame_idx >= frame_count {
                 if let Some(obj) = c.get_game_object_mut(&name) {
                     obj.animated_sprite = None;
-                    obj.set_image(tech_bounce_img.clone());
+                    obj.set_image(base_img.clone());
                 }
             } else {
                 keep.push((name, frame_idx, ticks_left));
@@ -182,9 +192,10 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
 
 // ── Zone-palette recolouring ────────────────────────────────────────────────
 
-fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usize, tech_bounce_img: &Image) {
+fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usize, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image) {
     let s = st.lock().unwrap();
     let zone_idx = zone_index_for_distance(s.distance);
+    let gravity_dir = s.gravity_dir;
     if zone_idx == *prev_zone { return; }
     let hooks = s.live_hooks.clone();
     let pads = s.pad_live.clone();
@@ -193,6 +204,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
 
     *prev_zone = zone_idx;
 
+    let pad_img = if gravity_dir < 0.0 { tech_bounce_img_flipped } else { tech_bounce_img };
     let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     for hid in &hooks {
         if let Some(obj) = c.get_game_object_mut(hid) {
@@ -208,7 +220,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     for pid in &pads {
         if let Some(obj) = c.get_game_object_mut(pid) {
             obj.animated_sprite = None;
-            obj.set_image(tech_bounce_img.clone());
+            obj.set_image(pad_img.clone());
         }
     }
     for sid in &spinners {

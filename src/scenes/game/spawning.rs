@@ -93,6 +93,7 @@ pub fn tick_spawning(
     coin_spawn_image: &Image,
     coin_spawn_anim: &Option<AnimatedSprite>,
     tech_bounce_img: &Image,
+    tech_bounce_img_flipped: &Image,
     pad_thruster_static_img: &Image,
     pad_thruster_anim_template: Option<&AnimatedSprite>,
 ) {
@@ -108,7 +109,7 @@ pub fn tick_spawning(
     }
     spawn_hooks(c, st);
     if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
-        spawn_pads(c, st, tech_bounce_img, pad_thruster_static_img, pad_thruster_anim_template);
+        spawn_pads(c, st, tech_bounce_img, tech_bounce_img_flipped, pad_thruster_static_img, pad_thruster_anim_template);
     }
     if matches!(c.get_var("spawn_spinners_on"), Some(Value::Bool(true)) | None) {
         spawn_spinners(c, st);
@@ -279,6 +280,9 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             hy = if above >= HOOK_Y_MIN { above } else { below.min(HOOK_Y_MAX) };
         }
         hy = hy.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+        // In flipped gravity, map hy → VH - hy - HOOK_R for the visual target.
+        // Ensure hy >= HOOK_R so the hook doesn't sit at or below the floor.
+        if s.gravity_dir < 0.0 { hy = hy.max(HOOK_R); }
 
         s.last_hook_y = hy;
         s.live_hooks.push(id.clone());
@@ -286,15 +290,23 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         hooks_spawned += 1;
         s.world_sampler.add(hx, hy);
 
-        // Enqueue drop-in animation: hook falls from above, slow-spins into place.
-        let start_rot = lcg_range(&mut s.seed, -80.0, 80.0);
-        let target_x  = hx - HOOK_R;
-        let target_y  = hy - HOOK_R;
+        // Enqueue drop-in animation, gravity-aware entry direction.
+        let start_rot   = lcg_range(&mut s.seed, -80.0, 80.0);
+        let target_x    = hx - HOOK_R;
+        let gravity_dir = s.gravity_dir;
+        // target_y: where the hook rests.  hook_start_y: where it begins off-screen.
+        let (target_y, hook_start_y) = if gravity_dir < 0.0 {
+            let ty = VH - hy - HOOK_R;      // mirrored position for flipped gravity
+            (ty, ty + SPAWN_ANIM_DROP)      // enter from below screen
+        } else {
+            let ty = hy - HOOK_R;
+            (ty, ty - SPAWN_ANIM_DROP)      // enter from above screen
+        };
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
         s.spawn_animations.push(SpawnAnim {
             id: id.clone(),
             target_x, target_y,
-            start_y:      target_y - SPAWN_ANIM_DROP,
+            start_y:  hook_start_y,
             start_rot,    target_rot: 0.0,
             elapsed: 0,   total: anim_ticks,
             restore_platform: false,
@@ -307,8 +319,8 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         if let Some(obj) = c.get_game_object_mut(&id) {
-            // Start above screen; tick_spawn_animations moves it to (hx-HOOK_R, hy-HOOK_R).
-            obj.position = (hx - HOOK_R, hy - HOOK_R - SPAWN_ANIM_DROP);
+            // Start off-screen on the gravity-entry side; tick_spawn_animations moves it.
+            obj.position = (hx - HOOK_R, hook_start_y);
             obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
             obj.visible = false; // hidden until animation starts
             if asteroid_mode {
@@ -344,6 +356,7 @@ fn spawn_pads(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
     tech_bounce_img: &Image,
+    tech_bounce_img_flipped: &Image,
     pad_thruster_static_img: &Image,
     pad_thruster_anim_template: Option<&AnimatedSprite>,
 ) {
@@ -407,13 +420,14 @@ fn spawn_pads(
         };
         s.pad_origins.push((id.clone(), origin_x, amp, speed, phase));
 
-        // Drop-in animation: pad sweeps in from above and rotates level.
+        // Drop-in animation: pad sweeps in from above (normal) or below (flipped).
         let start_rot = lcg_range(&mut s.seed, -40.0, 40.0);
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let drop_sign: f32 = if s.gravity_dir < 0.0 { -1.0 } else { 1.0 };
         s.spawn_animations.push(SpawnAnim {
             id: id.clone(),
             target_x: x, target_y: y,
-            start_y:      y - SPAWN_ANIM_DROP,
+            start_y:      y - drop_sign * SPAWN_ANIM_DROP,
             start_rot,    target_rot: 0.0,
             elapsed: 0,   total: anim_ticks,
             restore_platform: false, // pads stay is_platform=false; bounce is handled manually
@@ -424,10 +438,13 @@ fn spawn_pads(
         let flipped = s.gravity_dir < 0.0;
         let zone_idx = zone_index_for_distance(s.distance);
         let _ = zone_idx; // reserved for future zone-tinted pads
+        let s_gravity_dir = s.gravity_dir;
         drop(s);
 
+        let drop_offset = if s_gravity_dir < 0.0 { SPAWN_ANIM_DROP } else { -SPAWN_ANIM_DROP };
+        let pad_img = if s_gravity_dir < 0.0 { tech_bounce_img_flipped } else { tech_bounce_img };
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x, y - SPAWN_ANIM_DROP); // start above screen
+            obj.position = (x, y + drop_offset); // start off-screen on the gravity-entry side
             obj.visible = false; // hidden until animation starts
             obj.animated_sprite = None;
             obj.rotation = if flipped { 180.0 } else { 0.0 };
@@ -437,17 +454,18 @@ fn spawn_pads(
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
             let thruster_embed = PAD_THRUSTER_HIDE_TOP + PAD_THRUSTER_RAISE_Y;
             thr.position.0 = x + (PAD_W - PAD_THRUSTER_W) * 0.5;
-            thr.position.1 = if flipped {
-                (y - SPAWN_ANIM_DROP) - PAD_THRUSTER_H + thruster_embed
-            } else {
-                (y - SPAWN_ANIM_DROP) + PAD_H - thruster_embed
-            };
-            thr.rotation = if flipped { 180.0 } else { 0.0 };
+            thr.position.1 = (y + drop_offset) + PAD_H - PAD_THRUSTER_HIDE_TOP - PAD_THRUSTER_RAISE_Y;
             thr.visible = false;
             thr.animated_sprite = None;
             thr.set_image(pad_thruster_static_img.clone());
             if let Some(anim) = pad_thruster_anim_template {
-                thr.set_animation(anim.clone());
+                let mut thruster_anim = anim.clone();
+                // If gravity is currently flipped, pre-flip the frames so the
+                // thruster displays correctly without the per-frame overhead.
+                if s_gravity_dir < 0.0 {
+                    thruster_anim.flip_vertical_frames();
+                }
+                thr.set_animation(thruster_anim);
             }
         }
 
@@ -1057,10 +1075,13 @@ fn spawn_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_asteroid_rightmost = x;
         spawned += 1;
         let drift = lcg_range(&mut s.seed, 1.2, 3.5);
+        let gravity_dir = s.gravity_dir;
         drop(s);
 
+        // When gravity is flipped, mirror position below screen instead of above.
+        let obj_y = if gravity_dir < 0.0 { VH - y } else { y };
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x - size * 0.5, y - size * 0.5);
+            obj.position = (x - size * 0.5, obj_y - size * 0.5);
             obj.size = (size, size);
             obj.visible = true;
             obj.rotation_momentum = spin;

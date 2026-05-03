@@ -17,11 +17,16 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let score = s.score;
     let py = s.py;
     let px = s.px;
+    let gravity_dir = s.gravity_dir;
     let ticks = s.ticks;
 
-    // Quantize for dirty checks
+    // In flipped gravity the floor is at y=VH (ceiling is y=0). Negate and
+    // shift so 0 = floor (py=VH), positive = going "up" toward ceiling (py→0).
+    let display_py = if gravity_dir < 0.0 { VH - py } else { py };
+
+    // Quantize for dirty checks (sign-aware so display refreshes on flip)
     let q_dist_fill = (dist_fill * 1000.0) as u32;
-    let q_py        = py as i32;
+    let q_py        = display_py as i32;
     let q_px        = px as i32;
 
     let dirty_dist     = q_dist_fill     != s.hud_last_dist_fill;
@@ -141,7 +146,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if dirty_py {
             obj.set_image(Image {
                 shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
-                image: y_counter_img(py).into(),
+                image: y_counter_img(display_py).into(),
                 color: None,
             });
         }
