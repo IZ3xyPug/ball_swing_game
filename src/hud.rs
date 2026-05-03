@@ -102,8 +102,8 @@ pub fn x_counter_img(x: f32) -> image::RgbaImage {
     draw_rect(&mut img, 18, 44, 14, 14, [255, 180, 100, 255]);
     draw_rect(&mut img, 46, 44, 14, 14, [255, 180, 100, 255]);
 
-    let x_int = x.round().clamp(-99999.0, 99999.0) as i32;
-    let text = format!("{:+06}", x_int);
+    let x_int = x.round().clamp(-9_999_999.0, 9_999_999.0) as i32;
+    let text = format!("{:+}", x_int);
     let mut dx = 96;
     for ch in text.bytes() {
         if ch == b'-' {
@@ -137,8 +137,8 @@ pub fn y_counter_img(y: f32) -> image::RgbaImage {
     draw_rect(&mut img, 46, 33, 14, 17, [120, 220, 255, 255]);
     draw_rect(&mut img, 46, 50, 14, 17, [120, 220, 255, 255]);
 
-    let y_int = y.round().clamp(-9999.0, 9999.0) as i32;
-    let text = format!("{:+05}", y_int);
+    let y_int = y.round().clamp(-999_999.0, 999_999.0) as i32;
+    let text = format!("{:+}", y_int);
     let mut dx = 120;
     for ch in text.bytes() {
         if ch == b'-' {

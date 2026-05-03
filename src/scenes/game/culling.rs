@@ -43,6 +43,7 @@ fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let rm_set: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     let active_hook_removed = s.hooked && rm_set.contains(s.active_hook.as_str());
     s.live_hooks.retain(|n| !rm_set.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm_set.contains(a.id.as_str()));
     for name in to_remove { s.pool_free.push(name); }
 
     if active_hook_removed {
@@ -79,6 +80,7 @@ fn cull_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.pad_live.retain(|n| !rm.contains(n.as_str()));
     for name in &to_remove { s.pad_origins.retain(|(n, _, _, _, _)| n != name); }
     s.pad_bounce_anim.retain(|(id, _, _)| !rm.contains(id.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.pad_free.push(name); }
 }
 
@@ -94,6 +96,7 @@ fn cull_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.spinner_live.retain(|n| !rm.contains(n.as_str()));
     s.spinner_origins.retain(|(id, _, _, _, _)| !rm.contains(id.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.spinner_free.push(name); }
 }
 
@@ -109,6 +112,7 @@ fn cull_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.coin_live.retain(|n| !rm.contains(n.as_str()));
     s.coin_magnet_locked.retain(|n| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.coin_free.push(name); }
 }
 
@@ -123,6 +127,7 @@ fn cull_flips(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.flip_live.retain(|n| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.flip_free.push(name); }
 }
 
@@ -137,6 +142,7 @@ fn cull_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.score_x2_live.retain(|n| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.score_x2_free.push(name); }
 }
 
@@ -151,6 +157,7 @@ fn cull_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.zero_g_live.retain(|n| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.zero_g_free.push(name); }
 }
 
@@ -171,6 +178,7 @@ fn cull_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.gate_live.retain(|n| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.gate_free.push(name); }
 }
 
@@ -190,6 +198,7 @@ fn cull_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.gwell_live.retain(|n| !rm.contains(n.as_str()));
     s.gwell_timers.retain(|(n, _, _)| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.gwell_free.push(name); }
 }
 
@@ -208,6 +217,7 @@ fn cull_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
     s.turret_live.retain(|n| !rm.contains(n.as_str()));
     s.turret_timers.retain(|(n, _)| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
     for name in to_remove { s.turret_free.push(name); }
 }
 

@@ -125,7 +125,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         coin_anim_template,
         score_x2_anim_template: _,
         tech_bounce_static_img,
+        tech_bounce_static_img_flipped,
         tech_bounce_anim_frames,
+        tech_bounce_anim_frames_flipped,
         pad_thruster_static_img,
         pad_thruster_anim_template,
         rocket_pad_free,
@@ -184,7 +186,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
 
             // ── Camera ───────────────────────────────────────────────────
-            let mut cam = Camera::new((VW * 80.0, VH), (VW, VH));
+            let mut cam = Camera::new((1_000_000_000.0, VH), (VW, VH));
             cam.follow(Some(Target::name("player")));
             cam.lerp_speed = 0.10;
             canvas.set_camera(cam);
@@ -858,6 +860,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 &coin_spawn_image,
                 &coin_spawn_anim,
                 &tech_bounce_static_img,
+                &tech_bounce_static_img_flipped,
                 &pad_thruster_static_img,
                 pad_thruster_anim_template.as_ref(),
             );
@@ -1105,6 +1108,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let st = state.clone();
                 let mut space_was_down = false;
                 let mut mouse_was_down = false;
+                let mut z_was_down = false;
                 let mut prev_nearest_hook = String::new();
                 let mut dark_mode_prev = false;
                 let mut prev_bg_theme: Option<(bool, usize, bool, bool)> = None;
@@ -1193,7 +1197,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     shield.visible = true;
                 });
                 let tech_bounce_img = tech_bounce_static_img.clone();
+                let tech_bounce_img_flipped = tech_bounce_static_img_flipped.clone();
                 let tech_bounce_anim = tech_bounce_anim_frames.clone();
+                let tech_bounce_anim_flipped = tech_bounce_anim_frames_flipped.clone();
                 let pad_thruster_static_img = pad_thruster_static_img.clone();
                 let pad_thruster_anim_template = pad_thruster_anim_template.clone();
 
@@ -1446,6 +1452,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &coin_spawn_image,
                         &coin_spawn_anim,
                         &tech_bounce_img,
+                        &tech_bounce_img_flipped,
                         &pad_thruster_static_img,
                         pad_thruster_anim_template.as_ref(),
                     );
@@ -1525,9 +1532,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     {
                         let gm = st.lock().unwrap().god_mode;
                         if gm {
+                            // Z key toggles 4× speed boost (rising edge)
+                            let z_now = c.key("z");
+                            if z_now && !z_was_down {
+                                let cur = matches!(c.get_var("god_mode_boost"), Some(Value::Bool(true)));
+                                c.set_var("god_mode_boost", !cur);
+                            }
+                            z_was_down = z_now;
+                            let boost = matches!(c.get_var("god_mode_boost"), Some(Value::Bool(true)));
                             const GOD_SPEED: f32 = 30.0;
-                            let dx = if c.key("d") { GOD_SPEED } else if c.key("a") { -GOD_SPEED } else { 0.0 };
-                            let dy = if c.key("s") { GOD_SPEED } else if c.key("w") { -GOD_SPEED } else { 0.0 };
+                            let speed = if boost { GOD_SPEED * 4.0 } else { GOD_SPEED };
+                            let dx = if c.key("d") { speed } else if c.key("a") { -speed } else { 0.0 };
+                            let dy = if c.key("s") { speed } else if c.key("w") { -speed } else { 0.0 };
                             let mut s = st.lock().unwrap();
                             s.px += dx;
                             s.py += dy;
@@ -1577,6 +1593,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         frame_counter,
                         &tech_bounce_img,
                         &tech_bounce_anim,
+                        &tech_bounce_img_flipped,
+                        &tech_bounce_anim_flipped,
                     );
 
                     // ── Coin magnet radius debug visual ──────────────────

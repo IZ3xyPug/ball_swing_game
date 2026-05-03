@@ -37,7 +37,7 @@
         // Camera follows the player horizontally across the huge world
         // Camera world width is large but not texture-backed — just a scroll bound.
         // No texture is created at this size; it's just a coordinate clamp.
-        let mut cam = Camera::new((VW*80.0, VH), (VW, VH));
+        let mut cam = Camera::new((1_000_000_000.0, VH), (VW, VH));
         cam.follow(Some(Target::name("player")));
         cam.lerp_speed = 0.10;
         canvas.set_camera(cam);
