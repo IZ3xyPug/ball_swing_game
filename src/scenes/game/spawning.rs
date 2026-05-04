@@ -165,14 +165,22 @@ fn hook_overlaps_hazards(c: &Canvas, s: &State, hx: f32, hy: f32) -> bool {
         }
     }
 
+    // Spinners: use 2× their visual radius as the exclusion zone so that
+    // find_safe_hook_position avoids the full danger area from the start.
+    let spinner_excl_r = SPINNER_W; // 2 × (SPINNER_W * 0.5)
     for spinner_name in &s.spinner_live {
         if let Some(spinner) = c.get_game_object(spinner_name) {
-            if circle_overlaps_aabb(hx, hy, r, spinner.position.0, spinner.position.1, SPINNER_W, SPINNER_H) {
+            let scx = spinner.position.0 + SPINNER_W * 0.5;
+            let scy = spinner.position.1 + SPINNER_H * 0.5;
+            let dx = hx - scx;
+            let dy = hy - scy;
+            if dx * dx + dy * dy < spinner_excl_r * spinner_excl_r {
                 return true;
             }
         }
     }
 
+    // Gravity wells: use 2× gwell radius + HOOK_R as the exclusion zone.
     for gwell_name in &s.gwell_live {
         if let Some(gwell) = c.get_game_object(gwell_name) {
             let gcx = gwell.position.0 + gwell.size.0 * 0.5;
@@ -180,8 +188,8 @@ fn hook_overlaps_hazards(c: &Canvas, s: &State, hx: f32, hy: f32) -> bool {
             let gr = gwell.size.0.min(gwell.size.1) * 0.5;
             let dx = hx - gcx;
             let dy = hy - gcy;
-            let rr = r + gr;
-            if dx * dx + dy * dy <= rr * rr {
+            let excl_r = gr * 2.0 + HOOK_R;
+            if dx * dx + dy * dy <= excl_r * excl_r {
                 return true;
             }
         }
@@ -279,26 +287,50 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         hy = hy.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
 
         // ── Final exclusion pass (after ALL Y adjustments) ────────────────────
-        // Run LAST so no subsequent Y push can move a hook back inside a hazard.
+        // Safety net: if any post-find adjustments (HOOK_CLOSE_Y_THRESHOLD, etc.)
+        // moved the hook back inside a 2× exclusion zone, push it out again.
+        // Uses geometrically correct half-chord math so the result is ALWAYS
+        // outside the circle even when clamping to HOOK_Y_MIN restricts motion.
 
-        // Spinners: hooks must be outside 2× the spinner's debug-ring radius
-        // (SPINNER_W * 0.5). Push the hook above the exclusion zone.
-        let spinner_excl_r: f32 = SPINNER_W; // 2 × (SPINNER_W * 0.5)
+        // Spinners: 2× visual radius (SPINNER_W = 2 × SPINNER_W*0.5)
+        let spinner_excl_r: f32 = SPINNER_W;
         for (scx, scenter_y) in &spinner_positions {
             let dx = hx - scx;
+            // If the hook's X is already outside the circle, no conflict.
+            if dx.abs() >= spinner_excl_r { continue; }
             let dy = hy - scenter_y;
-            if dx * dx + dy * dy < spinner_excl_r * spinner_excl_r {
-                hy = (scenter_y - spinner_excl_r - HOOK_R).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+            if dx * dx + dy * dy >= spinner_excl_r * spinner_excl_r { continue; }
+
+            // Compute the vertical distance to the circle edge at this X.
+            let half_chord = (spinner_excl_r * spinner_excl_r - dx * dx).sqrt();
+            // Prefer pushing above; fall back to below if HOOK_Y_MIN is inside the ring.
+            let safe_above = scenter_y - half_chord - HOOK_R;
+            let safe_below = scenter_y + half_chord + HOOK_R;
+
+            if safe_above >= HOOK_Y_MIN {
+                hy = safe_above;
+            } else {
+                // Above is impossible (ring reaches HOOK_Y_MIN); go below.
+                hy = safe_below.min(HOOK_Y_MAX);
             }
         }
-        // Gravity wells: hooks only need 1× well radius clearance (exception to
-        // the general 2× rule — hooks near gwells create useful strategic combos).
+
+        // Gravity wells: 2× gwell radius + HOOK_R
         for (gcx, gcy, gr) in &gwell_positions {
+            let excl_r = gr * 2.0 + HOOK_R;
             let dx = hx - gcx;
+            if dx.abs() >= excl_r { continue; }
             let dy = hy - gcy;
-            let excl_r = gr + HOOK_R;
-            if dx * dx + dy * dy < excl_r * excl_r {
-                hy = (gcy - excl_r).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+            if dx * dx + dy * dy >= excl_r * excl_r { continue; }
+
+            let half_chord = (excl_r * excl_r - dx * dx).sqrt();
+            let safe_above = gcy - half_chord;
+            let safe_below = gcy + half_chord;
+
+            if safe_above >= HOOK_Y_MIN {
+                hy = safe_above;
+            } else {
+                hy = safe_below.min(HOOK_Y_MAX);
             }
         }
         hy = hy.clamp(HOOK_Y_MIN, HOOK_Y_MAX);

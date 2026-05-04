@@ -223,6 +223,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
     asteroid.ignore_zoom = true;
     asteroid.layer = LAYER_ENERGY_HOOK_REF;
+    asteroid.visible = false;
 
     // ── Player — engine-native gravity ───────────────────────────────────
     let mut player = GameObject::new_rect(

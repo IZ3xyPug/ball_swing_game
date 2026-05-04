@@ -43,13 +43,13 @@ fn menu_mode_selector_img() -> image::RgbaImage {
 pub fn build_menu_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "menu_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW, VH)),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
         ctx, "menu_bg_tint".into(),
-        Some(tint_overlay(VW, VH, Color(70, 120, 255, 110))),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(tint_overlay(VW + 800.0, VH, Color(70, 120, 255, 110))),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
     let title = {
@@ -114,6 +114,38 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         )
     };
 
+    // ── Shop button ──────────────────────────────────────────────────────────
+    let shop_btn = {
+        let (w, h) = (420u32, 110u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px==0||px==w-1||py==0||py==h-1||px==1||px==w-2||py==1||py==h-2;
+            img.put_pixel(px, py, image::Rgba([if border {220} else {90}, if border {190} else {60}, 60, 230]));
+        }}
+        GameObject::new_rect(
+            ctx, "menu_shop_btn".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW/2.0 - w as f32 - 20.0, VH*0.81),
+            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    // ── Settings button ───────────────────────────────────────────────────────
+    let settings_btn = {
+        let (w, h) = (420u32, 110u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px==0||px==w-1||py==0||py==h-1||px==1||px==w-2||py==1||py==h-2;
+            img.put_pixel(px, py, image::Rgba([60, if border {200} else {90}, if border {240} else {160}, 230]));
+        }}
+        GameObject::new_rect(
+            ctx, "menu_settings_btn".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW/2.0 + 20.0, VH*0.81),
+            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
     let menu_title_text = GameObject::build("menu_title_text")
         .size(1700.0, 260.0)
         .position(VW * 0.5 - 850.0, VH * 0.14 + (260.0 - 74.0) / 2.0)
@@ -144,6 +176,18 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .tag("ui")
         .build(ctx);
 
+    let menu_shop_text = GameObject::build("menu_shop_text")
+        .size(420.0, 110.0)
+        .position(VW / 2.0 - 420.0 - 20.0, VH * 0.81 + (110.0 - 36.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    let menu_settings_text = GameObject::build("menu_settings_text")
+        .size(420.0, 110.0)
+        .position(VW / 2.0 + 20.0, VH * 0.81 + (110.0 - 36.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
     let scene = Scene::new("menu")
         .with_object("menu_bg",             bg)
         .with_object("menu_bg_tint",        bg_tint)
@@ -151,11 +195,15 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .with_object("menu_sub",            menu_sub)
         .with_object("menu_mode_selector",  menu_mode_selector)
         .with_object("start_btn",           start_btn)
+        .with_object("menu_shop_btn",       shop_btn)
+        .with_object("menu_settings_btn",   settings_btn)
         .with_object("menu_title_text",     menu_title_text)
         .with_object("menu_sub_text",       menu_sub_text)
         .with_object("menu_mode_name_text", menu_mode_name_text)
         .with_object("menu_mode_desc_text", menu_mode_desc_text)
-        .with_object("menu_start_text",     menu_start_text);
+        .with_object("menu_start_text",     menu_start_text)
+        .with_object("menu_shop_text",      menu_shop_text)
+        .with_object("menu_settings_text",  menu_settings_text);
 
     scene
         .with_event(
@@ -173,6 +221,22 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 button: Some(MouseButton::Left),
             },
             Target::name("start_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "goto_shop".into() },
+                target: Target::name("menu_shop_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("menu_shop_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "goto_menu_settings".into() },
+                target: Target::name("menu_settings_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("menu_settings_btn"),
         )
         .on_enter(|canvas| {
             // Returning to main menu is the only transition that stops in-game music.
@@ -208,6 +272,18 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             }
             if let Some(obj) = canvas.get_game_object_mut("menu_start_text") {
                 obj.position.0 = off + (VW * 0.5 - 270.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_shop_btn") {
+                obj.position.0 = off + (VW / 2.0 - 420.0 - 20.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_settings_btn") {
+                obj.position.0 = off + (VW / 2.0 + 20.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_shop_text") {
+                obj.position.0 = off + (VW / 2.0 - 420.0 - 20.0);
+            }
+            if let Some(obj) = canvas.get_game_object_mut("menu_settings_text") {
+                obj.position.0 = off + (VW / 2.0 + 20.0);
             }
             canvas.set_var("menu_ui_animating", true);
             canvas.set_var("menu_ui_anim_frames", MENU_UI_ANIM_FRAMES);
@@ -280,6 +356,12 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                             if let Some(obj) = c.get_game_object_mut("menu_start_text") {
                                 obj.set_drawable(Box::new(ui_text_spec("SPACE   \u{2022}   CLICK   TO   PLAY", &font, 20.0 * s, Color(0, 0, 0, 255), 540.0 * s)));
                             }
+                            if let Some(obj) = c.get_game_object_mut("menu_shop_text") {
+                                obj.set_drawable(Box::new(ui_text_spec("SHOP", &font, 36.0 * s, Color(255, 240, 200, 255), 420.0 * s)));
+                            }
+                            if let Some(obj) = c.get_game_object_mut("menu_settings_text") {
+                                obj.set_drawable(Box::new(ui_text_spec("SETTINGS", &font, 36.0 * s, Color(200, 240, 255, 255), 420.0 * s)));
+                            }
                         }
                         c.set_var("menu_text_dirty", false);
                     }
@@ -325,6 +407,18 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     if let Some(obj) = c.get_game_object_mut("menu_start_text") {
                         obj.position.0 = off + (VW * 0.5 - 270.0);
                     }
+                    if let Some(obj) = c.get_game_object_mut("menu_shop_btn") {
+                        obj.position.0 = off + (VW / 2.0 - 420.0 - 20.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_settings_btn") {
+                        obj.position.0 = off + (VW / 2.0 + 20.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_shop_text") {
+                        obj.position.0 = off + (VW / 2.0 - 420.0 - 20.0);
+                    }
+                    if let Some(obj) = c.get_game_object_mut("menu_settings_text") {
+                        obj.position.0 = off + (VW / 2.0 + 20.0);
+                    }
 
                     c.set_var("menu_ui_anim_frames", remaining);
                     if remaining == 0 {
@@ -335,19 +429,212 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             }
 
             canvas.register_custom_event("goto_game".into(), |c| c.load_scene("game"));
+            canvas.register_custom_event("goto_shop".into(), |c| c.load_scene("shop"));
+            canvas.register_custom_event("goto_menu_settings".into(), |c| c.load_scene("menu_settings"));
         })
+}
+
+// ── Stand-alone Settings scene (accessible from main menu) ──────────────────
+// Mirrors the in-game settings panel: same toggle vars, same keys (Q/W/E/R/T/Y/U/I).
+
+pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
+    let bg = GameObject::new_rect(
+        ctx, "ms_bg".into(),
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    let bg_tint = GameObject::new_rect(
+        ctx, "ms_bg_tint".into(),
+        Some(tint_overlay(VW + 800.0, VH, Color(40, 80, 160, 140))),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    // Panel background
+    let panel = {
+        let (pw, ph) = (1700u32, 750u32);
+        let mut img = image::RgbaImage::new(pw, ph);
+        for py in 0..ph { for px in 0..pw {
+            let border = px < 4 || px >= pw - 4 || py < 4 || py >= ph - 4;
+            img.put_pixel(px, py, image::Rgba([
+                if border { 90 } else { 14 },
+                if border { 150 } else { 22 },
+                if border { 220 } else { 45 },
+                if border { 255 } else { 230 },
+            ]));
+        }}
+        GameObject::new_rect(
+            ctx, "ms_panel".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (pw as f32, ph as f32), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (pw as f32, ph as f32),
+            (VW / 2.0 - pw as f32 / 2.0, VH * 0.24),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    // Title text
+    let title_obj = GameObject::build("ms_title_text")
+        .size(1400.0, 200.0)
+        .position(VW * 0.5 - 700.0, VH * 0.08)
+        .tag("ui")
+        .build(ctx);
+
+    // Settings text (toggle display)
+    let settings_text_obj = GameObject::build("ms_settings_text")
+        .size(1600.0, 600.0)
+        .position(VW / 2.0 - 800.0, VH * 0.24 + 60.0)
+        .tag("ui")
+        .build(ctx);
+
+    // Back button
+    let back_btn = {
+        let (w, h) = (420u32, 110u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
+            img.put_pixel(px, py, image::Rgba([50, 80, 130, if border { 255 } else { 200 }]));
+        }}
+        GameObject::new_rect(
+            ctx, "ms_back_btn".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (w as f32, h as f32),
+            (VW / 2.0 - w as f32 / 2.0, VH * 0.86),
+            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+
+    let back_text_obj = GameObject::build("ms_back_text")
+        .size(420.0, 110.0)
+        .position(VW / 2.0 - 210.0, VH * 0.86 + (110.0 - 36.0) / 2.0)
+        .tag("ui")
+        .build(ctx);
+
+    Scene::new("menu_settings")
+        .with_object("ms_bg",            bg)
+        .with_object("ms_bg_tint",       bg_tint)
+        .with_object("ms_panel",         panel)
+        .with_object("ms_title_text",    title_obj)
+        .with_object("ms_settings_text", settings_text_obj)
+        .with_object("ms_back_btn",      back_btn)
+        .with_object("ms_back_text",     back_text_obj)
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "ms_back".into() },
+                target: Target::name("ms_back_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("ms_back_btn"),
+        )
+        .on_enter(|canvas| {
+            let cam = Camera::new((VW, VH), (VW, VH));
+            canvas.set_camera(cam);
+
+            // Initialise toggle vars if not yet set (first load before game).
+            for (var, default) in [
+                ("spawn_pads_on",     true),
+                ("spawn_spinners_on", true),
+                ("spawn_coins_on",    true),
+                ("spawn_flips_on",    true),
+                ("spawn_score_x2_on", false),
+                ("spawn_zero_g_on",   false),
+                ("spawn_gwells_on",   true),
+                ("spawn_turrets_on",  true),
+            ] {
+                if canvas.get_var(var).is_none() {
+                    canvas.set_var(var, default);
+                }
+            }
+
+            // Render text
+            menu_settings_update_text(canvas);
+
+            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+                let s = canvas.virtual_scale();
+                if let Some(obj) = canvas.get_game_object_mut("ms_title_text") {
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "SETTINGS", &font, 72.0 * s, Color(200, 230, 255, 255), 1400.0 * s,
+                    )));
+                }
+                if let Some(obj) = canvas.get_game_object_mut("ms_back_text") {
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "\u{25C4}  BACK", &font, 32.0 * s, Color(220, 235, 255, 255), 420.0 * s,
+                    )));
+                }
+            }
+
+            // Key handler for toggles
+            let ms_key_registered = matches!(canvas.get_var("ms_key_registered"), Some(Value::Bool(true)));
+            if !ms_key_registered {
+                canvas.on_key_press(|c, key| {
+                    if !c.is_scene("menu_settings") { return; }
+                    let toggle_var: Option<&str> = match key {
+                        Key::Character(ch) if ch == "q" => Some("spawn_pads_on"),
+                        Key::Character(ch) if ch == "w" => Some("spawn_spinners_on"),
+                        Key::Character(ch) if ch == "e" => Some("spawn_coins_on"),
+                        Key::Character(ch) if ch == "r" => Some("spawn_flips_on"),
+                        Key::Character(ch) if ch == "t" => Some("spawn_score_x2_on"),
+                        Key::Character(ch) if ch == "y" => Some("spawn_zero_g_on"),
+                        Key::Character(ch) if ch == "u" => Some("spawn_gwells_on"),
+                        Key::Character(ch) if ch == "i" => Some("spawn_turrets_on"),
+                        _ => None,
+                    };
+                    if let Some(var) = toggle_var {
+                        let cur = matches!(c.get_var(var), Some(Value::Bool(true)));
+                        c.set_var(var, !cur);
+                        menu_settings_update_text(c);
+                    }
+                });
+                canvas.set_var("ms_key_registered", true);
+            }
+
+            canvas.register_custom_event("ms_back".into(), |c| c.load_scene("menu"));
+        })
+}
+
+fn menu_settings_update_text(c: &mut Canvas) {
+    let on_off = |var: &str| -> &str {
+        if matches!(c.get_var(var), Some(Value::Bool(true))) { "ON" } else { "OFF" }
+    };
+    let text = format!(
+        "[Q] Pads: {}   [W] Spinners: {}   [E] Coins: {}\n\
+         [R] Flips: {}   [T] Score x2: {}   [Y] Zero-G: {}\n\
+         [U] Gravity Wells: {}   [I] Turrets: {}",
+        on_off("spawn_pads_on"),
+        on_off("spawn_spinners_on"),
+        on_off("spawn_coins_on"),
+        on_off("spawn_flips_on"),
+        on_off("spawn_score_x2_on"),
+        on_off("spawn_zero_g_on"),
+        on_off("spawn_gwells_on"),
+        on_off("spawn_turrets_on"),
+    );
+    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+        let s = c.virtual_scale();
+        if let Some(obj) = c.get_game_object_mut("ms_settings_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                &text, &font, 42.0 * s, Color(235, 245, 255, 255), 1600.0 * s,
+            )));
+        }
+    }
 }
 
 pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "go_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW, VH)),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
         ctx, "go_bg_tint".into(),
-        Some(tint_overlay(VW, VH, Color(230, 50, 50, 120))),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(tint_overlay(VW + 800.0, VH, Color(230, 50, 50, 120))),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
     let title = {
@@ -528,13 +815,13 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
 pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "sun_go_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW, VH)),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
         ctx, "sun_go_bg_tint".into(),
-        Some(tint_overlay(VW, VH, Color(230, 120, 20, 150))),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(tint_overlay(VW + 800.0, VH, Color(230, 120, 20, 150))),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
     // Wider title banner to fit the long text.
@@ -710,13 +997,13 @@ pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
 pub fn build_gameover_oxygen_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "oxy_go_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW, VH)),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
         ctx, "oxy_go_bg_tint".into(),
-        Some(tint_overlay(VW, VH, Color(30, 170, 210, 150))),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(tint_overlay(VW + 800.0, VH, Color(30, 170, 210, 150))),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
     let title = {

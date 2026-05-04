@@ -29,7 +29,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let q_py        = display_py as i32;
     let q_px        = px as i32;
 
-    let dirty_dist     = q_dist_fill     != s.hud_last_dist_fill;
+    let _dirty_dist    = q_dist_fill     != s.hud_last_dist_fill;
     let dirty_coins    = coins           != s.hud_last_coins;
     let dirty_py       = q_py            != s.hud_last_py;
     let dirty_px       = q_px            != s.hud_last_px;
@@ -92,19 +92,9 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let in_space = s.in_space_mode;
     drop(s);
 
-    // Distance progress bar (hidden while in space; oxygen bar takes its slot)
-    if !in_space {
-        if let Some(obj) = c.get_game_object_mut("dist_bar") {
-            obj.position = (VW * 0.5 - 460.0, 30.0);
-            obj.visible = true;
-            if dirty_dist {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
-                    image: bar_img(920, 48, dist_fill, 80, 220, 160).into(),
-                    color: None,
-                });
-            }
-        }
+    // Distance progress bar — removed from in-game HUD
+    if let Some(obj) = c.get_game_object_mut("dist_bar") {
+        obj.visible = false;
     }
 
     // Coin counter
