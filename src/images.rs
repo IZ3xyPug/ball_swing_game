@@ -174,6 +174,28 @@ pub fn turret_img(
     img
 }
 
+pub fn turret_img_with_phase(
+    body_r: u32,
+    barrel_len: u32,
+    barrel_w: u32,
+    body_rgb: (u8, u8, u8),
+    barrel_rgb: (u8, u8, u8),
+    phase: u8,
+) -> image::RgbaImage {
+    let mut img = turret_img(body_r, barrel_len, barrel_w, body_rgb, barrel_rgb);
+    let size = (body_r + barrel_len) * 2;
+    let scale = (body_r / 5).max(4);
+    let digit_w = 3 * scale;
+    let digit_h = 5 * scale;
+    let cx = size / 2;
+    let cy = size / 2;
+    let x = cx.saturating_sub(digit_w / 2);
+    let y = cy.saturating_sub(digit_h / 2);
+    let digit = phase.clamp(1, 3);
+    draw_digit_7seg(&mut img, x, y, scale, digit, [245, 245, 255, 255]);
+    img
+}
+
 pub fn circle_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     let d = radius * 2;
     let mut img = image::RgbaImage::new(d, d);
@@ -214,7 +236,26 @@ pub fn gradient_rect(w: u32, h: u32, (r0,g0,b0): (u8,u8,u8), (r1,g1,b1): (u8,u8,
         for px in 0..w { img.put_pixel(px, py, image::Rgba([r, g, b, 255])); }
     }
     img
-}
+    }
+
+    /// Draws just the outline of a circle with the given radius (for debug overlays).
+    pub fn ring_outline_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+        let d = radius * 2;
+        let mut img = image::RgbaImage::new(d, d);
+        let c = radius as f32;
+        let thickness = (radius as f32 * 0.025).max(4.0);
+        for py in 0..d {
+            for px in 0..d {
+                let dx = px as f32 - c + 0.5;
+                let dy = py as f32 - c + 0.5;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if (dist - c).abs() <= thickness {
+                    img.put_pixel(px, py, image::Rgba([r, g, b, 220]));
+                }
+            }
+        }
+        img
+    }
 
 pub fn bar_img(w: u32, h: u32, fill: f32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);

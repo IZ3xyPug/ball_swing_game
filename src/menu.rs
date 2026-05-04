@@ -1,6 +1,7 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
 use crate::constants::*;
+use crate::audio_state;
 use crate::images::*;
 use crate::objects::ui_text_spec;
 
@@ -174,6 +175,8 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             Target::name("start_btn"),
         )
         .on_enter(|canvas| {
+            // Returning to main menu is the only transition that stops in-game music.
+            audio_state::stop_game_bgm();
             let cam = Camera::new((VW, VH), (VW, VH));
             canvas.set_camera(cam);
 

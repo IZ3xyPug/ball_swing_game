@@ -98,19 +98,8 @@ fn flip_all_live_objects(c: &mut Canvas, s: &State) {
             obj.position.1 = VH - obj.position.1 - obj.size.1;
         }
     }
-    // Pad thrusters — flip position and bake the vertical flip into the frames
-    // (flip_vertical_frames is O(n_frames) at flip time vs the old mirror_vertical
-    // flag which applied imageops::flip_vertical to each ~280×325 px frame every
-    // single rendered frame, causing the persistent post-flip performance drop).
-    for pad_id in &s.pad_live {
-        let thr_id = super::helpers::pad_thruster_id(pad_id);
-        if let Some(thr) = c.get_game_object_mut(&thr_id) {
-            thr.position.1 = VH - thr.position.1 - thr.size.1;
-            if let Some(anim) = thr.animated_sprite.as_mut() {
-                anim.flip_vertical_frames();
-            }
-        }
-    }
+    // Pad thrusters — bake the vertical flip into animation frames once at flip time.
+    // Position was already flipped in the Pads loop above; only flip the frames here.
     // Asteroids
     for name in &s.space_asteroid_live {
         if let Some(obj) = c.get_game_object_mut(name) {

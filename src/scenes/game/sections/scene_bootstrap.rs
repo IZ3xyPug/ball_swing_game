@@ -138,14 +138,18 @@
     };
     combo_flash.visible = false;
 
+    // The pause overlay image is wider than VW by 2×OVERSCAN (400 px each side)
+    // so it covers any safe-area letterboxing. Size and position must match.
+    const PAUSE_OVERLAY_OVERSCAN: f32 = 400.0;
+    let pause_overlay_w = VW + PAUSE_OVERLAY_OVERSCAN * 2.0;
     let mut pause_overlay = GameObject::new_rect(
         ctx, "pause_overlay".into(),
         Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+            shape: ShapeType::Rectangle(0.0, (pause_overlay_w, VH), 0.0),
             image: pause_overlay_img().into(),
             color: None,
         }),
-        (VW, VH), (0.0, 0.0),
+        (pause_overlay_w, VH), (-PAUSE_OVERLAY_OVERSCAN, 0.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     pause_overlay.visible = false;

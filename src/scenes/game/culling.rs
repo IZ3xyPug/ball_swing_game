@@ -29,7 +29,8 @@ pub fn tick_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.live_hooks.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.live_hooks.iter()
         .filter(|name| c.get_game_object(name).map(|o| o.position.0 + HOOK_R*2.0 < cutoff).unwrap_or(true))
         .cloned().collect();
@@ -40,7 +41,9 @@ fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (-2000.0, -2000.0);
         }
     }
-    let rm_set: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+    let rm_set: HashSet<&str> = if to_remove.is_empty() { return; } else {
+        to_remove.iter().map(|n| n.as_str()).collect()
+    };
     let active_hook_removed = s.hooked && rm_set.contains(s.active_hook.as_str());
     s.live_hooks.retain(|n| !rm_set.contains(n.as_str()));
     s.spawn_animations.retain(|a| !rm_set.contains(a.id.as_str()));
@@ -63,7 +66,8 @@ fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn cull_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.pad_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.pad_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + PAD_W < cutoff).unwrap_or(true))
         .cloned().collect();
@@ -76,94 +80,112 @@ fn cull_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             thr.animated_sprite = None;
         }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.pad_live.retain(|n| !rm.contains(n.as_str()));
-    for name in &to_remove { s.pad_origins.retain(|(n, _, _, _, _)| n != name); }
-    s.pad_bounce_anim.retain(|(id, _, _)| !rm.contains(id.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.pad_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.pad_live.retain(|n| !rm.contains(n.as_str()));
+        for name in &to_remove { s.pad_origins.retain(|(n, _, _, _, _)| n != name); }
+        s.pad_bounce_anim.retain(|(id, _, _)| !rm.contains(id.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.pad_free.push(name); }
+    }
 }
 
 fn cull_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.spinner_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.spinner_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + SPINNER_W < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3500.0, -3500.0); obj.rotation_momentum = 0.0; }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.spinner_live.retain(|n| !rm.contains(n.as_str()));
-    s.spinner_origins.retain(|(id, _, _, _, _)| !rm.contains(id.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.spinner_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.spinner_live.retain(|n| !rm.contains(n.as_str()));
+        s.spinner_origins.retain(|(id, _, _, _, _)| !rm.contains(id.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.spinner_free.push(name); }
+    }
 }
 
 fn cull_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.coin_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.coin_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + COIN_R * 2.0 < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3700.0, -3700.0); }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.coin_live.retain(|n| !rm.contains(n.as_str()));
-    s.coin_magnet_locked.retain(|n| !rm.contains(n.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.coin_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.coin_live.retain(|n| !rm.contains(n.as_str()));
+        s.coin_magnet_locked.retain(|n| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.coin_free.push(name); }
+    }
 }
 
 fn cull_flips(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.flip_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.flip_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + FLIP_W < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3800.0, -3800.0); }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.flip_live.retain(|n| !rm.contains(n.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.flip_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.flip_live.retain(|n| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.flip_free.push(name); }
+    }
 }
 
 fn cull_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.score_x2_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.score_x2_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + SCORE_X2_W < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3850.0, -3850.0); }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.score_x2_live.retain(|n| !rm.contains(n.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.score_x2_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.score_x2_live.retain(|n| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.score_x2_free.push(name); }
+    }
 }
 
 fn cull_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.zero_g_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.zero_g_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + ZERO_G_W < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3875.0, -3875.0); }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.zero_g_live.retain(|n| !rm.contains(n.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.zero_g_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.zero_g_live.retain(|n| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.zero_g_free.push(name); }
+    }
 }
 
 fn cull_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.gate_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.gate_live.iter()
         .filter(|n| {
             let top_id = format!("{n}_top");
@@ -176,15 +198,18 @@ fn cull_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut(&top_id) { obj.visible = false; obj.position = (-3900.0, -3900.0); }
         if let Some(obj) = c.get_game_object_mut(&bot_id) { obj.visible = false; obj.position = (-3900.0, -3900.0); }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.gate_live.retain(|n| !rm.contains(n.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.gate_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.gate_live.retain(|n| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.gate_free.push(name); }
+    }
 }
 
 fn cull_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.gwell_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.gwell_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + o.size.0 < cutoff).unwrap_or(true))
         .cloned().collect();
@@ -195,16 +220,19 @@ fn cull_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.planet_radius = None; // disable gravity source
         }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.gwell_live.retain(|n| !rm.contains(n.as_str()));
-    s.gwell_timers.retain(|(n, _, _)| !rm.contains(n.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.gwell_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.gwell_live.retain(|n| !rm.contains(n.as_str()));
+        s.gwell_timers.retain(|(n, _, _)| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.gwell_free.push(name); }
+    }
 }
 
 fn cull_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.turret_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.turret_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + TURRET_FULL_SIZE < cutoff).unwrap_or(true))
         .cloned().collect();
@@ -214,11 +242,13 @@ fn cull_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (-4500.0, -4500.0);
         }
     }
-    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-    s.turret_live.retain(|n| !rm.contains(n.as_str()));
-    s.turret_timers.retain(|(n, _)| !rm.contains(n.as_str()));
-    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-    for name in to_remove { s.turret_free.push(name); }
+    if !to_remove.is_empty() {
+        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+        s.turret_live.retain(|n| !rm.contains(n.as_str()));
+        s.turret_timers.retain(|(n, _)| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in to_remove { s.turret_free.push(name); }
+    }
 }
 
 fn cull_bullets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -244,7 +274,8 @@ fn cull_bullets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn cull_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
+    if s.rocket_pad_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.0;
     let to_remove: Vec<String> = s.rocket_pad_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + ROCKET_PAD_W < cutoff).unwrap_or(true))
         .cloned().collect();
@@ -260,7 +291,8 @@ fn cull_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn cull_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.8;
+    if s.space_asteroid_live.is_empty() { return; }
+    let cutoff = s.px - VW * 3.6;
     let to_remove: Vec<String> = s.space_asteroid_live.iter()
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + o.size.0 < cutoff).unwrap_or(true))
         .cloned().collect();

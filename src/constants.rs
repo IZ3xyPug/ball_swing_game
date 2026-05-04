@@ -219,9 +219,9 @@ pub const COIN_CURVE_RISE:   f32 = 60.0;
 /// Probability (0–1) that a coin spawn is an array rather than single coin.
 pub const COIN_ARRAY_CHANCE: f32 = 0.28;
 pub const COIN_ARRAY_HOOK_DX:f32 = 600.0;
-pub const COIN_ARRAY_HOOK_DY:f32 = -742.0;
-pub const COIN_ARRAY_Y_MIN:  f32 = -400.0;
-pub const COIN_ARRAY_Y_MAX:  f32 = 200.0;
+pub const COIN_ARRAY_HOOK_DY:f32 = -1200.0; // much higher above anchor hook
+pub const COIN_ARRAY_Y_MIN:  f32 = -950.0;  // pushed high above hook zone
+pub const COIN_ARRAY_Y_MAX:  f32 = -380.0;  // coins always above highest hooks
 pub const COIN_SINGLE_Y_MIN: f32 = -750.0;
 pub const COIN_SINGLE_Y_MAX: f32 = 380.0;
 /// 3×3 grid coin pattern.
@@ -418,18 +418,32 @@ pub const TURRET_FULL_SIZE:     f32 = (TURRET_R + TURRET_BARREL_LEN) * 2.0;
 pub const TURRET_GAP_MIN:       f32 = 7000.0;
 pub const TURRET_GAP_MAX:       f32 = 12000.0;
 pub const TURRET_SHOOT_INTERVAL:u32 = 180;  // 3 seconds at 60fps
+pub const TURRET_SHOOT_INTERVAL_FAST:u32 = 150; // phase 1 interval
+pub const TURRET_SHOOT_INTERVAL_P2:  u32 = 130; // phase 2+ interval (slightly faster than phase 1)
+pub const TURRET_SUCCESSIVE_GAP:     f32 = 260.0; // px between successive phase-2 shots along fire axis
 pub const TURRET_SPAWN_BUDGET:  usize = 1;
 pub const TURRET_Y_MIN:         f32 = VH * 0.12;
 pub const TURRET_Y_MAX:         f32 = VH * 0.80;
 pub const TURRET_DETECT_RADIUS: f32 = 2800.0;
-pub const BULLET_POOL_SIZE:     usize = 32;
+pub const TURRET_PHASE_2_X:     f32 = 20_000.0;
+pub const TURRET_PHASE_3_X:     f32 = 40_000.0;
+pub const TURRET_DUAL_SHOT_GAP: f32 = 44.0;   // kept for reference, no longer used for parallel
+pub const TURRET_PREDICT_MAX_T: f32 = 60.0;   // max lead-time clamp (ticks); raised for better phase-3 aim
+pub const BULLET_POOL_SIZE:     usize = 64;
 pub const BULLET_W:             f32 = 36.0;
 pub const BULLET_H:             f32 = 12.0;
-pub const BULLET_SPEED:         f32 = 28.0;
+pub const BULLET_SPEED:         f32 = 52.0;  // phase 1 enhancement: significantly faster bullets
 pub const BULLET_LIFETIME_TICKS:u32 = 300; // 5 seconds at 60fps
 pub const C_TURRET_BODY:        (u8,u8,u8) = (100, 100, 130);
 pub const C_TURRET_BARREL:      (u8,u8,u8) = (70, 70, 90);
 pub const C_TURRET_BULLET:      (u8,u8,u8) = (220, 40, 40);
+
+// ── Passive score dead-block ───────────────────────────────────────────
+/// Width of one score-block (px).
+pub const PASSIVE_SCORE_BLOCK_SIZE:  f32 = 5000.0;
+/// Ticks of continuous presence (unpaused) before a block is marked dead.
+/// 720 ticks = 12 seconds at 60 fps.
+pub const PASSIVE_SCORE_DEAD_TICKS:  u32 = 720;
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 350;

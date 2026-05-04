@@ -5,6 +5,7 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
 
+use crate::audio_state;
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
 use crate::state::gen_hook_batch;
@@ -152,12 +153,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     // Persistent state arc — created on first enter, reused on respawns.
     let persistent_state: Arc<Mutex<Option<Arc<Mutex<State>>>>> =
         Arc::new(Mutex::new(None));
-    let bgm_handle: Arc<Mutex<Option<SoundHandle>>> =
-        Arc::new(Mutex::new(None));
-
-    let bgm_handle_on_enter = Arc::clone(&bgm_handle);
-    let bgm_handle_on_exit = Arc::clone(&bgm_handle);
-
     scene
         .on_enter(move |canvas| {
             // ── Crystalline renderer ─────────────────────────────────────
@@ -204,17 +199,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("zoom_anchor_y", VH);
 
             // ── Background music (looped, switchable) ───────────────────
-            if let Ok(mut slot) = bgm_handle_on_enter.lock() {
-                if let Some(prev) = slot.take() {
-                    prev.stop();
-                }
+            if !audio_state::has_game_bgm() {
                 let handle = canvas.play_sound_with(
                     ASSET_BGM_TRACK_1,
                     SoundOptions::new().volume(0.084).looping(true),
                 );
-                *slot = Some(handle);
+                audio_state::replace_game_bgm(handle);
+                canvas.set_var("bgm_track_index", 0);
             }
-            canvas.set_var("bgm_track_index", 0);
 
             // ── Pause key (register once globally) ───────────────────────
             let pause_key_registered = matches!(
@@ -222,7 +214,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 Some(Value::Bool(true))
             );
             if !pause_key_registered {
-                let bgm_handle_key = Arc::clone(&bgm_handle_on_enter);
                 let persistent_state_key = Arc::clone(&persistent_state);
                 canvas.on_key_press(move |c, key| {
                     if !c.is_scene("game") { return; }
@@ -290,16 +281,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     if *key == Key::Character("7".into()) {
                         if c.get_i32("bgm_track_index") != 1 {
-                            if let Ok(mut slot) = bgm_handle_key.lock() {
-                                if let Some(prev) = slot.take() {
-                                    prev.stop();
-                                }
-                                let handle = c.play_sound_with(
-                                    ASSET_BGM_TRACK_2,
-                                    SoundOptions::new().volume(0.167).looping(true),
-                                );
-                                *slot = Some(handle);
-                            }
+                            let handle = c.play_sound_with(
+                                ASSET_BGM_TRACK_2,
+                                SoundOptions::new().volume(0.167).looping(true),
+                            );
+                            audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 1);
                         }
                         return;
@@ -307,16 +293,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     if *key == Key::Character("8".into()) {
                         if c.get_i32("bgm_track_index") != 2 {
-                            if let Ok(mut slot) = bgm_handle_key.lock() {
-                                if let Some(prev) = slot.take() {
-                                    prev.stop();
-                                }
-                                let handle = c.play_sound_with(
-                                    ASSET_BGM_TRACK_3,
-                                    SoundOptions::new().volume(0.5).looping(true),
-                                );
-                                *slot = Some(handle);
-                            }
+                            let handle = c.play_sound_with(
+                                ASSET_BGM_TRACK_3,
+                                SoundOptions::new().volume(0.5).looping(true),
+                            );
+                            audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 2);
                         }
                         return;
@@ -685,7 +666,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 gwell_timers: Vec::new(),
                 turret_live: Vec::new(),
                 turret_free: turret_free.clone(),
-                turret_rightmost: SPAWN_X + VW * 2.5,
+                turret_rightmost: SPAWN_X + 2000.0,
                 turret_timers: Vec::new(),
                 bullet_live: Vec::new(),
                 bullet_free: bullet_free.clone(),
@@ -768,6 +749,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 solar_surface_ratio:    SOLAR_SURFACE_RATIO_DEFAULT,
                 solar_anim_loaded:      false,
                 solar_anim_pending:     None,
+
+                score_active_block: i32::MIN,
+                score_block_ticks:  0,
+                score_dead_blocks:  std::collections::HashSet::new(),
             };
 
             // Reuse persistent Arc across respawns.
@@ -833,7 +818,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
             if let Some(obj) = canvas.get_game_object_mut("pause_overlay") {
-                obj.position = (0.0, 0.0);
+                obj.position = (-400.0, 0.0);
                 obj.visible = false;
             }
 
@@ -1254,7 +1239,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             if let Some(obj) =
                                 c.get_game_object_mut("pause_overlay")
                             {
-                                obj.position = (0.0, y);
+                                obj.position = (-400.0, y);
                                 obj.visible = true;
                             }
                             // Animate buttons alongside the overlay
@@ -1276,7 +1261,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 if let Some(obj) =
                                     c.get_game_object_mut("pause_overlay")
                                 {
-                                    obj.position = (0.0, 0.0);
+                                    obj.position = (-400.0, 0.0);
                                 }
                                 for &(name, bx, by) in btn_layout {
                                     if let Some(obj) = c.get_game_object_mut(name) {
@@ -1339,7 +1324,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) =
                             c.get_game_object_mut("pause_overlay")
                         {
-                            obj.position.0 = cam_x;
+                            obj.position.0 = cam_x - 400.0;
                         }
                         return;
                     }
@@ -1514,14 +1499,32 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             s.distance = travelled;
                         }
 
+                        // ── Dead-block passive score guard ───────────────
+                        // Track how long the player has been in the same
+                        // 5000-px block. After 12 s the block is "dead" and
+                        // no longer yields passive time-score (even on return).
+                        let current_block = (s.px / PASSIVE_SCORE_BLOCK_SIZE).floor() as i32;
+                        if current_block == s.score_active_block {
+                            s.score_block_ticks += 1;
+                            if s.score_block_ticks >= PASSIVE_SCORE_DEAD_TICKS {
+                                s.score_dead_blocks.insert(current_block);
+                            }
+                        } else {
+                            s.score_active_block = current_block;
+                            s.score_block_ticks = 0;
+                        }
+                        let block_is_dead = s.score_dead_blocks.contains(&current_block);
+
                         let time_awards = s.ticks / 60;
                         if time_awards > s.score_time_awards {
                             let gained = time_awards - s.score_time_awards;
-                            let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
-                            s.score = s
-                                .score
-                                .saturating_add(gained.saturating_mul(10).saturating_mul(score_mult));
                             s.score_time_awards = time_awards;
+                            if !block_is_dead {
+                                let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+                                s.score = s
+                                    .score
+                                    .saturating_add(gained.saturating_mul(10).saturating_mul(score_mult));
+                            }
                         }
 
                         let distance_awards = (s.distance / 5000.0).floor() as u32;
@@ -1715,10 +1718,5 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 emitter_name: PLAYER_TRAIL_EMITTER_NAME.to_string(),
             });
             canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
-            if let Ok(mut slot) = bgm_handle_on_exit.lock() {
-                if let Some(handle) = slot.take() {
-                    handle.stop();
-                }
-            }
         })
 }

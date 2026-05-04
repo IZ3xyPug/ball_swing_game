@@ -233,8 +233,8 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let mut hx = spec.x;
         let mut hy = spec.y;
 
-        // Collect spinner and pad positions before the relocation loops so we
-        // can draw from s.seed (mut) without holding borrow conflicts.
+        // Collect spinner, pad, and gwell positions before the relocation loops
+        // so we can draw from s.seed (mut) without holding borrow conflicts.
         let spinner_positions: Vec<(f32, f32)> = s.spinner_live.iter()
             .filter_map(|name| c.get_game_object(name)
                 .map(|o| (o.position.0 + SPINNER_W * 0.5,
@@ -247,20 +247,17 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                           o.position.1)))               // pad top y
             .collect();
 
-        // If a grab node falls within 2x the spinner proximity radius,
-        // push it above the spinner centre. This applies from any direction
-        // (left/right/above/below) because the check is Euclidean.
-        for (scx, scenter_y) in &spinner_positions {
-            let dx = hx - scx;
-            let dy = hy - scenter_y;
-            let prox_r = HOOK_SPINNER_PROX_R * 2.0;
-            if dx * dx + dy * dy < prox_r * prox_r {
-                hy = (scenter_y - HOOK_SPINNER_Y_OFFSET).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
-            }
-        }
+        // (centre_x, centre_y, radius) for every live gwell.
+        let gwell_positions: Vec<(f32, f32, f32)> = s.gwell_live.iter()
+            .filter_map(|name| c.get_game_object(name)
+                .map(|o| (
+                    o.position.0 + o.size.0 * 0.5,
+                    o.position.1 + o.size.1 * 0.5,
+                    o.size.0.min(o.size.1) * 0.5,
+                )))
+            .collect();
 
-        // If a grab node is too close to a bounce pad, push it HOOK_PAD_CLEAR_Y (800 px)
-        // above the pad's top edge.
+        // Initial pad clearance check (run before find_safe first pass).
         for (pad_cx, pad_top) in &pad_positions {
             if (hx - pad_cx).abs() < PAD_W && hy > pad_top - HOOK_PAD_CLEAR_Y {
                 hy = (pad_top - HOOK_PAD_CLEAR_Y).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
@@ -280,6 +277,32 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             hy = if above >= HOOK_Y_MIN { above } else { below.min(HOOK_Y_MAX) };
         }
         hy = hy.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+
+        // ── Final exclusion pass (after ALL Y adjustments) ────────────────────
+        // Run LAST so no subsequent Y push can move a hook back inside a hazard.
+
+        // Spinners: hooks must be outside 2× the spinner's debug-ring radius
+        // (SPINNER_W * 0.5). Push the hook above the exclusion zone.
+        let spinner_excl_r: f32 = SPINNER_W; // 2 × (SPINNER_W * 0.5)
+        for (scx, scenter_y) in &spinner_positions {
+            let dx = hx - scx;
+            let dy = hy - scenter_y;
+            if dx * dx + dy * dy < spinner_excl_r * spinner_excl_r {
+                hy = (scenter_y - spinner_excl_r - HOOK_R).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+            }
+        }
+        // Gravity wells: hooks only need 1× well radius clearance (exception to
+        // the general 2× rule — hooks near gwells create useful strategic combos).
+        for (gcx, gcy, gr) in &gwell_positions {
+            let dx = hx - gcx;
+            let dy = hy - gcy;
+            let excl_r = gr + HOOK_R;
+            if dx * dx + dy * dy < excl_r * excl_r {
+                hy = (gcy - excl_r).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+            }
+        }
+        hy = hy.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+
         // In flipped gravity, map hy → VH - hy - HOOK_R for the visual target.
         // Ensure hy >= HOOK_R so the hook doesn't sit at or below the floor.
         if s.gravity_dir < 0.0 { hy = hy.max(HOOK_R); }
@@ -499,16 +522,9 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let spin_dir = if lcg(&mut s.seed) < 0.5 { 1.0 } else { -1.0 };
         let rot_speed = spinner_speed_for_zone(zone_idx) * spin_dir;
 
-        // Zone 2+ spinners can move vertically.
-        let is_mover = zone_idx >= 2 && lcg(&mut s.seed) < 0.5;
-        let (origin_y, amp, speed, phase) = if is_mover {
-            let a = lcg_range(&mut s.seed, SPINNER_BLACK_MOVE_AMP_MIN, SPINNER_BLACK_MOVE_AMP_MAX);
-            let sp = lcg_range(&mut s.seed, SPINNER_BLACK_MOVE_SPEED_MIN, SPINNER_BLACK_MOVE_SPEED_MAX);
-            let ph = lcg(&mut s.seed) * std::f32::consts::TAU;
-            (y, a, sp, ph)
-        } else {
-            (y, 0.0, 0.0, 0.0)
-        };
+        // Vertical movement disabled — spinners always stay at their spawn Y.
+        let _ = zone_idx;
+        let (origin_y, amp, speed, phase) = (y, 0.0, 0.0, 0.0);
         s.spinner_origins.push((id.clone(), origin_y, amp, speed, phase));
 
         // Drop-in animation: spinner falls in from above while spinning.
@@ -898,6 +914,17 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let gap = lcg_range(&mut s.seed, GWELL_GAP_MIN, GWELL_GAP_MAX);
         let x = s.gwell_rightmost + gap;
+
+    #[inline]
+    fn turret_phase_for_x(x: f32) -> u8 {
+        if x >= TURRET_PHASE_3_X {
+            3
+        } else if x >= TURRET_PHASE_2_X {
+            2
+        } else {
+            1
+        }
+    }
         // Dual Y-band: 0–500 (top) or 1000–1500 (bottom).
         let y = if lcg(&mut s.seed) < 0.5 {
             lcg_range(&mut s.seed, 0.0, 500.0)
@@ -957,14 +984,20 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Turrets ───────────────────────────────────────────────────────────────────
 
+#[inline]
+fn turret_phase_for_x(x: f32) -> u8 {
+    if x >= TURRET_PHASE_3_X {
+        3
+    } else if x >= TURRET_PHASE_2_X {
+        2
+    } else {
+        1
+    }
+}
+
 fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    // Turrets only appear in zone 2 (the third difficulty band).
-    if zone_index_for_distance(s.distance) < 2 {
-        let z2_start_x = SPAWN_X + 2.0 * ZONE_DISTANCE_STEP;
-        if s.turret_rightmost < z2_start_x { s.turret_rightmost = z2_start_x; }
-        return;
-    }
+    // Turrets appear in all zones (phases 1/2/3 based on world X position).
     let mut spawned = 0usize;
     while spawned < TURRET_SPAWN_BUDGET
         && s.turret_rightmost < s.px + GEN_AHEAD
@@ -981,7 +1014,7 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let Some(id) = s.turret_free.pop() else { break; };
         s.turret_live.push(id.clone());
         s.turret_rightmost = x;
-        s.turret_timers.push((id.clone(), TURRET_SHOOT_INTERVAL));
+        s.turret_timers.push((id.clone(), TURRET_SHOOT_INTERVAL_FAST));
         spawned += 1;
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
         let start_rot = lcg_range(&mut s.seed, -90.0, 90.0);
@@ -999,9 +1032,21 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         if let Some(obj) = c.get_game_object_mut(&id) {
             let half = TURRET_FULL_SIZE * 0.5;
+            let sprite = turret_img(
+                TURRET_R as u32,
+                TURRET_BARREL_LEN as u32,
+                TURRET_BARREL_W as u32,
+                C_TURRET_BODY,
+                C_TURRET_BARREL,
+            );
             obj.position = (x - half, y - half - SPAWN_ANIM_DROP);
             obj.size = (TURRET_FULL_SIZE, TURRET_FULL_SIZE);
             obj.visible = false;
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (TURRET_FULL_SIZE, TURRET_FULL_SIZE), 0.0),
+                image: sprite.into(),
+                color: None,
+            });
         }
 
         s = st.lock().unwrap();

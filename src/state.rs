@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use crate::constants::*;
 use image::RgbaImage;
@@ -272,4 +272,12 @@ pub struct State {
     /// Set on first enter_space: background thread stores the decoded
     /// AnimatedSprite here; tick_solar_pending swaps it onto the object.
     pub solar_anim_pending: Option<Arc<Mutex<Option<AnimatedSprite>>>>,
+
+    // ── Passive-score dead-block system ───────────────────────────────────────
+    /// 5000-px block index the player is currently occupying (floor(px/5000)).
+    pub score_active_block: i32,
+    /// Ticks spent continuously in `score_active_block` without pause.
+    pub score_block_ticks: u32,
+    /// Blocks where passive time-score is permanently exhausted.
+    pub score_dead_blocks: HashSet<i32>,
 }

@@ -13,12 +13,48 @@ pub fn tick_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_bullet_collision(c, st);
 }
 
+#[inline]
+fn turret_phase_for_x(x: f32) -> u8 {
+    if x >= TURRET_PHASE_3_X {
+        3
+    } else if x >= TURRET_PHASE_2_X {
+        2
+    } else {
+        1
+    }
+}
+
+#[inline]
+fn turret_target_point(
+    phase: u8,
+    turret_center: (f32, f32),
+    player_pos: (f32, f32),
+    player_vel: (f32, f32),
+) -> (f32, f32) {
+    if phase < 3 {
+        return player_pos;
+    }
+    let (tcx, tcy) = turret_center;
+    let (px, py) = player_pos;
+    let (vx, vy) = player_vel;
+    let dx = px - tcx;
+    let dy = py - tcy;
+    let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+    // Predict with a gentle 40% lead time — physics games have rapidly changing
+    // velocity so a full intercept solution overshoots. 0.4× gives perceptible
+    // prediction without missing wildly when the player swings in an arc.
+    let lead_t = (dist / BULLET_SPEED * 0.4).clamp(0.0, TURRET_PREDICT_MAX_T);
+    (px + vx * lead_t, py + vy * lead_t)
+}
+
 // ── Aim barrels toward player ────────────────────────────────────────────────
 
 fn tick_turret_aim(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let s = st.lock().unwrap();
     let px = s.px;
     let py = s.py;
+    let pvx = s.vx;
+    let pvy = s.vy;
     let live = s.turret_live.clone();
     drop(s);
 
@@ -26,7 +62,9 @@ fn tick_turret_aim(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut(name) {
             let tcx = obj.position.0 + obj.size.0 * 0.5;
             let tcy = obj.position.1 + obj.size.1 * 0.5;
-            let angle = (py - tcy).atan2(px - tcx).to_degrees();
+            let phase = turret_phase_for_x(tcx);
+            let (tx, ty) = turret_target_point(phase, (tcx, tcy), (px, py), (pvx, pvy));
+            let angle = (ty - tcy).atan2(tx - tcx).to_degrees();
             obj.rotation = angle;
         }
     }
@@ -38,6 +76,8 @@ fn tick_turret_shoot(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let px = s.px;
     let py = s.py;
+    let pvx = s.vx;
+    let pvy = s.vy;
 
     // Collect turrets that are ready to shoot.
     let mut ready: Vec<(String, usize)> = Vec::new(); // (turret_id, timer_index)
@@ -55,8 +95,10 @@ fn tick_turret_shoot(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object(turret_id) {
             let tcx = obj.position.0 + obj.size.0 * 0.5;
             let tcy = obj.position.1 + obj.size.1 * 0.5;
-            let dx = px - tcx;
-            let dy = py - tcy;
+            let phase = turret_phase_for_x(tcx);
+            let (tx, ty) = turret_target_point(phase, (tcx, tcy), (px, py), (pvx, pvy));
+            let dx = tx - tcx;
+            let dy = ty - tcy;
             let dist = (dx * dx + dy * dy).sqrt().max(1.0);
             if dist > TURRET_DETECT_RADIUS {
                 continue;
@@ -64,15 +106,41 @@ fn tick_turret_shoot(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let vx = BULLET_SPEED * dx / dist;
             let vy = BULLET_SPEED * dy / dist;
             let tip_dist = TURRET_R + TURRET_BARREL_LEN;
-            let bx = tcx + tip_dist * dx / dist - BULLET_W * 0.5;
-            let by = tcy + tip_dist * dy / dist - BULLET_H * 0.5;
+            let muzzle_cx = tcx + tip_dist * dx / dist;
+            let muzzle_cy = tcy + tip_dist * dy / dist;
+            let shot_count = if phase >= 2 { 2usize } else { 1usize };
+            if s.bullet_free.len() < shot_count {
+                continue;
+            }
 
-            if let Some(bullet_id) = s.bullet_free.pop() {
-                s.bullet_live.push((bullet_id.clone(), vx, vy, BULLET_LIFETIME_TICKS));
-                shots.push((bullet_id, bx, by, vx, vy));
-                if let Some((_, ticks)) = s.turret_timers.get_mut(*timer_idx) {
-                    *ticks = TURRET_SHOOT_INTERVAL;
+            if shot_count == 1 {
+                if let Some(bullet_id) = s.bullet_free.pop() {
+                    let bx = muzzle_cx - BULLET_W * 0.5;
+                    let by = muzzle_cy - BULLET_H * 0.5;
+                    s.bullet_live.push((bullet_id.clone(), vx, vy, BULLET_LIFETIME_TICKS));
+                    shots.push((bullet_id, bx, by, vx, vy));
                 }
+            } else {
+                // Phase 2+: two bullets in succession along the fire axis.
+                // Bullet 1 at muzzle; bullet 2 behind it by TURRET_SUCCESSIVE_GAP px.
+                // Both travel at the same velocity so they stay spread apart in flight.
+                let fx = dx / dist;
+                let fy = dy / dist;
+                for offset in [0.0f32, -TURRET_SUCCESSIVE_GAP] {
+                    if let Some(bullet_id) = s.bullet_free.pop() {
+                        let cx = muzzle_cx + fx * offset;
+                        let cy = muzzle_cy + fy * offset;
+                        let bx = cx - BULLET_W * 0.5;
+                        let by = cy - BULLET_H * 0.5;
+                        s.bullet_live.push((bullet_id.clone(), vx, vy, BULLET_LIFETIME_TICKS));
+                        shots.push((bullet_id, bx, by, vx, vy));
+                    }
+                }
+            }
+
+            let reset_ticks = if phase >= 2 { TURRET_SHOOT_INTERVAL_P2 } else { TURRET_SHOOT_INTERVAL_FAST };
+            if let Some((_, ticks)) = s.turret_timers.get_mut(*timer_idx) {
+                *ticks = reset_ticks;
             }
         }
     }

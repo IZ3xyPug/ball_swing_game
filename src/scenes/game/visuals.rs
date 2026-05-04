@@ -30,6 +30,7 @@ pub fn tick_visuals(
     tick_pad_movers(c, st, frame_counter);
     tick_pad_thrusters(c, st);
     tick_zoom(c, st);
+    tick_debug_radii(c, st);
 }
 
 fn tick_pad_impact_animation(
@@ -393,4 +394,85 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         cam.zoom_anchor = Some((px, anchor_y));
         cam.smooth_zoom(target_zoom);
     }
+}
+
+// ── Debug radius visualizer (hold X = 1× radius, hold C = 2× radius) ───────
+
+fn tick_debug_radii(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Clear previous frame's debug rings.
+    let prev_count = match c.get_var("debug_ring_count") {
+        Some(Value::I32(v)) => v.max(0) as usize,
+        _ => 0,
+    };
+    for i in 0..prev_count {
+        c.remove_game_object(&format!("dbg_ring_{i}"));
+    }
+    c.set_var("debug_ring_count", 0i32);
+
+    let show_x = c.key("x");
+    let show_c = c.key("c");
+    if !show_x && !show_c { return; }
+    let multiplier: f32 = if show_c { 2.0 } else { 1.0 };
+
+    let (spinner_names, gwell_names) = {
+        let s = st.lock().unwrap();
+        (s.spinner_live.clone(), s.gwell_live.clone())
+    };
+
+    let mut idx = 0usize;
+
+    // Spinner rings — yellow, radius = SPINNER_W / 2.
+    let spinner_data: Vec<(f32, f32)> = spinner_names.iter().filter_map(|name| {
+        c.get_game_object(name).map(|o| (
+            o.position.0 + SPINNER_W * 0.5,
+            o.position.1 + SPINNER_H * 0.5,
+        ))
+    }).collect();
+
+    for (cx, cy) in spinner_data {
+        let r = (SPINNER_W * 0.5 * multiplier) as u32;
+        let rf = r as f32;
+        let img = ring_outline_img(r, 255, 230, 0);
+        let mut go = GameObject::build(format!("dbg_ring_{idx}"))
+            .position(cx - rf, cy - rf)
+            .size(rf * 2.0, rf * 2.0)
+            .layer(9990)
+            .finish();
+        go.set_image(Image {
+            shape: ShapeType::Rectangle(0.0, (rf * 2.0, rf * 2.0), 0.0),
+            image: Arc::new(img),
+            color: None,
+        });
+        c.add_game_object(format!("dbg_ring_{idx}"), go);
+        idx += 1;
+    }
+
+    // GWell rings — cyan, radius = planet_radius.
+    let gwell_data: Vec<(f32, f32, f32)> = gwell_names.iter().filter_map(|name| {
+        c.get_game_object(name).map(|o| (
+            o.position.0 + o.size.0 * 0.5,
+            o.position.1 + o.size.1 * 0.5,
+            o.planet_radius.unwrap_or(GWELL_RADIUS_MIN),
+        ))
+    }).collect();
+
+    for (cx, cy, planet_r) in gwell_data {
+        let r = (planet_r * multiplier) as u32;
+        let rf = r as f32;
+        let img = ring_outline_img(r, 0, 200, 255);
+        let mut go = GameObject::build(format!("dbg_ring_{idx}"))
+            .position(cx - rf, cy - rf)
+            .size(rf * 2.0, rf * 2.0)
+            .layer(9990)
+            .finish();
+        go.set_image(Image {
+            shape: ShapeType::Rectangle(0.0, (rf * 2.0, rf * 2.0), 0.0),
+            image: Arc::new(img),
+            color: None,
+        });
+        c.add_game_object(format!("dbg_ring_{idx}"), go);
+        idx += 1;
+    }
+
+    c.set_var("debug_ring_count", idx as i32);
 }
