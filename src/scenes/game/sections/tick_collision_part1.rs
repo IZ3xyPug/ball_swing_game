@@ -204,6 +204,8 @@
                         .max(PAD_BOUNCE_MIN_FACTOR);
                     s.vy = PAD_BOUNCE_VY_START * bounce_factor * s.gravity_dir;
                     s.pad_bounce_count = s.pad_bounce_count.saturating_add(1);
+                    s.player_ball_hit_rewind = true;
+                    s.player_ball_frame_timer = 0;
                     // Place player outside pad
                     if let Some(pad_obj) = c.get_game_object(&pad_name) {
                         if falling_down {

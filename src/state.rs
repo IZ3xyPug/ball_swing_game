@@ -280,4 +280,9 @@ pub struct State {
     pub score_block_ticks: u32,
     /// Blocks where passive time-score is permanently exhausted.
     pub score_dead_blocks: HashSet<i32>,
+
+    // ── Player ball animation ─────────────────────────────────────────────────
+    pub player_ball_frame: usize,
+    pub player_ball_hit_rewind: bool,
+    pub player_ball_frame_timer: u32,
 }

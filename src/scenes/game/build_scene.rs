@@ -131,6 +131,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         tech_bounce_anim_frames_flipped,
         pad_thruster_static_img,
         pad_thruster_anim_template,
+        pad_thruster_anim_template_flipped,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,
@@ -767,6 +768,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 score_active_block: i32::MIN,
                 score_block_ticks:  0,
                 score_dead_blocks:  std::collections::HashSet::new(),
+
+                player_ball_frame:       0,
+                player_ball_hit_rewind:  false,
+                player_ball_frame_timer: 0,
             };
 
             // Reuse persistent Arc across respawns.
@@ -870,6 +875,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 &tech_bounce_static_img_flipped,
                 &pad_thruster_static_img,
                 pad_thruster_anim_template.as_ref(),
+                pad_thruster_anim_template_flipped.as_ref(),
             );
 
             // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
@@ -1211,6 +1217,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let tech_bounce_anim_flipped = tech_bounce_anim_frames_flipped.clone();
                 let pad_thruster_static_img = pad_thruster_static_img.clone();
                 let pad_thruster_anim_template = pad_thruster_anim_template.clone();
+                let pad_thruster_anim_template_flipped = pad_thruster_anim_template_flipped.clone();
 
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
@@ -1464,6 +1471,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &tech_bounce_img_flipped,
                         &pad_thruster_static_img,
                         pad_thruster_anim_template.as_ref(),
+                        pad_thruster_anim_template_flipped.as_ref(),
                     );
 
                     // ── Culling ──────────────────────────────────────────
@@ -1473,11 +1481,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     collision::tick_collision(c, &st);
 
                     // ── Pickups ──────────────────────────────────────────
-                    pickups::tick_pickups(c, &st);
+                    pickups::tick_pickups(c, &st, &tech_bounce_img, &tech_bounce_img_flipped, pad_thruster_anim_template.as_ref(), pad_thruster_anim_template_flipped.as_ref());
 
                     // ── Manual gravity flip (key '2') ───────────────────
                     if matches!(c.get_var("manual_flip_queued"), Some(Value::Bool(true))) {
-                        pickups::trigger_flip(c, &st);
+                        pickups::trigger_flip(c, &st, &tech_bounce_img, &tech_bounce_img_flipped, pad_thruster_anim_template.as_ref(), pad_thruster_anim_template_flipped.as_ref());
                         if let Some(cam) = c.camera_mut() {
                             cam.flash_with(
                                 Color(160, 50, 220, 200),

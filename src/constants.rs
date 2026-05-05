@@ -106,13 +106,12 @@ pub const PAD_POOL_SIZE:  usize = 32;
 pub const PAD_GAP_MIN:    f32 = 5000.0;
 pub const PAD_GAP_MAX:    f32 = 9000.0;
 
-// techbouncer.gif is decoded into this fixed gameplay footprint.
+// techbouncernew.gif is decoded into this fixed gameplay footprint.
 // Art scaling changes should happen in the loader, not by changing pad geometry.
-pub const PAD_W:          f32 = 1162.5;
-pub const PAD_H:          f32 = 420.0;
-/// techbouncer.gif visual occupancy ratio inside the 256px source frame.
-/// Used to keep bounce collision width aligned to visible pad art.
-pub const PAD_COLLISION_WIDTH_FACTOR: f32 = 170.0 / 256.0;
+pub const PAD_W:          f32 = 775.0;
+pub const PAD_H:          f32 = 262.5;
+/// techbouncernew.gif fills the full frame — collision covers the entire width.
+pub const PAD_COLLISION_WIDTH_FACTOR: f32 = 1.0;
 
 #[inline]
 pub fn pad_collision_w() -> f32 {
@@ -144,9 +143,8 @@ pub const PAD_MOVE_RANGE: f32 = 250.0;
 pub const PAD_MOVE_SPEED: f32 = 3.0;
 
 pub fn pad_corner_radius() -> f32 {
-    // Tuned to the current bounce-pad art profile (rounded_rectangle + 9-slice).
-    // At PAD_H=350 this yields ~89px, matching the rendered corner silhouette.
-    (PAD_H * 0.254).clamp(1.0, PAD_H * 0.5 - 1.0)
+    // techbouncernew.gif has a pill/capsule shape — corner radius ≈ half height.
+    (PAD_H * 0.45).clamp(1.0, PAD_H * 0.5 - 1.0)
 }
 
 // ── Generation — Spinners ─────────────────────────────────────────────────────
@@ -353,7 +351,7 @@ pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 // ── Asset paths ──────────────────────────────────────────────────────────────
 pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin.gif");
 pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
-pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/techbouncer.gif");
+pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/techbouncernew.gif");
 pub const TECH_BOUNCE_FPS: f32 = 12.0;
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
@@ -369,12 +367,21 @@ pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/asset
 pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
 pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
+pub const ASSET_CALICOBALL_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/calicoball.gif");
+pub const ASSET_BLACKHOLE1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/blackhole1.gif");
+pub const ASSET_WORMHOLE2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wormhole2.gif");
+pub const ASSET_GWELLON_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwellon.gif");
+pub const ASSET_GWELLOFF_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwelloff.gif");
+pub const CALICO_FPS: f32 = 12.0;
+pub const GWELL_FPS: f32 = 10.0;
+pub const BLACKHOLE_FPS: f32 = 12.0;
 pub const PAD_THRUSTER_FPS: f32 = 12.0;
 pub const PAD_THRUSTER_W: f32 = PAD_W * 0.24;
 pub const PAD_THRUSTER_H: f32 = PAD_H * 0.775;
-// Extra top embed so the thruster visually tucks into the pad body.
-pub const PAD_THRUSTER_HIDE_TOP: f32 = 56.0;
-pub const PAD_THRUSTER_RAISE_Y: f32 = PAD_THRUSTER_H * 0.30 + PLAYER_R + 20.0;
+// Extra top pixels of the thruster image tucked inside the pad body.
+pub const PAD_THRUSTER_HIDE_TOP: f32 = 70.0;
+// Small additional embed so thruster art top blends into the pad underside.
+pub const PAD_THRUSTER_RAISE_Y: f32 = PAD_THRUSTER_H * 0.05;
 
 // ── Generation — Gravity Wells ────────────────────────────────────────────────
 

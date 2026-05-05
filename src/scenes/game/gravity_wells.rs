@@ -1,9 +1,24 @@
 use quartz::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::constants::*;
-use crate::images::gwell_ring_cached;
 use crate::state::*;
+
+static GWELLON_TEMPLATE:  OnceLock<AnimatedSprite> = OnceLock::new();
+static GWELLOFF_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
+
+fn gwellon_template() -> AnimatedSprite {
+    GWELLON_TEMPLATE.get_or_init(|| {
+        AnimatedSprite::new(include_bytes!("../../../assets/gwellon.gif"), (256.0, 256.0), GWELL_FPS)
+            .expect("gwellon.gif decode")
+    }).clone()
+}
+fn gwelloff_template() -> AnimatedSprite {
+    GWELLOFF_TEMPLATE.get_or_init(|| {
+        AnimatedSprite::new(include_bytes!("../../../assets/gwelloff.gif"), (256.0, 256.0), GWELL_FPS)
+            .expect("gwelloff.gif decode")
+    }).clone()
+}
 
 /// Tick the gravity-well on/off cycle and visual pulse.
 pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
@@ -30,53 +45,15 @@ pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
             let visual_r = obj.size.0 * 0.5;
             if *now_active {
                 obj.planet_radius = Some(obj.planet_radius.unwrap_or(GWELL_RADIUS_MIN));
-                let ring_img = gwell_ring_cached(
-                    visual_r,
-                    C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2,
-                    GWELL_RING_COUNT, 200.0,
-                );
                 let d = visual_r * 2.0;
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                    image: ring_img,
-                    color: None,
-                });
-                obj.set_glow(GlowConfig {
-                    color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 200),
-                    width: 14.0,
-                });
+                obj.size = (d, d);
+                obj.set_animation(gwellon_template());
             } else {
                 obj.planet_radius = None;
-                let ring_img = gwell_ring_cached(
-                    visual_r,
-                    C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2,
-                    GWELL_RING_COUNT, 80.0,
-                );
                 let d = visual_r * 2.0;
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                    image: ring_img,
-                    color: None,
-                });
-                obj.set_glow(GlowConfig {
-                    color: Color(C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, 60),
-                    width: 6.0,
-                });
+                obj.size = (d, d);
+                obj.set_animation(gwelloff_template());
             }
-        }
-    }
-
-    // Visual pulse for active wells — modulate glow width/alpha.
-    for (id, _, active) in &timers {
-        if !active { continue; }
-        if let Some(obj) = c.get_game_object_mut(id) {
-            let t = frame as f32 * GWELL_PULSE_SPEED;
-            let pulse = GWELL_PULSE_MIN + (1.0 - GWELL_PULSE_MIN) * ((t.sin() + 1.0) * 0.5);
-            let glow_w = 14.0 * pulse;
-            obj.set_glow(GlowConfig {
-                color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, (200.0 * pulse) as u8),
-                width: glow_w,
-            });
         }
     }
 
