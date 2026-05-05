@@ -201,8 +201,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // ── Apply selected character colour to player circle ─────────
             {
-                let char_idx = (canvas.get_i32("player_char_selected").max(0) as usize)
-                    .min(PLAYER_CHAR_COLORS.len() - 1);
+                let char_val = match canvas.get_var("player_char_selected") {
+                    Some(Value::I32(v)) => v.max(0),
+                    _ => 0,
+                };
+                let char_idx = (char_val as usize).min(PLAYER_CHAR_COLORS.len() - 1);
                 let (cr, cg, cb) = PLAYER_CHAR_COLORS[char_idx];
                 if let Some(obj) = canvas.get_game_object_mut("player") {
                     obj.set_image(Image {
@@ -267,6 +270,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     if *key == Key::Character("4".into()) {
+                        c.set_var("death_sound_mode", 0i32); // 0 = man (default)
                         // Reduced space background zoom amount.
                         c.set_var("space_zoom_mode", 4);
                         return;
@@ -350,8 +354,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
-                    // ── Asteroid hooks toggle (key '3') ─────────────────────────
+                    // ── Asteroid hooks toggle (key '3') + switch to arcade death sound ──
                     if *key == Key::Character("3".into()) {
+                        c.set_var("death_sound_mode", 1i32); // 1 = arcade
                         let game_paused = c.is_paused()
                             || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
                         if game_paused { return; }
@@ -1720,14 +1725,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if died_to_sun {
                             c.set_var("died_to_sun", false);
                             c.set_var("died_to_oxygen", false);
+                            play_death_sound(c);
                             c.load_scene("gameover_sun");
                         } else if died_to_oxygen {
                             c.set_var("died_to_oxygen", false);
+                            play_death_sound(c);
                             c.load_scene("gameover_oxygen");
                         } else {
                             if !died_to_oxygen {
                                 c.set_var("died_to_oxygen", false);
                             }
+                            play_death_sound(c);
                             c.load_scene("gameover");
                         }
                     }

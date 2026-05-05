@@ -1,7 +1,18 @@
 use crate::constants::*;
 use crate::images::{circle_cached, asteroid_hook_image_cached};
-use quartz::{Image, ShapeType};
+use quartz::{Canvas, Image, ShapeType, SoundOptions, Value};
 use std::sync::OnceLock;
+
+/// Play the currently-selected death sound. Call before any load_scene("gameover*").
+/// death_sound_mode: 0 = man_game_over (default), 1 = arcade_game_over.
+pub fn play_death_sound(c: &mut Canvas) {
+    let mode = match c.get_var("death_sound_mode") {
+        Some(Value::I32(v)) => v,
+        _ => 0,
+    };
+    let asset = if mode == 1 { ASSET_ARCADE_GAME_OVER } else { ASSET_MAN_GAME_OVER };
+    c.play_sound_with(asset, SoundOptions::new().volume(1.0));
+}
 
 /// Hook image using circle_cached — keeps hooks in the same
 /// render batch as other Rectangle objects to avoid z-order artifacts.

@@ -949,6 +949,7 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut("rope") {
             obj.visible = false;
         }
+        play_death_sound(c);
         c.load_scene("gameover");
         return;
     }

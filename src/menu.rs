@@ -10,15 +10,22 @@ use crate::shop;
 /// Camera pans between these two regions (from VH down to 0) for the transition.
 const MENU_Y: f32 = VH;
 
+/// Cached aurora earth background — decoded and resized once, then Arc-shared.
+static AURORA_BG_CACHE: std::sync::OnceLock<Arc<image::RgbaImage>> = std::sync::OnceLock::new();
+
 /// Load aurora_earth.gif at the given dimensions using Lanczos3 for high-quality resize.
+/// Result is cached so subsequent calls clone an Arc pointer instead of re-decoding.
 fn bright_background_2(w: f32, h: f32) -> Image {
-    let aurora_src = image::load_from_memory(include_bytes!("../assets/aurora_earth.gif"))
-        .expect("aurora_earth.gif decode failed")
-        .to_rgba8();
-    let pixels = image::imageops::resize(
-        &aurora_src, w as u32, h as u32, image::imageops::FilterType::Lanczos3,
-    );
-    Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: pixels.into(), color: None }
+    let arc = AURORA_BG_CACHE.get_or_init(|| {
+        let aurora_src = image::load_from_memory(include_bytes!("../assets/aurora_earth.gif"))
+            .expect("aurora_earth.gif decode failed")
+            .to_rgba8();
+        let pixels = image::imageops::resize(
+            &aurora_src, w as u32, h as u32, image::imageops::FilterType::Lanczos3,
+        );
+        Arc::new(pixels)
+    });
+    Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: Arc::clone(arc), color: None }
 }
 
 const MENU_UI_ANIM_FRAMES: i32 = 60;

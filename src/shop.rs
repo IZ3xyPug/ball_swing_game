@@ -132,7 +132,7 @@ pub fn update_all_slot_labels(c: &mut Canvas, selected: usize) {
 }
 
 fn bright_background(w: f32, h: f32) -> Image {
-    load_image_sized(ASSET_BACKGROUND, w, h)
+    star_field(w as u32, h as u32, STARFIELD_STAR_COUNT, 0xCAFE_BABE)
 }
 
 // ── Public API for menu.rs ─────────────────────────────────────────────────
