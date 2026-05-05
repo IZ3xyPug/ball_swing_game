@@ -42,6 +42,7 @@ pub struct PoolSets {
     pub tech_bounce_anim_frames_flipped: Vec<Image>,
     pub pad_thruster_static_img: Image,
     pub pad_thruster_anim_template: Option<AnimatedSprite>,
+    pub pad_thruster_anim_template_flipped: Option<AnimatedSprite>,
     // ── Space zone pools
     pub rocket_pad_free:   Vec<String>,
     pub space_planet_free: Vec<String>,
@@ -54,7 +55,7 @@ pub struct PoolSets {
 }
 
 fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
-    let bytes = include_bytes!("../../../assets/techbouncer.gif");
+    let bytes = include_bytes!("../../../assets/techbouncernew.gif");
     let cursor = std::io::Cursor::new(bytes.as_slice());
     let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) else {
         return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
@@ -248,6 +249,17 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     player.collision_layer = PLAYER_COLLISION_LAYER;
     player.collision_mask  = ASTEROID_COLLISION_LAYER;
     player.layer = LAYER_PLAYER;
+
+    // Calicoball animated sprite — replaces the procedural circle.
+    // fps=0 freezes auto-advance; tick_player_ball_animation drives frames manually.
+    if let Ok(mut calico) = AnimatedSprite::new(
+        include_bytes!("../../../assets/calicoball.gif"),
+        (PLAYER_R * 2.0, PLAYER_R * 2.0),
+        CALICO_FPS,
+    ) {
+        calico.set_fps(0.0);
+        player.set_animation(calico);
+    }
 
     // Velocity-facing air shield. The gif is mirrored on X once at load time,
     // then rotated each post-physics tick based on player net velocity.
@@ -558,6 +570,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         (PAD_THRUSTER_W, PAD_THRUSTER_H),
         PAD_THRUSTER_FPS,
     ).ok();
+    let pad_thruster_anim_template_flipped: Option<AnimatedSprite> = pad_thruster_anim_template
+        .as_ref()
+        .map(|a| { let mut f = a.clone(); f.flip_vertical_frames(); f });
     let pad_thruster_static_img = pad_thruster_anim_template
         .as_ref()
         .map(|a| a.get_current_image())
@@ -1059,6 +1074,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         tech_bounce_anim_frames_flipped,
         pad_thruster_static_img,
         pad_thruster_anim_template,
+        pad_thruster_anim_template_flipped,
         rocket_pad_free,
         space_planet_free,
         space_hook_free,

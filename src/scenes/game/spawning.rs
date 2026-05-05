@@ -1,11 +1,20 @@
 use quartz::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::constants::*;
 use crate::gameplay::*;
 use crate::images::*;
 use crate::state::*;
 use super::helpers::*;
+
+static GWELLON_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
+
+fn gwellon_template() -> AnimatedSprite {
+    GWELLON_TEMPLATE.get_or_init(|| {
+        AnimatedSprite::new(include_bytes!("../../../assets/gwellon.gif"), (256.0, 256.0), GWELL_FPS)
+            .expect("gwellon.gif decode")
+    }).clone()
+}
 
 /// Returns animation duration in ticks, scaled down at higher player speeds.
 /// Base: SPAWN_ANIM_TICKS at normal pace. Halves at MOMENTUM_CAP.
@@ -96,6 +105,7 @@ pub fn tick_spawning(
     tech_bounce_img_flipped: &Image,
     pad_thruster_static_img: &Image,
     pad_thruster_anim_template: Option<&AnimatedSprite>,
+    pad_thruster_anim_template_flipped: Option<&AnimatedSprite>,
 ) {
     if st.lock().unwrap().in_space_mode {
         return;
@@ -109,7 +119,7 @@ pub fn tick_spawning(
     }
     spawn_hooks(c, st);
     if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
-        spawn_pads(c, st, tech_bounce_img, tech_bounce_img_flipped, pad_thruster_static_img, pad_thruster_anim_template);
+        spawn_pads(c, st, tech_bounce_img, tech_bounce_img_flipped, pad_thruster_static_img, pad_thruster_anim_template, pad_thruster_anim_template_flipped);
     }
     if matches!(c.get_var("spawn_spinners_on"), Some(Value::Bool(true)) | None) {
         spawn_spinners(c, st);
@@ -414,6 +424,7 @@ fn spawn_pads(
     tech_bounce_img_flipped: &Image,
     pad_thruster_static_img: &Image,
     pad_thruster_anim_template: Option<&AnimatedSprite>,
+    pad_thruster_anim_template_flipped: Option<&AnimatedSprite>,
 ) {
     let mut s = st.lock().unwrap();
     let mut pads_spawned = 0usize;
@@ -502,8 +513,8 @@ fn spawn_pads(
             obj.position = (x, y + drop_offset); // start off-screen on the gravity-entry side
             obj.visible = false; // hidden until animation starts
             obj.animated_sprite = None;
-            obj.rotation = if flipped { 180.0 } else { 0.0 };
-            obj.set_image(tech_bounce_img.clone());
+            obj.rotation = 0.0;
+            obj.set_image(pad_img.clone());
         }
         let thr_id = pad_thruster_id(&id);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
@@ -513,14 +524,9 @@ fn spawn_pads(
             thr.visible = false;
             thr.animated_sprite = None;
             thr.set_image(pad_thruster_static_img.clone());
-            if let Some(anim) = pad_thruster_anim_template {
-                let mut thruster_anim = anim.clone();
-                // If gravity is currently flipped, pre-flip the frames so the
-                // thruster displays correctly without the per-frame overhead.
-                if s_gravity_dir < 0.0 {
-                    thruster_anim.flip_vertical_frames();
-                }
-                thr.set_animation(thruster_anim);
+            let thr_anim = if s_gravity_dir < 0.0 { pad_thruster_anim_template_flipped } else { pad_thruster_anim_template };
+            if let Some(anim) = thr_anim {
+                thr.set_animation(anim.clone());
             }
         }
 
@@ -993,21 +999,8 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.visible = false;
             obj.planet_radius = Some(radius);
             obj.gravity_strength = strength;
-            // Set the stepped-alpha ring image
-            let ring_img = gwell_ring_cached(
-                visual_r,
-                C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2,
-                GWELL_RING_COUNT, 200.0,
-            );
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                image: ring_img,
-                color: None,
-            });
-            obj.set_glow(GlowConfig {
-                color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 200),
-                width: 14.0,
-            });
+            // Set the gwellon animated sprite (cloned from pre-decoded template).
+            obj.set_animation(gwellon_template());
         }
 
         s = st.lock().unwrap();

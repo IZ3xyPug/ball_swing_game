@@ -5,22 +5,22 @@ use crate::constants::*;
 use crate::state::*;
 use super::helpers::pad_thruster_id;
 
-pub fn tick_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+pub fn tick_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     tick_coin_magnet(c, st);
     tick_coin_collect(c, st);
-    tick_flip_collect(c, st);
+    tick_flip_collect(c, st, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
     tick_score_x2_collect(c, st);
     tick_zero_g_collect(c, st);
-    tick_flip_timer(c, st);
+    tick_flip_timer(c, st, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
     tick_score_x2_timer(st);
     tick_zero_g_timer(c, st);
 }
 
 // ── Mirror all live obstacles around VH centre on gravity flip ──────────────
 
-fn flip_all_live_objects(c: &mut Canvas, s: &State) {
+fn flip_all_live_objects(c: &mut Canvas, s: &State, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     let flipped = s.gravity_dir < 0.0;
-    let pad_rotation = if flipped { 180.0 } else { 0.0 };
+    let pad_img = if flipped { tech_bounce_img_flipped } else { tech_bounce_img };
     // Mirror helper: new_y = VH - old_y - height
     // Hooks
     for name in &s.live_hooks {
@@ -32,12 +32,18 @@ fn flip_all_live_objects(c: &mut Canvas, s: &State) {
     for name in &s.pad_live {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.position.1 = VH - obj.position.1 - obj.size.1;
-            obj.rotation = pad_rotation;
+            obj.rotation = 0.0;
+            obj.animated_sprite = None;
+            obj.set_image(pad_img.clone());
         }
         let thr_id = pad_thruster_id(name);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
             thr.position.1 = VH - thr.position.1 - thr.size.1;
-            thr.rotation = pad_rotation;
+            thr.rotation = 0.0;
+            let thr_tmpl = if flipped { thruster_anim_flipped } else { thruster_anim };
+            if let Some(anim) = thr_tmpl {
+                thr.set_animation(anim.clone());
+            }
         }
     }
     // Spinners
@@ -98,8 +104,8 @@ fn flip_all_live_objects(c: &mut Canvas, s: &State) {
             obj.position.1 = VH - obj.position.1 - obj.size.1;
         }
     }
-    // Pad thrusters — bake the vertical flip into animation frames once at flip time.
-    // Position was already flipped in the Pads loop above; only flip the frames here.
+    // Pad thrusters — position was already flipped in the Pads loop above;
+    // animation swap is done inside that loop. Nothing extra needed here.
     // Asteroids
     for name in &s.space_asteroid_live {
         if let Some(obj) = c.get_game_object_mut(name) {
@@ -152,9 +158,9 @@ fn mirror_player_for_flip(s: &mut State) {
     }
 }
 
-fn apply_flip_transform(c: &mut Canvas, s: &mut State) {
+fn apply_flip_transform(c: &mut Canvas, s: &mut State, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     mirror_player_for_flip(s);
-    flip_all_live_objects(c, s);
+    flip_all_live_objects(c, s, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
     flip_mover_origins(c, s);
     // Negate bullet vertical velocities so they keep flying in the right direction.
     for (_, _, vy, _) in s.bullet_live.iter_mut() {
@@ -162,11 +168,11 @@ fn apply_flip_transform(c: &mut Canvas, s: &mut State) {
     }
 }
 
-pub fn trigger_flip(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+pub fn trigger_flip(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     let mut s = st.lock().unwrap();
     s.gravity_dir *= -1.0;
     s.flip_timer = FLIP_DURATION;
-    apply_flip_transform(c, &mut s);
+    apply_flip_transform(c, &mut s, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
     let gdir = s.gravity_dir;
     let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
     let hooked = s.hooked;
@@ -285,7 +291,7 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Flip collect ────────────────────────────────────────────────────────────
 
-fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     let mut s = st.lock().unwrap();
     let collect_r = PLAYER_R + (FLIP_W.min(FLIP_H)) * 0.5 + 10.0;
     let live = s.flip_live.clone();
@@ -319,7 +325,7 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        trigger_flip(c, st);
+        trigger_flip(c, st, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
 
         // coin_up SFX on gravity flip collect
         c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(0.2));
@@ -417,14 +423,14 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Flip timer ──────────────────────────────────────────────────────────────
 
-fn tick_flip_timer(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+fn tick_flip_timer(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     let mut s = st.lock().unwrap();
     if s.flip_timer > 0 {
         s.flip_timer -= 1;
         if s.flip_timer == 0 {
             // Gravity reverts.
             s.gravity_dir *= -1.0;
-            apply_flip_transform(c, &mut s);
+            apply_flip_transform(c, &mut s, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
             let gdir = s.gravity_dir;
             let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
             let hooked = s.hooked;

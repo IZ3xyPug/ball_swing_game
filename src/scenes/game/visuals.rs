@@ -31,6 +31,7 @@ pub fn tick_visuals(
     tick_pad_thrusters(c, st);
     tick_zoom(c, st);
     tick_debug_radii(c, st);
+    tick_player_ball_animation(c, st);
 }
 
 fn tick_pad_impact_animation(
@@ -296,7 +297,6 @@ fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         (s.pad_live.clone(), s.gravity_dir < 0.0)
     };
 
-    let pad_rotation = if flipped { 180.0 } else { 0.0 };
     let thruster_embed = PAD_THRUSTER_HIDE_TOP + PAD_THRUSTER_RAISE_Y;
 
     for pad_id in &pad_ids {
@@ -307,10 +307,6 @@ fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             continue;
         };
 
-        if let Some(pad) = c.get_game_object_mut(pad_id) {
-            pad.rotation = pad_rotation;
-        }
-
         let thr_id = pad_thruster_id(pad_id);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
             thr.position.0 = px + (PAD_W - PAD_THRUSTER_W) * 0.5;
@@ -319,7 +315,7 @@ fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             } else {
                 py + PAD_H - thruster_embed
             };
-            thr.rotation = pad_rotation;
+            thr.rotation = 0.0;
             thr.layer = layer - 1;
             thr.visible = vis;
         }
@@ -475,4 +471,61 @@ fn tick_debug_radii(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     c.set_var("debug_ring_count", idx as i32);
+}
+
+fn tick_player_ball_animation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let frame_count = c.get_game_object("player")
+        .and_then(|p| p.animated_sprite.as_ref())
+        .map(|a| a.frame_count())
+        .unwrap_or(1);
+    if frame_count <= 1 { return; }
+    let last_frame = frame_count - 1;
+
+    let (vy, gravity_dir, hooked, in_space) = {
+        let s = st.lock().unwrap();
+        (s.vy, s.gravity_dir, s.hooked, s.in_space_mode)
+    };
+
+    let mut s = st.lock().unwrap();
+    s.player_ball_frame_timer = s.player_ball_frame_timer.saturating_add(1);
+
+    const FRAME_STEP_TICKS: u32 = 3;
+    let step_this_tick = s.player_ball_frame_timer % FRAME_STEP_TICKS == 0;
+
+    if step_this_tick {
+        if hooked {
+            // Hooked to a node: fast-rewind to frame 0 and stay there.
+            s.player_ball_hit_rewind = false;
+            if s.player_ball_frame > 0 {
+                s.player_ball_frame = s.player_ball_frame.saturating_sub(2);
+            }
+        } else if s.player_ball_hit_rewind {
+            // Pad-bounce fast rewind.
+            if s.player_ball_frame == 0 {
+                s.player_ball_hit_rewind = false;
+            } else {
+                s.player_ball_frame = s.player_ball_frame.saturating_sub(2);
+                if s.player_ball_frame == 0 {
+                    s.player_ball_hit_rewind = false;
+                }
+            }
+        } else {
+            // Free flight: in space always advance; normal zone advance only while rising.
+            let should_advance = in_space || (vy * gravity_dir < 0.0);
+            if should_advance {
+                if s.player_ball_frame < last_frame { s.player_ball_frame += 1; }
+            } else {
+                if s.player_ball_frame > 0 { s.player_ball_frame -= 1; }
+            }
+        }
+    }
+
+    let target_frame = s.player_ball_frame;
+    drop(s);
+
+    if let Some(player) = c.get_game_object_mut("player") {
+        if let Some(anim) = player.animated_sprite.as_mut() {
+            anim.set_frame(target_frame);
+        }
+    }
 }

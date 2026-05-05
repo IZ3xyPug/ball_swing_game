@@ -211,6 +211,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 key: Key::Named(NamedKey::Space),
                 action: Action::Custom { name: "goto_game".into() },
                 target: Target::name("start_btn"),
+                modifiers: None,
             },
             Target::name("start_btn"),
         )
@@ -749,6 +750,7 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
                 key: Key::Named(NamedKey::Space),
                 action: Action::Custom { name: "go_retry".into() },
                 target: Target::name("retry_btn"),
+                modifiers: None,
             },
             Target::name("retry_btn"),
         )
@@ -937,6 +939,7 @@ pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
                 key: Key::Named(NamedKey::Space),
                 action: Action::Custom { name: "sun_go_retry".into() },
                 target: Target::name("sun_retry_btn"),
+                modifiers: None,
             },
             Target::name("sun_retry_btn"),
         )
@@ -1118,6 +1121,7 @@ pub fn build_gameover_oxygen_scene(ctx: &mut Context) -> Scene {
                 key: Key::Named(NamedKey::Space),
                 action: Action::Custom { name: "oxy_go_retry".into() },
                 target: Target::name("oxy_retry_btn"),
+                modifiers: None,
             },
             Target::name("oxy_retry_btn"),
         )

@@ -13,8 +13,7 @@
 
 use quartz::*;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use crate::constants::*;
@@ -22,6 +21,29 @@ use crate::images::*;
 use crate::objects::*;
 use crate::state::*;
 use super::helpers::*;
+
+static BLACKHOLE1_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
+static WORMHOLE2_TEMPLATE:  OnceLock<AnimatedSprite> = OnceLock::new();
+static GWELLOFF_TEMPLATE:   OnceLock<AnimatedSprite> = OnceLock::new();
+
+fn blackhole1_template() -> AnimatedSprite {
+    BLACKHOLE1_TEMPLATE.get_or_init(|| {
+        AnimatedSprite::new(include_bytes!("../../../assets/blackhole1.gif"), (256.0, 256.0), BLACKHOLE_FPS)
+            .expect("blackhole1.gif decode")
+    }).clone()
+}
+fn wormhole2_template() -> AnimatedSprite {
+    WORMHOLE2_TEMPLATE.get_or_init(|| {
+        AnimatedSprite::new(include_bytes!("../../../assets/wormhole2.gif"), (256.0, 256.0), 12.0)
+            .expect("wormhole2.gif decode")
+    }).clone()
+}
+fn gwelloff_template() -> AnimatedSprite {
+    GWELLOFF_TEMPLATE.get_or_init(|| {
+        AnimatedSprite::new(include_bytes!("../../../assets/gwelloff.gif"), (256.0, 256.0), GWELL_FPS)
+            .expect("gwelloff.gif decode")
+    }).clone()
+}
 
 const SPACE_COIN_KIND_CAT: u8 = 0;
 const SPACE_COIN_KIND_CAT_BLUE: u8 = 1;
@@ -1546,15 +1568,7 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.tags.push("space_planet".to_string());
             }
             obj.visible       = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                image: gwell_ring_cached(visual_r, C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, GWELL_RING_COUNT, 200.0),
-                color: None,
-            });
-            obj.set_glow(GlowConfig {
-                color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 160),
-                width: 12.0,
-            });
+            obj.set_animation(blackhole1_template());
         }
 
         // Place nearby hooks so the player can escape the gravity pull
@@ -1618,20 +1632,10 @@ fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
                 .unwrap_or(SPACE_BLACKHOLE_RADIUS_MIN);
             if *now_active {
                 obj.planet_radius = Some(blackhole_influence_r(gravity_r));
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                    image: gwell_ring_cached(visual_r, C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, GWELL_RING_COUNT, 200.0),
-                    color: None,
-                });
-                obj.set_glow(GlowConfig { color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, 200), width: 14.0 });
+                obj.set_animation(blackhole1_template());
             } else {
                 obj.planet_radius = None;
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                    image: gwell_ring_cached(visual_r, C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, GWELL_RING_COUNT, 80.0),
-                    color: None,
-                });
-                obj.set_glow(GlowConfig { color: Color(C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, 60), width: 6.0 });
+                obj.set_animation(gwelloff_template());
             }
         }
     }
@@ -1640,12 +1644,7 @@ fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     for (id, _, active) in &timers {
         if !active || marker_ids.iter().any(|mid| mid == id) { continue; }
         if let Some(obj) = c.get_game_object_mut(id) {
-            let t = frame as f32 * GWELL_PULSE_SPEED;
-            let pulse = GWELL_PULSE_MIN + (1.0 - GWELL_PULSE_MIN) * ((t.sin() + 1.0) * 0.5);
-            obj.set_glow(GlowConfig {
-                color: Color(C_GWELL_ACTIVE.0, C_GWELL_ACTIVE.1, C_GWELL_ACTIVE.2, (200.0 * pulse) as u8),
-                width: 14.0 * pulse,
-            });
+            obj.rotation = (obj.rotation + 0.08).rem_euclid(360.0);
         }
     }
 }
@@ -1780,15 +1779,7 @@ fn tick_space_blackhole_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.size = (d, d);
                 obj.planet_radius = None;
                 obj.visible = true;
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                    image: gwell_ring_cached(visual_r, C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, GWELL_RING_COUNT, 220.0),
-                    color: None,
-                });
-                obj.set_glow(GlowConfig {
-                    color: Color(C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, 210),
-                    width: 16.0,
-                });
+                obj.set_animation(wormhole2_template());
             }
             if let Some(player) = c.get_game_object_mut("player") {
                 player.position = (tx - PLAYER_R, ty - PLAYER_R);
@@ -1842,18 +1833,8 @@ fn tick_space_blackhole_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     for id in &to_dormant {
         if let Some(obj) = c.get_game_object_mut(id) {
-            let visual_r = obj.size.0 * 0.5;
-            let d = visual_r * 2.0;
             obj.planet_radius = None;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                image: gwell_ring_cached(visual_r, C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, GWELL_RING_COUNT, 90.0),
-                color: None,
-            });
-            obj.set_glow(GlowConfig {
-                color: Color(C_GWELL_DORMANT.0, C_GWELL_DORMANT.1, C_GWELL_DORMANT.2, 90),
-                width: 8.0,
-            });
+            obj.set_animation(wormhole2_template());
         }
     }
 
@@ -1959,10 +1940,6 @@ fn tick_space_left_boundary_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
                 image: gwell_ring_cached(visual_r, C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, GWELL_RING_COUNT, 220.0),
                 color: None,
-            });
-            obj.set_glow(GlowConfig {
-                color: Color(C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, 210),
-                width: 16.0,
             });
         }
     }
