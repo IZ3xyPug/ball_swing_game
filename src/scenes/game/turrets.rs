@@ -11,6 +11,7 @@ pub fn tick_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_turret_shoot(c, st);
     tick_bullets(c, st);
     tick_bullet_collision(c, st);
+    tick_turret_player_collision(c, st);
 }
 
 #[inline]
@@ -261,6 +262,42 @@ fn tick_bullets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 // ── Bullet ↔ player collision ────────────────────────────────────────────────
+
+fn tick_turret_player_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (px, py, live) = {
+        let s = st.lock().unwrap();
+        if s.turret_live.is_empty() { return; }
+        (s.px, s.py, s.turret_live.clone())
+    };
+    let kill_r = PLAYER_R + TURRET_R;
+    let mut to_destroy: Vec<String> = Vec::new();
+    for name in &live {
+        if let Some(obj) = c.get_game_object(name) {
+            let tcx = obj.position.0 + obj.size.0 * 0.5;
+            let tcy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = px - tcx;
+            let dy = py - tcy;
+            if dx * dx + dy * dy < kill_r * kill_r {
+                to_destroy.push(name.clone());
+            }
+        }
+    }
+    if to_destroy.is_empty() { return; }
+    {
+        let mut s = st.lock().unwrap();
+        let rm: std::collections::HashSet<&str> = to_destroy.iter().map(|n| n.as_str()).collect();
+        s.turret_live.retain(|n| !rm.contains(n.as_str()));
+        s.turret_timers.retain(|(n, _)| !rm.contains(n.as_str()));
+        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+        for name in &to_destroy { s.turret_free.push(name.clone()); }
+    }
+    for name in &to_destroy {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible = false;
+            obj.position = (-4500.0, -4500.0);
+        }
+    }
+}
 
 fn tick_bullet_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();

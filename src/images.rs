@@ -210,6 +210,16 @@ pub fn circle_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     img
 }
 
+/// Multiply every pixel's RGB channels by `factor`, clamping to 255. Alpha is unchanged.
+pub fn brighten_image(mut img: image::RgbaImage, factor: f32) -> image::RgbaImage {
+    for px in img.pixels_mut() {
+        px[0] = (px[0] as f32 * factor).min(255.0) as u8;
+        px[1] = (px[1] as f32 * factor).min(255.0) as u8;
+        px[2] = (px[2] as f32 * factor).min(255.0) as u8;
+    }
+    img
+}
+
 /// Cached circle: returns `Arc<RgbaImage>` keyed by (radius, r, g, b).
 /// Each unique combo is rasterized once; subsequent calls return the cached Arc.
 pub fn circle_cached(radius: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {

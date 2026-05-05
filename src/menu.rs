@@ -4,6 +4,22 @@ use crate::constants::*;
 use crate::audio_state;
 use crate::images::*;
 use crate::objects::ui_text_spec;
+use crate::shop;
+
+/// Menu lives at y = MENU_Y..MENU_Y+VH; shop lives at y = 0..VH.
+/// Camera pans between these two regions (from VH down to 0) for the transition.
+const MENU_Y: f32 = VH;
+
+/// Load aurora_earth.gif at the given dimensions using Lanczos3 for high-quality resize.
+fn bright_background_2(w: f32, h: f32) -> Image {
+    let aurora_src = image::load_from_memory(include_bytes!("../assets/aurora_earth.gif"))
+        .expect("aurora_earth.gif decode failed")
+        .to_rgba8();
+    let pixels = image::imageops::resize(
+        &aurora_src, w as u32, h as u32, image::imageops::FilterType::Lanczos3,
+    );
+    Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: pixels.into(), color: None }
+}
 
 const MENU_UI_ANIM_FRAMES: i32 = 60;
 
@@ -43,13 +59,13 @@ fn menu_mode_selector_img() -> image::RgbaImage {
 pub fn build_menu_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "menu_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
-        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        Some(bright_background_2(VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, MENU_Y), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
         ctx, "menu_bg_tint".into(),
         Some(tint_overlay(VW + 800.0, VH, Color(70, 120, 255, 110))),
-        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        (VW + 800.0, VH), (-400.0, MENU_Y), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
     let title = {
@@ -67,10 +83,10 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         GameObject::new_rect(
             ctx, "menu_title".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
-            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.14),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, MENU_Y + VH*0.14),
             vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
         )
-    };
+    }; // title
 
     let menu_sub = {
         let (w, h) = (600u32, 60u32);
@@ -83,7 +99,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         GameObject::new_rect(
             ctx, "menu_sub".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
-            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.40),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, MENU_Y + VH*0.40),
             vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
         )
     };
@@ -95,7 +111,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             image: menu_mode_selector_img().into(),
             color: None,
         }),
-        (800.0, 140.0), (VW/2.0 - 400.0, VH*0.46),
+        (800.0, 140.0), (VW/2.0 - 400.0, MENU_Y + VH*0.46),
         vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
@@ -109,7 +125,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         GameObject::new_rect(
             ctx, "start_btn".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
-            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.68),
+            (w as f32, h as f32), (VW/2.0 - w as f32/2.0, MENU_Y + VH*0.68),
             vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
         )
     };
@@ -125,7 +141,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         GameObject::new_rect(
             ctx, "menu_shop_btn".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
-            (w as f32, h as f32), (VW/2.0 - w as f32 - 20.0, VH*0.81),
+            (w as f32, h as f32), (VW/2.0 - w as f32 - 20.0, MENU_Y + VH*0.81),
             vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
         )
     };
@@ -141,50 +157,50 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         GameObject::new_rect(
             ctx, "menu_settings_btn".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
-            (w as f32, h as f32), (VW/2.0 + 20.0, VH*0.81),
+            (w as f32, h as f32), (VW/2.0 + 20.0, MENU_Y + VH*0.81),
             vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
         )
     };
 
     let menu_title_text = GameObject::build("menu_title_text")
         .size(1700.0, 260.0)
-        .position(VW * 0.5 - 850.0, VH * 0.14 + (260.0 - 74.0) / 2.0)
+        .position(VW * 0.5 - 850.0, MENU_Y + VH * 0.14 + (260.0 - 74.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
     let menu_sub_text = GameObject::build("menu_sub_text")
         .size(600.0, 60.0)
-        .position(VW * 0.5 - 300.0, VH * 0.40 + (60.0 - 22.0) / 2.0)
+        .position(VW * 0.5 - 300.0, MENU_Y + VH * 0.40 + (60.0 - 22.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
     let menu_mode_name_text = GameObject::build("menu_mode_name_text")
         .size(640.0, 140.0)
-        .position(VW * 0.5 - 320.0, VH * 0.46 + (140.0 - 52.0) / 2.0)
+        .position(VW * 0.5 - 320.0, MENU_Y + VH * 0.46 + (140.0 - 52.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
     let menu_mode_desc_text = GameObject::build("menu_mode_desc_text")
         .size(800.0, 60.0)
-        .position(VW * 0.5 - 400.0, VH * 0.46 + 152.0)
+        .position(VW * 0.5 - 400.0, MENU_Y + VH * 0.46 + 152.0)
         .tag("ui")
         .build(ctx);
 
     let menu_start_text = GameObject::build("menu_start_text")
         .size(540.0, 130.0)
-        .position(VW * 0.5 - 270.0, VH * 0.68 + (130.0 - 24.0) / 2.0)
+        .position(VW * 0.5 - 270.0, MENU_Y + VH * 0.68 + (130.0 - 24.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
     let menu_shop_text = GameObject::build("menu_shop_text")
         .size(420.0, 110.0)
-        .position(VW / 2.0 - 420.0 - 20.0, VH * 0.81 + (110.0 - 36.0) / 2.0)
+        .position(VW / 2.0 - 420.0 - 20.0, MENU_Y + VH * 0.81 + (110.0 - 36.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
     let menu_settings_text = GameObject::build("menu_settings_text")
         .size(420.0, 110.0)
-        .position(VW / 2.0 + 20.0, VH * 0.81 + (110.0 - 36.0) / 2.0)
+        .position(VW / 2.0 + 20.0, MENU_Y + VH * 0.81 + (110.0 - 36.0) / 2.0)
         .tag("ui")
         .build(ctx);
 
@@ -205,7 +221,8 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .with_object("menu_shop_text",      menu_shop_text)
         .with_object("menu_settings_text",  menu_settings_text);
 
-    scene
+    // Embed shop objects at y=0..VH (camera pans from VH to 0 to reveal them)
+    shop::extend_with_shop(ctx, scene)
         .with_event(
             GameEvent::KeyPress {
                 key: Key::Named(NamedKey::Space),
@@ -241,8 +258,13 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .on_enter(|canvas| {
             // Returning to main menu is the only transition that stops in-game music.
             audio_state::stop_game_bgm();
-            let cam = Camera::new((VW, VH), (VW, VH));
+            // World is 2×VH tall: shop at y=0..VH, menu at y=VH..2VH.
+            // Camera starts pointing at menu (y=MENU_Y). goto_shop lerps y to 0.
+            let mut cam = Camera::new((VW, VH * 2.0), (VW, VH));
+            cam.position = (0.0, MENU_Y);
             canvas.set_camera(cam);
+            canvas.set_var("menu_cam_target_y", MENU_Y);
+            canvas.set_var("menu_in_shop", false);
 
             // Slide menu UI in from the left on every menu entry.
             let off = -VW;
@@ -298,7 +320,11 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     let sel = Arc::clone(&selected);
                     move |c, key| {
                         if !c.is_scene("menu") { return; }
-
+                        // In shop: route all keystrokes to the carousel handler.
+                        if matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) {
+                            shop::handle_shop_key(c, key);
+                            return;
+                        }
                         let n = GAME_MODES.len();
                         let changed = {
                             let mut idx = sel.lock().unwrap();
@@ -329,6 +355,12 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                         }
                     }
                 });
+                canvas.on_key_release(|c, key| {
+                    if !c.is_scene("menu") { return; }
+                    if matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) {
+                        shop::handle_shop_key_release(c, key);
+                    }
+                });
                 canvas.set_var("menu_key_registered", true);
             }
 
@@ -336,6 +368,22 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             if !menu_anim_registered {
                 canvas.on_update(|c| {
                     if !c.is_scene("menu") { return; }
+
+                    // ── Camera pan (shop ↔ menu) ────────────────────────
+                    let target_y = c.get_f32("menu_cam_target_y");
+                    if let Some(cam) = c.camera_mut() {
+                        let diff = target_y - cam.position.1;
+                        if diff.abs() < 2.0 {
+                            cam.position.1 = target_y;
+                        } else {
+                            cam.position.1 += diff * 0.12;
+                        }
+                    }
+
+                    // ── Shop carousel tick ──────────────────────────────
+                    if matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) {
+                        shop::tick_shop(c);
+                    }
 
                     if matches!(c.get_var("menu_text_dirty"), Some(Value::Bool(true))) {
                         if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
@@ -429,7 +477,24 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             }
 
             canvas.register_custom_event("goto_game".into(), |c| c.load_scene("game"));
-            canvas.register_custom_event("goto_shop".into(), |c| c.load_scene("shop"));
+            // Pan camera upward into the shop region (no scene switch).
+            canvas.register_custom_event("goto_shop".into(), |c| {
+                c.set_var("menu_cam_target_y", 0.0f32);
+                c.set_var("menu_in_shop", true);
+                shop::init_shop(c);
+            });
+            // Pan camera back down to menu.
+            canvas.register_custom_event("shop_back".into(), |c| {
+                c.set_var("menu_cam_target_y", MENU_Y);
+                c.set_var("menu_in_shop", false);
+            });
+            // Confirm selection and return to menu.
+            canvas.register_custom_event("shop_select".into(), |c| {
+                let sel = c.get_i32("shop_selected");
+                c.set_var("player_char_selected", sel);
+                c.set_var("menu_cam_target_y", MENU_Y);
+                c.set_var("menu_in_shop", false);
+            });
             canvas.register_custom_event("goto_menu_settings".into(), |c| c.load_scene("menu_settings"));
         })
 }
@@ -440,7 +505,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
 pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "ms_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
@@ -628,7 +693,7 @@ fn menu_settings_update_text(c: &mut Canvas) {
 pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "go_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
@@ -815,7 +880,7 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
 pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "sun_go_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(
@@ -997,7 +1062,7 @@ pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
 pub fn build_gameover_oxygen_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
         ctx, "oxy_go_bg".into(),
-        Some(load_image_sized(ASSET_BACKGROUND_2, VW + 800.0, VH)),
+        Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
     let bg_tint = GameObject::new_rect(

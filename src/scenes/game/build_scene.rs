@@ -198,6 +198,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("start_zoom_recover_ticks", 0i32);
             canvas.set_var("zoom_anchor_y", VH);
 
+            // ── Apply selected character colour to player circle ─────────
+            {
+                let char_idx = (canvas.get_i32("player_char_selected").max(0) as usize)
+                    .min(PLAYER_CHAR_COLORS.len() - 1);
+                let (cr, cg, cb) = PLAYER_CHAR_COLORS[char_idx];
+                if let Some(obj) = canvas.get_game_object_mut("player") {
+                    obj.set_image(Image {
+                        shape: ShapeType::Ellipse(0.0, (PLAYER_R * 2.0, PLAYER_R * 2.0), 0.0),
+                        image: circle_cached(PLAYER_R as u32, cr, cg, cb),
+                        color: None,
+                    });
+                }
+            }
+
             // ── Background music (looped, switchable) ───────────────────
             if !audio_state::has_game_bgm() {
                 let handle = canvas.play_sound_with(

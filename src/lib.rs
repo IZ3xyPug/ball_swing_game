@@ -25,7 +25,6 @@ use menu::{
     build_menu_settings_scene,
 };
 use scenes::game::build_game_scene;
-use shop::build_shop_scene;
 
 pub struct App;
 
@@ -37,7 +36,6 @@ impl App {
         canvas.add_scene(build_gameover_scene(ctx));
         canvas.add_scene(build_gameover_sun_scene(ctx));
         canvas.add_scene(build_gameover_oxygen_scene(ctx));
-        canvas.add_scene(build_shop_scene(ctx));
         canvas.add_scene(build_menu_settings_scene(ctx));
         canvas.load_scene("menu");
         canvas

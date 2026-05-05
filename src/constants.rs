@@ -306,6 +306,18 @@ pub const C_ZONE_PURPLE_BOT:(u8,u8,u8) = (88,  36, 128 );
 pub const C_ZONE_BLACK_TOP: (u8,u8,u8) = (220, 130, 35);
 pub const C_ZONE_BLACK_BOT: (u8,u8,u8) = (255, 175, 80);
 pub const C_PLAYER:   (u8,u8,u8) = (80,  220, 160);
+
+/// Player character colour palette — shared by shop.rs and build_scene.rs.
+pub const PLAYER_CHAR_COLORS: &[(u8, u8, u8)] = &[
+    (200, 200, 220), // 0 silver
+    ( 60, 160, 240), // 1 blue
+    ( 80, 210, 130), // 2 green
+    (240, 150,  60), // 3 orange
+    (180, 100, 240), // 4 purple
+    (240,  90,  90), // 5 red
+];
+pub const PLAYER_CHAR_NAMES: &[&str] = &["SILVER", "BLUE", "GREEN", "ORANGE", "PURPLE", "RED"];
+
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
 pub const C_HOOK_NEAR:(u8,u8,u8) = (255, 120, 50 );
