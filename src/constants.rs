@@ -110,9 +110,8 @@ pub const PAD_GAP_MAX:    f32 = 9000.0;
 // Art scaling changes should happen in the loader, not by changing pad geometry.
 pub const PAD_W:          f32 = 775.0;
 pub const PAD_H:          f32 = 262.5;
-/// techbouncernew.gif visual occupancy ratio inside the 256px source frame.
-/// Used to keep bounce collision width aligned to visible pad art.
-pub const PAD_COLLISION_WIDTH_FACTOR: f32 = 170.0 / 256.0;
+/// techbouncernew.gif fills the full frame — collision covers the entire width.
+pub const PAD_COLLISION_WIDTH_FACTOR: f32 = 1.0;
 
 #[inline]
 pub fn pad_collision_w() -> f32 {
@@ -144,9 +143,8 @@ pub const PAD_MOVE_RANGE: f32 = 250.0;
 pub const PAD_MOVE_SPEED: f32 = 3.0;
 
 pub fn pad_corner_radius() -> f32 {
-    // Tuned to the current bounce-pad art profile (rounded_rectangle + 9-slice).
-    // At PAD_H=262.5 this yields ~66px.
-    (PAD_H * 0.254).clamp(1.0, PAD_H * 0.5 - 1.0)
+    // techbouncernew.gif has a pill/capsule shape — corner radius ≈ half height.
+    (PAD_H * 0.45).clamp(1.0, PAD_H * 0.5 - 1.0)
 }
 
 // ── Generation — Spinners ─────────────────────────────────────────────────────
