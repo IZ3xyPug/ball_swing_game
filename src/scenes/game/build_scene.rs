@@ -28,6 +28,7 @@ use super::helpers::*;
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
 const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
+const PLAYER_TRAIL_MID_NAME:  &str = "player_trail_b";
 
 fn update_settings_text(c: &mut Canvas) {
     let on_off = |var: &str| -> &str {
@@ -166,21 +167,37 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 canvas.set_var("crystalline_ready", true);
             }
 
-            // ── Player particle trail ────────────────────────────────────
+            // ── Player particle trail (3-emitter arc gradient) ──────────
             canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
-            let player_trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
-                .rate(72.0)
-                .lifetime(0.68)
-                .velocity(-2.0, 8.0)
-                .spread(6.0, 6.0)
-                .size(9.0)
-                .color(170, 255, 170, 255)
-                .render_layer(2)
-                .gravity_scale(0.0)
-                .collision(CollisionResponse::None)
-                .build();
-            canvas.add_emitter(player_trail);
+            canvas.remove_emitter(PLAYER_TRAIL_MID_NAME);
+            // Near: large teal bloom at player, fades to nothing.
+            // (Far/purple emitter removed — trail ends at mid tier.)
+            // spread <= PLAYER_R - (size/2) = 40 - 22.5 = 17.5 so new particles
+            // spawn entirely within the ball's visual area and are hidden by it.
+            let trail_near = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+                .rate(350.0).lifetime(0.18).velocity(0.0, 0.0)
+                .spread(10.0, 10.0).size(45.0)
+                .color(185, 255, 225, 240).color_end(185, 255, 225, 0)
+                .size_end(12.0)
+                .shape(ParticleShape::Circle)
+                .interpolate_position(true)
+                .render_layer(3).gravity_scale(0.0)
+                .collision(CollisionResponse::None).build();
+            // Mid: blue circles — smooth transition zone, medium reach.
+            // spread <= 40 - 16 = 24 so mid particles also start hidden behind ball.
+            let trail_mid = EmitterBuilder::new(PLAYER_TRAIL_MID_NAME)
+                .rate(280.0).lifetime(0.40).velocity(0.0, 0.0)
+                .spread(20.0, 20.0).size(32.0)
+                .color(120, 140, 255, 200).color_end(120, 140, 255, 0)
+                .size_end(10.0)
+                .shape(ParticleShape::Circle)
+                .interpolate_position(true)
+                .render_layer(2).gravity_scale(0.0)
+                .collision(CollisionResponse::None).build();
+            canvas.add_emitter(trail_near);
+            canvas.add_emitter(trail_mid);
             canvas.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
+            canvas.attach_emitter_to(PLAYER_TRAIL_MID_NAME, "player");
 
             // ── Camera ───────────────────────────────────────────────────
             let mut cam = Camera::new((1_000_000_000.0, VH), (VW, VH));
@@ -405,19 +422,30 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         c.set_var("pause_anim_frames", 0);
                         c.set_var("game_paused", false);
                         c.set_var("start_prompt_active", false);
-                        let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
-                            .rate(72.0)
-                            .lifetime(0.68)
-                            .velocity(-2.0, 8.0)
-                            .spread(6.0, 6.0)
-                            .size(9.0)
-                            .color(170, 255, 170, 255)
-                            .render_layer(2)
-                            .gravity_scale(0.0)
-                            .collision(CollisionResponse::None)
-                            .build();
-                        c.add_emitter(trail);
+                        c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+                        c.remove_emitter(PLAYER_TRAIL_MID_NAME);
+                        let trail_near = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+                            .rate(350.0).lifetime(0.18).velocity(0.0, 0.0)
+                            .spread(10.0, 10.0).size(45.0)
+                            .color(185, 255, 225, 240).color_end(185, 255, 225, 0)
+                            .size_end(12.0)
+                            .shape(ParticleShape::Circle)
+                            .interpolate_position(true)
+                            .render_layer(3).gravity_scale(0.0)
+                            .collision(CollisionResponse::None).build();
+                        let trail_mid = EmitterBuilder::new(PLAYER_TRAIL_MID_NAME)
+                            .rate(280.0).lifetime(0.40).velocity(0.0, 0.0)
+                            .spread(20.0, 20.0).size(32.0)
+                            .color(120, 140, 255, 200).color_end(120, 140, 255, 0)
+                            .size_end(10.0)
+                            .shape(ParticleShape::Circle)
+                            .interpolate_position(true)
+                            .render_layer(2).gravity_scale(0.0)
+                            .collision(CollisionResponse::None).build();
+                        c.add_emitter(trail_near);
+                        c.add_emitter(trail_mid);
                         c.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
+                        c.attach_emitter_to(PLAYER_TRAIL_MID_NAME, "player");
                         if let Some(obj) = c.get_game_object_mut("player") {
                             obj.visible = true;
                         }
@@ -495,6 +523,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if animating { return; }
 
                         c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+                        c.remove_emitter(PLAYER_TRAIL_MID_NAME);
                         if let Some(obj) = c.get_game_object_mut("player") {
                             obj.visible = false;
                         }
@@ -929,13 +958,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.set_var("pause_animating", false);
                     c.set_var("pause_anim_frames", 0);
                     c.set_var("game_paused", false);
-                    let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
-                        .rate(72.0).lifetime(0.68).velocity(-2.0, 8.0)
-                        .spread(6.0, 6.0).size(9.0).color(170, 255, 170, 255)
+                    let trail_near = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+                        .rate(200.0).lifetime(0.12).velocity(0.0, 0.0)
+                        .spread(0.0, 0.0).size(27.0).color(185, 255, 225, 240)
+                        .render_layer(3).gravity_scale(0.0)
+                        .collision(CollisionResponse::None).build();
+                    let trail_mid = EmitterBuilder::new(PLAYER_TRAIL_MID_NAME)
+                        .rate(160.0).lifetime(0.28).velocity(0.0, 0.0)
+                        .spread(0.0, 0.0).size(18.0).color(120, 140, 255, 215)
                         .render_layer(2).gravity_scale(0.0)
                         .collision(CollisionResponse::None).build();
-                    c.add_emitter(trail);
+                    c.add_emitter(trail_near);
+                    c.add_emitter(trail_mid);
                     c.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
+                    c.attach_emitter_to(PLAYER_TRAIL_MID_NAME, "player");
                     if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
                     let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
                     if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
@@ -1379,51 +1415,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Speed-reactive trail ─────────────────────────────
                     {
                         let s = st.lock().unwrap();
-                        let speed =
-                            (s.vx * s.vx + s.vy * s.vy).sqrt();
-                        let rate =
-                            (62.0 + speed * 1.6).clamp(62.0, 150.0);
-                        let life =
-                            (0.62 + speed * 0.010).clamp(0.62, 0.95);
-                        let size =
-                            (8.0 + speed * 0.06).clamp(8.0, 12.0);
-                        let spread =
-                            (5.0 + speed * 0.05).clamp(5.0, 9.5);
-                        let evx =
-                            (-s.vx * 0.55).clamp(-34.0, 34.0);
-                        let evy =
-                            (-s.vy * 0.55).clamp(-34.0, 34.0);
+                        let speed = (s.vx * s.vx + s.vy * s.vy).sqrt();
+                        // Gate emitters off when essentially stationary.
+                        let rate_near = if speed < 3.0 { 0.0 } else { (350.0 + speed * 5.0).clamp(0.0, 900.0) };
+                        let rate_mid  = if speed < 3.0 { 0.0 } else { (280.0 + speed * 4.0).clamp(0.0, 720.0) };
                         drop(s);
 
-                        c.run(Action::set_emitter_rate(
-                            PLAYER_TRAIL_EMITTER_NAME,
-                            rate,
-                        ));
-                        c.run(Action::set_emitter_lifetime(
-                            PLAYER_TRAIL_EMITTER_NAME,
-                            life,
-                        ));
-                        c.run(Action::set_emitter_size(
-                            PLAYER_TRAIL_EMITTER_NAME,
-                            size,
-                        ));
-                        c.run(Action::set_emitter_spread(
-                            PLAYER_TRAIL_EMITTER_NAME,
-                            spread,
-                            spread,
-                        ));
-                        c.run(Action::set_emitter_velocity(
-                            PLAYER_TRAIL_EMITTER_NAME,
-                            evx,
-                            evy,
-                        ));
-                        c.run(Action::set_emitter_color(
-                            PLAYER_TRAIL_EMITTER_NAME,
-                            170,
-                            255,
-                            170,
-                            255,
-                        ));
+                        c.run(Action::set_emitter_rate(PLAYER_TRAIL_EMITTER_NAME, rate_near));
+                        c.run(Action::set_emitter_rate(PLAYER_TRAIL_MID_NAME,     rate_mid));
                     }
 
                     // ── Tick counters ────────────────────────────────────
@@ -1693,6 +1692,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             cam.snap_zoom(1.0);
                         }
                         c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+                        c.remove_emitter(PLAYER_TRAIL_MID_NAME);
                         if let Some(obj) =
                             c.get_game_object_mut("player")
                         {
@@ -1725,6 +1725,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.run(Action::DetachEmitter {
                 emitter_name: PLAYER_TRAIL_EMITTER_NAME.to_string(),
             });
+            canvas.run(Action::DetachEmitter {
+                emitter_name: PLAYER_TRAIL_MID_NAME.to_string(),
+            });
             canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+            canvas.remove_emitter(PLAYER_TRAIL_MID_NAME);
         })
 }
