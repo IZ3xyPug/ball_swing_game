@@ -1,5 +1,6 @@
 use quartz::*;
 use ramp::prism;
+use ramp::Drawable;
 
 mod constants;
 mod audio_state;
@@ -30,7 +31,7 @@ use shop::build_shop_scene;
 pub struct App;
 
 impl App {
-    fn new(ctx: &mut Context, _assets: Assets) -> impl Drawable {
+    fn new(ctx: &mut Context) -> impl Drawable {
         let mut canvas = Canvas::new(ctx, CanvasMode::Landscape);
         canvas.add_scene(build_menu_scene(ctx));
         canvas.add_scene(build_game_scene(ctx));
@@ -44,4 +45,4 @@ impl App {
     }
 }
 
-ramp::run! { |ctx: &mut Context, assets: Assets| { App::new(ctx, assets) } }
+ramp::run! { []; |ctx: &mut Context| { App::new(ctx) } }

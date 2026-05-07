@@ -57,11 +57,11 @@ fn catcoin_anim_bytes(kind: u8) -> &'static [u8] {
     }
 }
 
-fn catcoin_image_path(kind: u8) -> &'static str {
+fn catcoin_image_bytes(kind: u8) -> &'static [u8] {
     match kind {
-        SPACE_COIN_KIND_CAT_BLUE => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
-        SPACE_COIN_KIND_CAT_RED => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinred.gif"),
-        _ => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
+        SPACE_COIN_KIND_CAT_BLUE => include_bytes!("../../../assets/catcoinblue.gif"),
+        SPACE_COIN_KIND_CAT_RED => include_bytes!("../../../assets/catcoinred.gif"),
+        _ => include_bytes!("../../../assets/catcoin.gif"),
     }
 }
 
@@ -79,7 +79,7 @@ fn cached_space_coin_static(kind: u8, radius: f32) -> Image {
         }
     }
 
-    let built = load_image_sized(catcoin_image_path(kind), d as f32, d as f32);
+    let built = load_image_sized(catcoin_image_bytes(kind), d as f32, d as f32);
     cache.lock().unwrap().insert(key, built.clone());
     built
 }
