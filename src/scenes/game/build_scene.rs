@@ -84,13 +84,29 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     let bg_zone_purple_vivid = composite_starfield_gradient(starfield_rgba, &grad_purple_vivid, bg_w, bg_h, blend_h);
     let bg_zone_black_vivid = composite_starfield_gradient(starfield_rgba, &grad_black_vivid, bg_w, bg_h, blend_h);
 
-    // Extra "space-zoomed" set used when camera zooms out.
-    let bg_zone_start_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_start, bg_w, bg_h, blend_h, 0.76);
-    let bg_zone_purple_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_purple, bg_w, bg_h, blend_h, 0.76);
-    let bg_zone_black_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_black, bg_w, bg_h, blend_h, 0.76);
-    let bg_zone_start_vivid_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_start_vivid, bg_w, bg_h, blend_h, 0.76);
-    let bg_zone_purple_vivid_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_purple_vivid, bg_w, bg_h, blend_h, 0.76);
-    let bg_zone_black_vivid_space = composite_starfield_gradient_with_ratio(starfield_rgba, &grad_black_vivid, bg_w, bg_h, blend_h, 0.76);
+    // Reuse the existing VW×VH starfield Arc for space mode (opaque).
+    let bg_space_img_arc = starfield_quartz.image.clone(); // Arc<RgbaImage>, no copy
+
+    // Transparent-background starfield for the normal-mode scroll overlay.
+    // Post-process the opaque starfield: make the near-black sky pixels alpha=0.
+    // Stars (brighter pixels) remain fully opaque. The transparent background ensures
+    // both panels are seamless at any seam position — no aurora-mismatch artifact.
+    let transparent_star_arc: std::sync::Arc<image::RgbaImage> = {
+        let mut img: image::RgbaImage = (*starfield_rgba).clone();
+        for pixel in img.pixels_mut() {
+            if pixel[0] < 20 && pixel[1] < 20 && pixel[2] < 25 {
+                pixel[3] = 0;
+            }
+        }
+        std::sync::Arc::new(img)
+    };
+    // Tiny 1-px placeholder images so tick_background's signature is unchanged.
+    let bg_zone_start_space        = solid(5, 5, 15, 255);
+    let bg_zone_purple_space       = solid(5, 5, 15, 255);
+    let bg_zone_black_space        = solid(5, 5, 15, 255);
+    let bg_zone_start_vivid_space  = solid(5, 5, 15, 255);
+    let bg_zone_purple_vivid_space = solid(5, 5, 15, 255);
+    let bg_zone_black_vivid_space  = solid(5, 5, 15, 255);
 
     // Pre-compute vertically flipped backgrounds for reverse gravity.
     let bg_zone_start_flip = flip_image_vertical(&bg_zone_start);
@@ -157,14 +173,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     scene
         .on_enter(move |canvas| {
             // ── Crystalline renderer ─────────────────────────────────────
-            let crystalline_ready = matches!(
-                canvas.get_var("crystalline_ready"),
-                Some(Value::Bool(true))
-            );
-            if !crystalline_ready {
-                canvas.enable_crystalline();
-                canvas.set_var("crystalline_ready", true);
-            }
+            // Re-create the physics world on every game entry so there is no
+            // stale solver state or leftover particles from a previous run.
+            canvas.enable_crystalline();
+            canvas.set_var("crystalline_ready", true);
 
             // ── Player particle trail ────────────────────────────────────
             canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
@@ -225,6 +237,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 audio_state::replace_game_bgm(handle);
                 canvas.set_var("bgm_track_index", 0);
             }
+            // Stop menu music when starting the game.
+            audio_state::stop_menu_bgm();
 
             // ── Pause key (register once globally) ───────────────────────
             let pause_key_registered = matches!(
@@ -354,34 +368,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
-                    // ── Asteroid hooks toggle (key '3') + switch to arcade death sound ──
+                    // ── Switch to arcade death sound (key '3') ──
                     if *key == Key::Character("3".into()) {
                         c.set_var("death_sound_mode", 1i32); // 1 = arcade
-                        let game_paused = c.is_paused()
-                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
-                        if game_paused { return; }
-                        let cur = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
-                        let next = !cur;
-                        c.set_var("asteroid_hooks_on", next);
-                        // Immediately repaint all live hooks.
-                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
-                        if let Some(state_arc) = state_opt {
-                            let s = state_arc.lock().unwrap();
-                            let hooks = s.live_hooks.clone();
-                            let zone_idx = zone_index_for_distance(s.distance);
-                            drop(s);
-                            for hid in &hooks {
-                                if let Some(obj) = c.get_game_object_mut(hid) {
-                                    if next {
-                                        obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Base));
-                                        obj.clear_glow();
-                                    } else {
-                                        let (r, g, b) = hook_base_for_zone(zone_idx);
-                                        obj.set_image(hook_img(r, g, b));
-                                    }
-                                }
-                            }
-                        }
                         return;
                     }
 
@@ -947,6 +936,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.resume();
                     c.set_var("pause_animating", false);
                     c.set_var("pause_anim_frames", 0);
+                    c.set_var("pause_hover_idx", -1);
+                    c.set_var("settings_open", false);
                     c.set_var("game_paused", false);
                     let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
                         .rate(72.0).lifetime(0.68).velocity(-2.0, 8.0)
@@ -972,7 +963,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 canvas.register_custom_event("pause_restart_click".into(), |c| {
                     if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
                     c.resume();
+                    c.set_var("pause_animating", false);
+                    c.set_var("pause_anim_frames", 0);
+                    c.set_var("pause_hover_idx", -1);
+                    c.set_var("settings_open", false);
                     c.set_var("game_paused", false);
+                    for name in ["pause_overlay", "pause_title",
+                                 "pause_resume_btn", "pause_restart_btn",
+                                 "pause_settings_btn", "pause_menu_btn",
+                                 "settings_text", "settings_back_btn"] {
+                        if let Some(obj) = c.get_game_object_mut(name) {
+                            obj.visible = false;
+                            obj.clear_highlight();
+                        }
+                    }
                     let next = c.get_i32("level_nonce").saturating_add(1);
                     c.set_var("level_nonce", next);
                     c.load_scene("game");
@@ -980,7 +984,27 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 canvas.register_custom_event("pause_menu_click".into(), |c| {
                     if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
                     c.resume();
+                    c.set_var("pause_animating", false);
+                    c.set_var("pause_anim_frames", 0);
+                    c.set_var("pause_hover_idx", -1);
+                    c.set_var("settings_open", false);
                     c.set_var("game_paused", false);
+                    for name in ["pause_overlay", "pause_title",
+                                 "pause_resume_btn", "pause_restart_btn",
+                                 "pause_settings_btn", "pause_menu_btn",
+                                 "settings_text", "settings_back_btn"] {
+                        if let Some(obj) = c.get_game_object_mut(name) {
+                            obj.visible = false;
+                            obj.clear_highlight();
+                        }
+                    }
+                    // Reset camera zoom before loading menu so there's no
+                    // visual pop from a zoomed-in game camera transitioning
+                    // to the menu's unzoomed camera.
+                    if let Some(cam) = c.camera_mut() {
+                        cam.snap_zoom(1.0);
+                        cam.zoom_anchor = None;
+                    }
                     c.load_scene("menu");
                 });
                 canvas.register_custom_event("pause_settings_click".into(), |c| {
@@ -1131,7 +1155,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let mut z_was_down = false;
                 let mut prev_nearest_hook = String::new();
                 let mut dark_mode_prev = false;
-                let mut prev_bg_theme: Option<(bool, usize, bool, bool)> = None;
+                let mut prev_bg_theme: Option<(bool, usize, bool, bool, bool)> = None;
                 let mut prev_palette_zone: usize = usize::MAX;
                 let mut frame_counter: u32 = 0;
                 let mut bg_scale_smooth: f32 = 1.0;
@@ -1161,9 +1185,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let bg_svsf = bg_zone_start_vivid_space_flip.clone();
                 let bg_pvsf = bg_zone_purple_vivid_space_flip.clone();
                 let bg_bvsf = bg_zone_black_vivid_space_flip.clone();
+                let bg_space_arc = bg_space_img_arc.clone();
+                let transparent_star_arc = transparent_star_arc.clone();
+                let mut star_shift: f32 = 0.0;
+                let mut star_auto_scroll = true;
+                let mut m_was_down = false;
+                let mut n_was_down = false;
+                let mut scroll_init = false;
+                let mut prev_scroll_in_space: Option<bool> = None;
                 let mut prev_player_center: Option<(f32, f32)> = None;
 
                 canvas.on_update(move |c: &mut Canvas| {
+                    if !c.is_scene("game") { return; }
                     let (px, py, vx, vy) = if let Some(player) = c.get_game_object("player") {
                         (
                             player.position.0 + player.size.0 * 0.5,
@@ -1225,6 +1258,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let pad_thruster_anim_template_flipped = pad_thruster_anim_template_flipped.clone();
 
                 canvas.on_update(move |c| {
+                    if !c.is_scene("game") { return; }
                     // ── Dead check ───────────────────────────────────────
                     {
                         let s = st.lock().unwrap();
@@ -1521,9 +1555,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Distance tracking ────────────────────────────────
                     {
                         let mut s = st.lock().unwrap();
-                        let travelled = (s.px - SPAWN_X).max(0.0);
-                        if travelled > s.distance {
-                            s.distance = travelled;
+                        if !s.in_space_mode && !s.space_launch_active {
+                            let travelled = (s.px - SPAWN_X).max(0.0);
+                            if travelled > s.distance {
+                                s.distance = travelled;
+                            }
                         }
 
                         // ── Dead-block passive score guard ───────────────
@@ -1662,6 +1698,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         prev_bg_theme = None;
                         prev_palette_zone = usize::MAX;
                         prev_nearest_hook.clear();
+                        scroll_init = false; // re-apply star panel images after respawn
                         c.set_var("bg_force_refresh", false);
                     }
                     background::tick_background(
@@ -1694,6 +1731,78 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &bg_pvsf,
                         &bg_bvsf,
                     );
+
+                    // ── Background star parallax ──────────────────────────
+                    // Panels track bg's live size/position so stars scale exactly
+                    // with the zoom effect. Modulus stays fixed at VW (constant)
+                    // to prevent offset jumps; the result is then scaled to bg_w.
+                    {
+                        let in_space = { st.lock().unwrap().in_space_mode };
+                        let m_now = c.key("m");
+                        let n_now = c.key("n");
+                        if m_now && !m_was_down { star_auto_scroll = true; }
+                        if n_now && !n_was_down { star_auto_scroll = false; }
+                        m_was_down = m_now;
+                        n_was_down = n_now;
+
+                        if star_auto_scroll {
+                            star_shift += 0.75;
+                        }
+
+                        // Re-init when mode changes (space⇔normal) or on first run.
+                        if prev_scroll_in_space != Some(in_space) {
+                            scroll_init = false;
+                            prev_scroll_in_space = Some(in_space);
+                        }
+
+                        // Read bg's current size/position (driven by bg_scale_smooth + gravity flip).
+                        // In normal mode this expands as the player rises; in space it's VW+400.
+                        let (bg_w, bg_h, bg_x, bg_y) = c.get_game_object("bg")
+                            .map(|o| (o.size.0, o.size.1, o.position.0, o.position.1))
+                            .unwrap_or((VW + 400.0, VH + 150.0, -200.0, -150.0));
+
+                        // rem_euclid(VW) is stable (VW is a literal constant — never changes).
+                        // Scaling by bg_w/VW maps the normalized offset into bg-space.
+                        let offset = star_shift.rem_euclid(VW) * (bg_w / VW);
+
+                        if !scroll_init {
+                            // Space: opaque panels (same-image seamless, stars clearly visible).
+                            // Normal: transparent overlay over aurora gradient.
+                            let img = if in_space {
+                                Image {
+                                    shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+                                    image: bg_space_arc.clone(),
+                                    color: None,
+                                }
+                            } else {
+                                Image {
+                                    shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+                                    image: transparent_star_arc.clone(),
+                                    color: None,
+                                }
+                            };
+                            if let Some(obj) = c.get_game_object_mut("bg_space") {
+                                obj.set_image(img.clone());
+                            }
+                            if let Some(obj) = c.get_game_object_mut("bg_stars_b") {
+                                obj.set_image(img);
+                            }
+                            scroll_init = true;
+                        }
+
+                        // Panels sit at bg's x-anchor minus the scroll offset.
+                        // Panel B is exactly one bg_w to the right — seamless wrap.
+                        if let Some(obj) = c.get_game_object_mut("bg_space") {
+                            obj.size = (bg_w, bg_h);
+                            obj.position = (bg_x - offset, bg_y);
+                            obj.visible = true;
+                        }
+                        if let Some(obj) = c.get_game_object_mut("bg_stars_b") {
+                            obj.size = (bg_w, bg_h);
+                            obj.position = (bg_x - offset + bg_w, bg_y);
+                            obj.visible = true;
+                        }
+                    }
 
                     // ── Death check ──────────────────────────────────────
                     let mut s = st.lock().unwrap();

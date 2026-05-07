@@ -62,6 +62,7 @@ pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     let hooked = s.hooked;
     let px = s.px;
     let py = s.py;
+    let asteroid_ids = s.space_asteroid_live.clone();
     drop(s);
 
     if hooked {
@@ -79,6 +80,51 @@ pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
                     c.run(Action::Custom { name: "do_release".into() });
                     break;
                 }
+            }
+        }
+    }
+
+    // ── Pull live asteroids toward active gravity wells ───────────────────
+    for ast_id in &asteroid_ids {
+        let ast_snap = {
+            if let Some(obj) = c.get_game_object(ast_id) {
+                if !obj.visible { continue; }
+                Some((
+                    obj.position.0 + obj.size.0 * 0.5,
+                    obj.position.1 + obj.size.1 * 0.5,
+                    obj.momentum.0,
+                    obj.momentum.1,
+                ))
+            } else { None }
+        };
+        let Some((ax, ay, amx, amy)) = ast_snap else { continue };
+
+        let mut force_x = 0.0f32;
+        let mut force_y = 0.0f32;
+
+        for (id, _, active) in &timers {
+            if !*active { continue; }
+            if let Some(obj) = c.get_game_object(id) {
+                let pr = obj.planet_radius.unwrap_or(0.0);
+                if pr <= 0.0 { continue; }
+                let well_cx = obj.position.0 + obj.size.0 * 0.5;
+                let well_cy = obj.position.1 + obj.size.1 * 0.5;
+                let dx = well_cx - ax;
+                let dy = well_cy - ay;
+                let dist2 = dx * dx + dy * dy;
+                if dist2 < pr * pr {
+                    let dist = dist2.sqrt().max(1.0);
+                    let strength = GWELL_STRENGTH_MIN * (1.0 - dist / pr);
+                    force_x += dx / dist * strength;
+                    force_y += dy / dist * strength;
+                }
+            }
+        }
+
+        if force_x.abs() > 0.001 || force_y.abs() > 0.001 {
+            if let Some(obj) = c.get_game_object_mut(ast_id) {
+                obj.momentum.0 = amx + force_x;
+                obj.momentum.1 = amy + force_y;
             }
         }
     }

@@ -14,6 +14,8 @@ pub fn tick_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_rocket_pad_collision(c, st);
     tick_asteroid_collision(c, st);
     tick_asteroid_asteroid_collision(c, st);
+    tick_asteroid_pad_bounce(c, st);
+    tick_asteroid_spinner_collision(c, st);
 }
 
 /// Sets state fields for unhook + queues canvas ops (rope hide, gravity restore).
@@ -442,6 +444,108 @@ fn tick_asteroid_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position.1 += pdy;
             obj.momentum.0 += mdx;
             obj.momentum.1 += mdy;
+        }
+    }
+}
+
+// ── Asteroid–Pad collision ───────────────────────────────────────────────────
+// Each live space asteroid is treated as a circle; bounce it off any pad top/bottom.
+
+pub fn tick_asteroid_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let s = st.lock().unwrap();
+    let pads    = s.pad_live.clone();
+    let asteroids = s.space_asteroid_live.clone();
+    drop(s);
+
+    for ast_name in &asteroids {
+        let snap = {
+            if let Some(obj) = c.get_game_object(ast_name) {
+                if !obj.visible { continue; }
+                let cx = obj.position.0 + obj.size.0 * 0.5;
+                let cy = obj.position.1 + obj.size.1 * 0.5;
+                let r  = obj.size.0 * 0.38;
+                let mx = obj.momentum.0;
+                let my = obj.momentum.1;
+                (cx, cy, r, mx, my)
+            } else { continue; }
+        };
+        let (cx, cy, r, mx, my) = snap;
+
+        for pad_name in &pads {
+            let hit = {
+                if let Some(obj) = c.get_game_object(pad_name) {
+                    if !obj.visible { continue; }
+                    let pad_x = pad_collision_left(obj.position.0);
+                    let pad_w = pad_collision_w();
+                    let pad_y = obj.position.1;
+                    circle_overlaps_rounded_rect(cx, cy, r, pad_x, pad_y, pad_w, PAD_H, pad_corner_radius())
+                } else { false }
+            };
+            if !hit { continue; }
+
+            // Read pad_top before the mutable borrow on the asteroid.
+            let pad_top = if let Some(p) = c.get_game_object(pad_name) { p.position.1 } else { continue; };
+
+            // Reflect the y component of momentum (simple top/bottom bounce).
+            let new_my = -my * PAD_ASTEROID_RESTITUTION;
+            if let Some(obj) = c.get_game_object_mut(ast_name) {
+                obj.momentum = (mx, new_my);
+                // Push asteroid out upward or downward based on momentum direction.
+                let shift = if my > 0.0 { -r - 2.0 } else { r + 2.0 };
+                obj.position.1 = pad_top + shift;
+            }
+            break; // one pad collision per asteroid per tick is sufficient
+        }
+    }
+}
+
+// ── Asteroid–Spinner collision ───────────────────────────────────────────────
+// Each live asteroid treated as a circle; deflect off rotating spinner OBBs.
+
+pub fn tick_asteroid_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let s = st.lock().unwrap();
+    if !s.spinners_enabled { return; }
+    let spinners  = s.spinner_live.clone();
+    let asteroids = s.space_asteroid_live.clone();
+    drop(s);
+
+    for ast_name in &asteroids {
+        let snap = {
+            if let Some(obj) = c.get_game_object(ast_name) {
+                if !obj.visible { continue; }
+                let cx = obj.position.0 + obj.size.0 * 0.5;
+                let cy = obj.position.1 + obj.size.1 * 0.5;
+                let r  = obj.size.0 * 0.38;
+                let mx = obj.momentum.0;
+                let my = obj.momentum.1;
+                (cx, cy, r, mx, my)
+            } else { continue; }
+        };
+        let (cx, cy, r, mx, my) = snap;
+
+        for sp_name in &spinners {
+            let hit_info = {
+                if let Some(obj) = c.get_game_object(sp_name) {
+                    circle_hits_obb(
+                        (cx, cy), r + 2.0,
+                        obj.position, obj.size, obj.rotation,
+                    )
+                } else { None }
+            };
+            if let Some((push_x, push_y)) = hit_info {
+                let len = (push_x * push_x + push_y * push_y).sqrt().max(0.001);
+                let nx = push_x / len;
+                let ny = push_y / len;
+                let inward = -(mx * nx + my * ny);
+                let reflect_x = mx + nx * inward.max(0.0) * 2.0;
+                let reflect_y = my + ny * inward.max(0.0) * 2.0;
+                if let Some(obj) = c.get_game_object_mut(ast_name) {
+                    obj.position.0 += push_x;
+                    obj.position.1 += push_y;
+                    obj.momentum = (reflect_x, reflect_y);
+                }
+                break; // one spinner collision per asteroid per tick
+            }
         }
     }
 }

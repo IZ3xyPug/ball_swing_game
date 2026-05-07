@@ -137,6 +137,9 @@ pub const PAD_Y_MIN: f32 = HOOK_Y_MAX + 150.0; // ≈ 1200.0
 /// Fixed upward velocity applied when the player hits a bounce pad.
 pub const PAD_BOUNCE_VY: f32 = -52.0;
 
+/// Restitution (bounciness) applied when a space asteroid hits a bounce pad.
+pub const PAD_ASTEROID_RESTITUTION: f32 = 0.75;
+
 /// How far a moving pad travels from its origin (px). 0 = static.
 pub const PAD_MOVE_RANGE: f32 = 250.0;
 /// Speed of pad oscillation (px/tick).
@@ -229,6 +232,14 @@ pub const COIN_GRID_SPACING_X: f32   = 120.0;
 pub const COIN_GRID_SPACING_Y: f32   = 120.0;
 /// Probability (0–1) that a coin spawn is a 3×3 grid.
 pub const COIN_GRID_CHANCE:    f32   = 0.30;
+/// Coin cross formation: center with four sides.
+pub const COIN_CROSS_COUNT:     usize = 5;
+pub const COIN_CROSS_SPACING:   f32   = 140.0;
+pub const COIN_CROSS_CHANCE:    f32   = 0.18;
+/// Coin diamond formation: large diamond shape around a center point.
+pub const COIN_DIAMOND_COUNT:   usize = 9;
+pub const COIN_DIAMOND_SPACING: f32   = 100.0;
+pub const COIN_DIAMOND_CHANCE:  f32   = 0.12;
 /// Radius of the coin magnet pickup effect (px).
 pub const COIN_MAGNET_RADIUS:f32 = 180.0;
 pub const COIN_MAGNET_PULL:  f32 = 0.37;
@@ -349,10 +360,10 @@ pub const START_HOOK_X: f32 = SPAWN_X + 160.0;
 pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 
 // ── Asset paths ──────────────────────────────────────────────────────────────
-pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin.gif");
+pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif");
 pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
 pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/techbouncernew.gif");
-pub const TECH_BOUNCE_FPS: f32 = 12.0;
+pub const TECH_BOUNCE_FPS: f32 = 8.0;
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
 pub const ASSET_COIN_SFX_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_collect.mp3");
@@ -362,6 +373,7 @@ pub const ASSET_COIN_SFX_4: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/
 pub const ASSET_BGM_TRACK_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_1.mp3");
 pub const ASSET_BGM_TRACK_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_2.mp3");
 pub const ASSET_BGM_TRACK_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_3.mp3");
+pub const ASSET_MENU_BGM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Roses.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
 pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background_2.webp");
 pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
@@ -572,7 +584,7 @@ pub const SPACE_CATCOIN_BLUE_SCORE: u32 = SPACE_COIN_SCORE * 5;
 pub const SPACE_CATCOIN_RED_SCORE:  u32 = SPACE_COIN_SCORE * 25;
 pub const SPACE_CATCOIN_BLUE_CHANCE: f32 = 0.22;
 pub const SPACE_CATCOIN_RED_CHANCE:  f32 = 0.08;
-pub const SPACE_COIN_ANIM_FPS: f32 = 12.0;
+pub const SPACE_COIN_ANIM_FPS: f32 = 6.0;
 pub const SPACE_COIN_R:        f32 = 27.0;
 pub const SPACE_COIN_FORMATION_COUNT: usize = 4;
 pub const SPACE_COIN_FORMATION_SPACING: f32 = 210.0;

@@ -9,7 +9,7 @@ use crate::state::*;
 pub fn tick_background(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
-    prev_bg_theme: &mut Option<(bool, usize, bool, bool)>,
+    prev_bg_theme: &mut Option<(bool, usize, bool, bool, bool)>,
     bg_scale_smooth: &mut f32,
     bg_zone_start: &image::RgbaImage,
     bg_zone_purple: &image::RgbaImage,
@@ -37,42 +37,64 @@ pub fn tick_background(
     _bg_zone_black_vivid_space_flip: &image::RgbaImage,
 ) {
     let s = st.lock().unwrap();
-    let zone_idx = zone_index_for_distance(s.distance);
+    let _zone_idx = zone_index_for_distance(s.distance);
     let dark = s.dark_mode;
     let flipped = s.gravity_dir < 0.0;
     let py = s.py;
+    let in_space_mode = s.in_space_mode;
     drop(s);
     let vivid = matches!(c.get_var("bg_vivid"), Some(Value::Bool(true)));
 
-    // Smoothly scale background once player rises above py = 500.
-    // Starts at py = 500 (upper area of screen), reaches full effect at py = 500 - 1400 = -900.
-    let up_t = if flipped {
-        ((py - (VH - 500.0)) / 1400.0).clamp(0.0, 1.0)
-    } else {
-        ((500.0 - py) / 1400.0).clamp(0.0, 1.0)
-    };
-    let zoom_strength = match c.get_i32("space_zoom_mode") {
-        4 => 0.44, // reduced version
-        _ => 0.60, // default/current version
-    };
-    let target_scale = 1.0 + zoom_strength * up_t;
-    // Lerp toward target so the transition eases rather than snapping each frame.
-    *bg_scale_smooth = *bg_scale_smooth + (*bg_scale_smooth - target_scale).abs().min(1.0) * if target_scale > *bg_scale_smooth { 0.06 } else { 0.02 } * (target_scale - *bg_scale_smooth).signum();
-    let bg_scale = *bg_scale_smooth;
-
-    if let Some(obj) = c.get_game_object_mut("bg") {
-        const OVERSCAN: f32 = 200.0;
-        const BG_RAISE: f32 = 150.0;
-        let w = VW * bg_scale + OVERSCAN * 2.0;
-        let h = VH * bg_scale + BG_RAISE;
-        obj.size = (w, h);
-        let cx = -(w - VW) / 2.0;
-        if flipped {
-            obj.position = (cx, VH - h);
-        } else {
-            obj.position = (cx, -BG_RAISE);
+    // Parallax panels (bg_space, bg_stars_b) are fully managed by the parallax block.
+    if in_space_mode {
+        // bg is the solid dark backdrop; star panels overlay it.
+        if let Some(obj) = c.get_game_object_mut("bg") {
+            const OVERSCAN: f32 = 200.0;
+            const BG_RAISE: f32 = 150.0;
+            obj.size = (VW + OVERSCAN * 2.0, VH + BG_RAISE);
+            obj.position = (-OVERSCAN, -BG_RAISE);
+            obj.visible = true;
+            obj.update_image_shape();
         }
-        obj.update_image_shape();
+        if let Some(obj) = c.get_game_object_mut("danger_floor") {
+            obj.visible = false;
+        }
+    } else {
+        // Outside space: bg is resized to aurora gradient each tick.
+        if let Some(obj) = c.get_game_object_mut("danger_floor") {
+            obj.visible = true;
+        }
+
+        // Smoothly scale background once player rises above py = 500.
+        // Starts at py = 500 (upper area of screen), reaches full effect at py = 500 - 1400 = -900.
+        let up_t = if flipped {
+            ((py - (VH - 500.0)) / 1400.0).clamp(0.0, 1.0)
+        } else {
+            ((500.0 - py) / 1400.0).clamp(0.0, 1.0)
+        };
+        let zoom_strength = match c.get_i32("space_zoom_mode") {
+            4 => 0.44, // reduced version
+            _ => 0.60, // default/current version
+        };
+        let target_scale = 1.0 + zoom_strength * up_t;
+        // Lerp toward target so the transition eases rather than snapping each frame.
+        *bg_scale_smooth = *bg_scale_smooth + (*bg_scale_smooth - target_scale).abs().min(1.0) * if target_scale > *bg_scale_smooth { 0.06 } else { 0.02 } * (target_scale - *bg_scale_smooth).signum();
+        let bg_scale = *bg_scale_smooth;
+
+        if let Some(obj) = c.get_game_object_mut("bg") {
+            const OVERSCAN: f32 = 200.0;
+            const BG_RAISE: f32 = 150.0;
+            let w = VW * bg_scale + OVERSCAN * 2.0;
+            let h = VH * bg_scale + BG_RAISE;
+            obj.size = (w, h);
+            let cx = -(w - VW) / 2.0;
+            if flipped {
+                obj.position = (cx, VH - h);
+            } else {
+                obj.position = (cx, -BG_RAISE);
+            }
+            obj.update_image_shape();
+        }
     }
 
     // Asteroid: fixed size, anchored to top-right corner (does not scale with bg zoom).
@@ -87,35 +109,42 @@ pub fn tick_background(
         }
     }
 
-    // Disable overlay layer to avoid tint/whitening artifacts.
-    if let Some(obj) = c.get_game_object_mut("bg_space") {
-        obj.visible = false;
-    }
-
-    // Zone index no longer drives background selection — aurora is used for all zones.
-    // Key still uses dark/vivid/flipped so those still trigger a refresh.
-    let key = (dark, 0usize, vivid, flipped);
+    // Key includes in_space_mode so background updates on space entry/exit.
+    let key = (dark, 0usize, vivid, flipped, in_space_mode);
     if *prev_bg_theme == Some(key) { return; }
     *prev_bg_theme = Some(key);
 
-    let image_data: image::RgbaImage = if dark {
-        let mut img = image::RgbaImage::new(4, 4);
-        for py in 0..4 { for px in 0..4 { img.put_pixel(px, py, image::Rgba([4, 4, 8, 255])); } }
-        img
-    } else if flipped {
-        if vivid { bg_zone_start_vivid_flip.clone() } else { bg_zone_start_flip.clone() }
-    } else if vivid {
-        bg_zone_start_vivid.clone()
+    if in_space_mode {
+        // Space: bg gets a solid near-black image.
+        let dark_img = image::RgbaImage::from_pixel(1, 1, image::Rgba([5, 5, 15, 255]));
+        if let Some(obj) = c.get_game_object_mut("bg") {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+                image: dark_img.into(),
+                color: None,
+            });
+        }
     } else {
-        bg_zone_start.clone()
-    };
-
-    if let Some(obj) = c.get_game_object_mut("bg") {
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: image_data.into(),
-            color: None,
-        });
+        // Normal zone: aurora gradient background.
+        let image_data: image::RgbaImage = if dark {
+            let mut img = image::RgbaImage::new(4, 4);
+            for py in 0..4 { for px in 0..4 { img.put_pixel(px, py, image::Rgba([4, 4, 8, 255])); } }
+            img
+        } else if flipped {
+            if vivid { bg_zone_start_vivid_flip.clone() } else { bg_zone_start_flip.clone() }
+        } else if vivid {
+            bg_zone_start_vivid.clone()
+        } else {
+            bg_zone_start.clone()
+        };
+        if let Some(obj) = c.get_game_object_mut("bg") {
+            obj.visible = true;
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+                image: image_data.into(),
+                color: None,
+            });
+        }
     }
 
 }

@@ -23,6 +23,9 @@ use menu::{
     build_gameover_sun_scene,
     build_menu_scene,
     build_menu_settings_scene,
+    build_achievements_scene,
+    build_stats_scene,
+    build_daily_reward_scene,
 };
 use scenes::game::build_game_scene;
 
@@ -37,6 +40,9 @@ impl App {
         canvas.add_scene(build_gameover_sun_scene(ctx));
         canvas.add_scene(build_gameover_oxygen_scene(ctx));
         canvas.add_scene(build_menu_settings_scene(ctx));
+        canvas.add_scene(build_achievements_scene(ctx));
+        canvas.add_scene(build_stats_scene(ctx));
+        canvas.add_scene(build_daily_reward_scene(ctx));
         canvas.load_scene("menu");
         canvas
     }

@@ -51,17 +51,13 @@ const SPACE_COIN_KIND_CAT_RED: u8 = 2;
 
 fn catcoin_anim_bytes(kind: u8) -> &'static [u8] {
     match kind {
-        SPACE_COIN_KIND_CAT_BLUE => include_bytes!("../../../assets/catcoinblue.gif"),
-        SPACE_COIN_KIND_CAT_RED => include_bytes!("../../../assets/catcoinred.gif"),
-        _ => include_bytes!("../../../assets/catcoin.gif"),
+        _ => include_bytes!("../../../assets/catcoingold.gif"),
     }
 }
 
 fn catcoin_image_path(kind: u8) -> &'static str {
     match kind {
-        SPACE_COIN_KIND_CAT_BLUE => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
-        SPACE_COIN_KIND_CAT_RED => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinred.gif"),
-        _ => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
+        _ => concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif"),
     }
 }
 
@@ -370,6 +366,7 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     tick_space_left_boundary_teleport(c, st);
     tick_space_spawning(c, st, frame);
     tick_space_culling(c, st);
+    tick_space_coin_magnet(c, st);
     tick_space_coin_collect(c, st);
     tick_space_welcome_text(c, st);
     tick_space_planet_pulse(c, st, frame);
@@ -2273,6 +2270,36 @@ fn cull_all_space_objects(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 // ── Space coin collection ─────────────────────────────────────────────────────
+
+fn tick_space_coin_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (px, py) = {
+        let s = st.lock().unwrap();
+        (s.px, s.py)
+    };
+    let names: Vec<String> = {
+        let s = st.lock().unwrap();
+        let mut all = s.space_coin_live.clone();
+        all.extend(s.space_blue_coin_live.iter().cloned());
+        all.extend(s.space_red_coin_live.iter().cloned());
+        all
+    };
+    for name in &names {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            let r = obj.size.0 * 0.5;
+            let cx = obj.position.0 + r;
+            let cy = obj.position.1 + r;
+            let dx = px - cx;
+            let dy = py - cy;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq < COIN_MAGNET_RADIUS * COIN_MAGNET_RADIUS {
+                let dist = dist_sq.sqrt().max(1.0);
+                let pull = (COIN_MAGNET_PULL * dist).min(dist);
+                obj.position.0 += dx / dist * pull;
+                obj.position.1 += dy / dist * pull;
+            }
+        }
+    }
+}
 
 fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();

@@ -198,7 +198,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     bg_space.ignore_zoom = true;
     bg_space.visible = false;
-    bg_space.set_tint(Color(255, 255, 255, 0));
+
+    let mut bg_stars_b = GameObject::new_rect(
+        ctx, "bg_stars_b".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+            image: solid(0, 0, 0, 0).into(),
+            color: None,
+        }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    bg_stars_b.ignore_zoom = true;
+    bg_stars_b.visible = false;
 
     // ── Energy hook reference display (top-right corner) ─────────────────
     const ASTEROID_W: f32 = 480.0;
@@ -512,6 +523,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut scene = Scene::new("game")
         .with_object("bg",           bg)
         .with_object("bg_space",     bg_space)
+        .with_object("bg_stars_b",   bg_stars_b)
         .with_object("asteroid",     asteroid)
         .with_object("danger_floor", floor)
         .with_object("rope",         rope)
@@ -621,9 +633,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Coin pool ────────────────────────────────────────────────────────
     let coin_static_sprite = load_image_sized(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
     let coin_anim_template = AnimatedSprite::new(
-        include_bytes!("../../../assets/coin.gif"),
+        include_bytes!("../../../assets/catcoingold.gif"),
         (COIN_R * 2.0, COIN_R * 2.0),
-        12.0,
+        6.0,
     ).ok();
     let score_x2_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/2x.gif"),
@@ -875,12 +887,12 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Space red-coin pool ───────────────────────────────────────────────
     let space_cat_red_static = load_image_sized(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinred.gif"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
     );
     let space_cat_red_anim_template = AnimatedSprite::new(
-        include_bytes!("../../../assets/catcoinred.gif"),
+        include_bytes!("../../../assets/catcoingold.gif"),
         (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0),
         SPACE_COIN_ANIM_FPS,
     ).ok();
