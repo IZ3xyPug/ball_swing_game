@@ -863,6 +863,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "crystalline"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3198,10 +3205,10 @@ dependencies = [
 name = "quartz"
 version = "0.1.0"
 dependencies = [
+ "crystalline",
  "image 0.25.9",
  "prism2",
  "ramp2",
- "rand 0.8.5",
  "rodio",
  "serde_json",
  "wgpu_canvas",
