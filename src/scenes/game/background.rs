@@ -110,7 +110,11 @@ pub fn tick_background(
     }
 
     // Key includes in_space_mode so background updates on space entry/exit.
-    let key = (dark, 0usize, vivid, flipped, in_space_mode);
+    let bg_sel = match c.get_var("player_bg_selected") {
+        Some(Value::I32(v)) => v.max(0) as usize,
+        _ => 0,
+    }.min(4);
+    let key = (dark, bg_sel, vivid, flipped, in_space_mode);
     if *prev_bg_theme == Some(key) { return; }
     *prev_bg_theme = Some(key);
 

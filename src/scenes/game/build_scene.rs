@@ -12,6 +12,7 @@ use crate::state::gen_hook_batch;
 use crate::images::*;
 use crate::objects::ui_text_spec;
 use crate::state::*;
+use crate::shop::{SHOP_ROPE_COLORS, SHOP_TRAIL_COLORS, SHOP_BG_COLORS};
 use super::bootstrap;
 use super::events;
 use super::physics;
@@ -29,28 +30,50 @@ use super::helpers::*;
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
 const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
 
+fn volume_value(c: &Canvas, var: &str, default: f32) -> f32 {
+    match c.get_var(var) {
+        Some(Value::F32(v)) => v.clamp(0.0, 1.0),
+        _ => default,
+    }
+}
+
+fn set_volume_value(c: &mut Canvas, var: &str, v: f32) {
+    c.set_var(var, v.clamp(0.0, 1.0));
+}
+
+fn slider_bar(v: f32, steps: usize) -> String {
+    let clamped = v.clamp(0.0, 1.0);
+    let filled = ((clamped * steps as f32).round() as usize).min(steps);
+    format!("{}{}", "#".repeat(filled), "-".repeat(steps - filled))
+}
+
+fn game_music_volume(c: &Canvas, base: f32) -> f32 {
+    let master = volume_value(c, "vol_master", 1.0);
+    let music = volume_value(c, "vol_music", 1.0);
+    (base * master * music).clamp(0.0, 1.0)
+}
+
 fn update_settings_text(c: &mut Canvas) {
-    let on_off = |var: &str| -> &str {
-        if matches!(c.get_var(var), Some(Value::Bool(true))) { "ON" } else { "OFF" }
-    };
+    let master = volume_value(c, "vol_master", 1.0);
+    let music = volume_value(c, "vol_music", 1.0);
+    let sound = volume_value(c, "vol_sound", 1.0);
     let text = format!(
-        "[Q] Pads: {}   [W] Spinners: {}   [E] Coins: {}\n\
-         [R] Flips: {}   [T] Score x2: {}   [Y] Zero-G: {}\n\
-         [U] Gravity Wells: {}   [I] Turrets: {}",
-        on_off("spawn_pads_on"),
-        on_off("spawn_spinners_on"),
-        on_off("spawn_coins_on"),
-        on_off("spawn_flips_on"),
-        on_off("spawn_score_x2_on"),
-        on_off("spawn_zero_g_on"),
-        on_off("spawn_gwells_on"),
-        on_off("spawn_turrets_on"),
+        "MASTER VOLUME\n  [{}] {:>3}%\n\
+         MUSIC VOLUME\n  [{}] {:>3}%\n\
+         SOUND VOLUME\n  [{}] {:>3}%\n\
+         CONTROLS: [A]/[D] MASTER   [J]/[L] MUSIC   [N]/[M] SOUND",
+        slider_bar(master, 20),
+        (master * 100.0).round() as i32,
+        slider_bar(music, 20),
+        (music * 100.0).round() as i32,
+        slider_bar(sound, 20),
+        (sound * 100.0).round() as i32,
     );
     if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
         let s = c.virtual_scale();
         if let Some(obj) = c.get_game_object_mut("settings_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                &text, &font, 42.0 * s, Color(235, 245, 255, 255), 1400.0 * s,
+                &text, &font, 38.0 * s, Color(235, 245, 255, 255), 1500.0 * s,
             )));
         }
     }
@@ -84,6 +107,23 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     let bg_zone_purple_vivid = composite_starfield_gradient(starfield_rgba, &grad_purple_vivid, bg_w, bg_h, blend_h);
     let bg_zone_black_vivid = composite_starfield_gradient(starfield_rgba, &grad_black_vivid, bg_w, bg_h, blend_h);
 
+    // Per-palette aurora backgrounds for the background shop category.
+    // Each entry is the aurora_earth tinted toward the corresponding SHOP_BG_COLORS palette.
+    let bg_zone_start_palettes: Arc<Vec<image::RgbaImage>> = Arc::new(
+        SHOP_BG_COLORS.iter().map(|&(pr, pg, pb)| {
+            let mut tinted = grad_start.clone();
+            for px in tinted.pixels_mut() {
+                px[0] = (px[0] as f32 * 0.55 + pr as f32 * 0.45).min(255.0) as u8;
+                px[1] = (px[1] as f32 * 0.55 + pg as f32 * 0.45).min(255.0) as u8;
+                px[2] = (px[2] as f32 * 0.55 + pb as f32 * 0.45).min(255.0) as u8;
+            }
+            composite_starfield_gradient(starfield_rgba, &tinted, bg_w, bg_h, blend_h)
+        }).collect()
+    );
+    let bg_zone_start_palettes_flip: Arc<Vec<image::RgbaImage>> = Arc::new(
+        bg_zone_start_palettes.iter().map(|img| flip_image_vertical(img)).collect()
+    );
+
     // Reuse the existing VW×VH starfield Arc for space mode (opaque).
     let bg_space_img_arc = starfield_quartz.image.clone(); // Arc<RgbaImage>, no copy
 
@@ -109,7 +149,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     let bg_zone_black_vivid_space  = solid(5, 5, 15, 255);
 
     // Pre-compute vertically flipped backgrounds for reverse gravity.
-    let bg_zone_start_flip = flip_image_vertical(&bg_zone_start);
+    // (bg_zone_start_flip is handled per-palette via bg_zone_start_palettes_flip)
     let bg_zone_purple_flip = flip_image_vertical(&bg_zone_purple);
     let bg_zone_black_flip = flip_image_vertical(&bg_zone_black);
     let bg_zone_start_vivid_flip = flip_image_vertical(&bg_zone_start_vivid);
@@ -179,6 +219,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("crystalline_ready", true);
 
             // ── Player particle trail ────────────────────────────────────
+            // Determine selected trail colour first so it can be used here and on resume.
+            let trail_color = {
+                let trail_val = match canvas.get_var("player_trail_selected") {
+                    Some(Value::I32(v)) => v.max(0) as usize,
+                    _ => 0,
+                }.min(SHOP_TRAIL_COLORS.len() - 1);
+                SHOP_TRAIL_COLORS[trail_val]
+            };
             canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
             let player_trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
                 .rate(72.0)
@@ -186,7 +234,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 .velocity(-2.0, 8.0)
                 .spread(6.0, 6.0)
                 .size(9.0)
-                .color(170, 255, 170, 255)
+                .color(trail_color.0, trail_color.1, trail_color.2, 255)
                 .render_layer(2)
                 .gravity_scale(0.0)
                 .collision(CollisionResponse::None)
@@ -211,18 +259,50 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("start_zoom_recover_ticks", 0i32);
             canvas.set_var("zoom_anchor_y", VH);
 
-            // ── Apply selected character colour to player circle ─────────
+            // ── Apply selected character to player ───────────────────────
             {
                 let char_val = match canvas.get_var("player_char_selected") {
                     Some(Value::I32(v)) => v.max(0),
                     _ => 0,
                 };
                 let char_idx = (char_val as usize).min(PLAYER_CHAR_COLORS.len() - 1);
-                let (cr, cg, cb) = PLAYER_CHAR_COLORS[char_idx];
                 if let Some(obj) = canvas.get_game_object_mut("player") {
+                    if char_idx == 0 {
+                        // Calico cat — keep (or restore) the animated sprite.
+                        if obj.animated_sprite.is_none() {
+                            if let Ok(mut calico) = AnimatedSprite::new(
+                                include_bytes!("../../../assets/calicoball.gif"),
+                                (PLAYER_R * 2.0, PLAYER_R * 2.0),
+                                CALICO_FPS,
+                            ) {
+                                calico.set_fps(0.0);
+                                obj.set_animation(calico);
+                            }
+                        }
+                    } else {
+                        // Solid colour circle — clear animation so it doesn't override drawable.
+                        obj.animated_sprite = None;
+                        let (cr, cg, cb) = PLAYER_CHAR_COLORS[char_idx];
+                        obj.set_image(Image {
+                            shape: ShapeType::Ellipse(0.0, (PLAYER_R * 2.0, PLAYER_R * 2.0), 0.0),
+                            image: circle_cached(PLAYER_R as u32, cr, cg, cb),
+                            color: None,
+                        });
+                    }
+                }
+            }
+
+            // ── Apply selected rope colour ───────────────────────────────
+            {
+                let rope_val = match canvas.get_var("player_rope_selected") {
+                    Some(Value::I32(v)) => v.max(0) as usize,
+                    _ => 0,
+                }.min(SHOP_ROPE_COLORS.len() - 1);
+                let (rr, rg, rb) = SHOP_ROPE_COLORS[rope_val];
+                if let Some(obj) = canvas.get_game_object_mut("rope") {
                     obj.set_image(Image {
-                        shape: ShapeType::Ellipse(0.0, (PLAYER_R * 2.0, PLAYER_R * 2.0), 0.0),
-                        image: circle_cached(PLAYER_R as u32, cr, cg, cb),
+                        shape: ShapeType::Rectangle(0.0, (4.0, 4.0), 0.0),
+                        image: solid(rr, rg, rb, 255).into(),
                         color: None,
                     });
                 }
@@ -232,7 +312,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             if !audio_state::has_game_bgm() {
                 let handle = canvas.play_sound_with(
                     ASSET_BGM_TRACK_1,
-                    SoundOptions::new().volume(0.084).looping(true),
+                    SoundOptions::new().volume(game_music_volume(canvas, 0.084)).looping(true),
                 );
                 audio_state::replace_game_bgm(handle);
                 canvas.set_var("bgm_track_index", 0);
@@ -316,7 +396,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if c.get_i32("bgm_track_index") != 1 {
                             let handle = c.play_sound_with(
                                 ASSET_BGM_TRACK_2,
-                                SoundOptions::new().volume(0.167).looping(true),
+                                SoundOptions::new().volume(game_music_volume(c, 0.167)).looping(true),
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 1);
@@ -328,10 +408,22 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if c.get_i32("bgm_track_index") != 2 {
                             let handle = c.play_sound_with(
                                 ASSET_BGM_TRACK_3,
-                                SoundOptions::new().volume(0.5).looping(true),
+                                SoundOptions::new().volume(game_music_volume(c, 0.5)).looping(true),
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 2);
+                        }
+                        return;
+                    }
+
+                    if *key == Key::Character("9".into()) {
+                        if c.get_i32("bgm_track_index") != 3 {
+                            let handle = c.play_sound_with(
+                                ASSET_MENU_BGM_2,
+                                SoundOptions::new().volume(game_music_volume(c, 0.18)).looping(true),
+                            );
+                            audio_state::replace_game_bgm(handle);
+                            c.set_var("bgm_track_index", 3);
                         }
                         return;
                     }
@@ -376,20 +468,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Settings toggle keys (only when settings panel is open) ──
                     if matches!(c.get_var("settings_open"), Some(Value::Bool(true))) {
-                        let toggle_var = match key {
-                            Key::Character(ch) if ch == "q" => Some("spawn_pads_on"),
-                            Key::Character(ch) if ch == "w" => Some("spawn_spinners_on"),
-                            Key::Character(ch) if ch == "e" => Some("spawn_coins_on"),
-                            Key::Character(ch) if ch == "r" => Some("spawn_flips_on"),
-                            Key::Character(ch) if ch == "t" => Some("spawn_score_x2_on"),
-                            Key::Character(ch) if ch == "y" => Some("spawn_zero_g_on"),
-                            Key::Character(ch) if ch == "u" => Some("spawn_gwells_on"),
-                            Key::Character(ch) if ch == "i" => Some("spawn_turrets_on"),
-                            _ => None,
+                        let adjust = match key {
+                            Key::Character(ch) if ch == "a" => Some(("vol_master", -0.05f32)),
+                            Key::Character(ch) if ch == "d" => Some(("vol_master",  0.05f32)),
+                            Key::Character(ch) if ch == "j" => Some(("vol_music",  -0.05f32)),
+                            Key::Character(ch) if ch == "l" => Some(("vol_music",   0.05f32)),
+                            Key::Character(ch) if ch == "n" => Some(("vol_sound",  -0.05f32)),
+                            Key::Character(ch) if ch == "m" => Some(("vol_sound",   0.05f32)),
+                            _ => None
                         };
-                        if let Some(var) = toggle_var {
-                            let cur = matches!(c.get_var(var), Some(Value::Bool(true)));
-                            c.set_var(var, !cur);
+                        if let Some((var, delta)) = adjust {
+                            let cur = volume_value(c, var, 1.0);
+                            set_volume_value(c, var, cur + delta);
                             update_settings_text(c);
                             return;
                         }
@@ -413,13 +503,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         c.set_var("pause_anim_frames", 0);
                         c.set_var("game_paused", false);
                         c.set_var("start_prompt_active", false);
+                        let tc = {
+                            let tv = match c.get_var("player_trail_selected") {
+                                Some(Value::I32(v)) => v.max(0) as usize,
+                                _ => 0,
+                            }.min(SHOP_TRAIL_COLORS.len() - 1);
+                            SHOP_TRAIL_COLORS[tv]
+                        };
                         let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
                             .rate(72.0)
                             .lifetime(0.68)
                             .velocity(-2.0, 8.0)
                             .spread(6.0, 6.0)
                             .size(9.0)
-                            .color(170, 255, 170, 255)
+                            .color(tc.0, tc.1, tc.2, 255)
                             .render_layer(2)
                             .gravity_scale(0.0)
                             .collision(CollisionResponse::None)
@@ -557,6 +654,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("pause_hover_idx", -1);
             canvas.set_var("settings_open", false);
 
+            if canvas.get_var("vol_master").is_none() {
+                canvas.set_var("vol_master", 1.0f32);
+            }
+            if canvas.get_var("vol_music").is_none() {
+                canvas.set_var("vol_music", 1.0f32);
+            }
+            if canvas.get_var("vol_sound").is_none() {
+                canvas.set_var("vol_sound", 1.0f32);
+            }
+
             // Spawn toggles (all on by default; toggled via settings panel).
             canvas.set_var("spawn_pads_on", true);
             canvas.set_var("spawn_spinners_on", true);
@@ -693,6 +800,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 hud_last_px:           i32::MAX,
                 hud_last_flip_timer:   u32::MAX,
                 hud_last_zero_g_timer: u32::MAX,
+                hud_last_score_x2_timer: u32::MAX,
                 hud_last_score:        u32::MAX,
                 hud_coin_fade_ticks:   u32::MAX,
                 hud_coin_alpha:        0,
@@ -837,20 +945,26 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // Set background image AND apply the proper overscan/raise size so
             // the background fills the screen correctly from the first frame.
-            if let Some(obj) = canvas.get_game_object_mut("bg") {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-                    image: bg_zone_start.clone().into(),
-                    color: None,
-                });
-                const OVERSCAN: f32 = 200.0;
-                const BG_RAISE: f32 = 150.0;
-                let w = VW + OVERSCAN * 2.0;
-                let h = VH + BG_RAISE;
-                obj.size = (w, h);
-                obj.position = (-OVERSCAN, -BG_RAISE);
-                obj.update_image_shape();
-                obj.visible = true;
+            {
+                let bg_sel = match canvas.get_var("player_bg_selected") {
+                    Some(Value::I32(v)) => v.max(0) as usize,
+                    _ => 0,
+                }.min(bg_zone_start_palettes.len().saturating_sub(1));
+                if let Some(obj) = canvas.get_game_object_mut("bg") {
+                    obj.set_image(Image {
+                        shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+                        image: bg_zone_start_palettes[bg_sel].clone().into(),
+                        color: None,
+                    });
+                    const OVERSCAN: f32 = 200.0;
+                    const BG_RAISE: f32 = 150.0;
+                    let w = VW + OVERSCAN * 2.0;
+                    let h = VH + BG_RAISE;
+                    obj.size = (w, h);
+                    obj.position = (-OVERSCAN, -BG_RAISE);
+                    obj.update_image_shape();
+                    obj.visible = true;
+                }
             }
             for name in ["pause_title", "pause_resume_btn", "pause_restart_btn", "pause_settings_btn", "pause_menu_btn"] {
                 if let Some(obj) = canvas.get_game_object_mut(name) {
@@ -939,9 +1053,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.set_var("pause_hover_idx", -1);
                     c.set_var("settings_open", false);
                     c.set_var("game_paused", false);
+                    let tc2 = {
+                        let tv = match c.get_var("player_trail_selected") {
+                            Some(Value::I32(v)) => v.max(0) as usize,
+                            _ => 0,
+                        }.min(SHOP_TRAIL_COLORS.len() - 1);
+                        SHOP_TRAIL_COLORS[tv]
+                    };
                     let trail = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
                         .rate(72.0).lifetime(0.68).velocity(-2.0, 8.0)
-                        .spread(6.0, 6.0).size(9.0).color(170, 255, 170, 255)
+                        .spread(6.0, 6.0).size(9.0).color(tc2.0, tc2.1, tc2.2, 255)
                         .render_layer(2).gravity_scale(0.0)
                         .collision(CollisionResponse::None).build();
                     c.add_emitter(trail);
@@ -1161,18 +1282,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let mut bg_scale_smooth: f32 = 1.0;
                 let mut prev_god_mode: bool = false;
 
-                let bg_s = bg_zone_start.clone();
                 let bg_p = bg_zone_purple.clone();
                 let bg_b = bg_zone_black.clone();
                 let bg_sv = bg_zone_start_vivid.clone();
                 let bg_pv = bg_zone_purple_vivid.clone();
                 let bg_bv = bg_zone_black_vivid.clone();
-                let bg_sf = bg_zone_start_flip.clone();
                 let bg_pf = bg_zone_purple_flip.clone();
                 let bg_bf = bg_zone_black_flip.clone();
                 let bg_svf = bg_zone_start_vivid_flip.clone();
                 let bg_pvf = bg_zone_purple_vivid_flip.clone();
                 let bg_bvf = bg_zone_black_vivid_flip.clone();
+                let bg_palettes_s = Arc::clone(&bg_zone_start_palettes);
+                let bg_palettes_sf = Arc::clone(&bg_zone_start_palettes_flip);
                 let bg_ss = bg_zone_start_space.clone();
                 let bg_ps = bg_zone_purple_space.clone();
                 let bg_bs = bg_zone_black_space.clone();
@@ -1470,11 +1591,19 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             evx,
                             evy,
                         ));
+                        let trail_rgb = {
+                            let idx = match c.get_var("player_trail_selected") {
+                                Some(Value::I32(v)) => v.max(0) as usize,
+                                _ => 0,
+                            }
+                            .min(SHOP_TRAIL_COLORS.len() - 1);
+                            SHOP_TRAIL_COLORS[idx]
+                        };
                         c.run(Action::set_emitter_color(
                             PLAYER_TRAIL_EMITTER_NAME,
-                            170,
-                            255,
-                            170,
+                            trail_rgb.0,
+                            trail_rgb.1,
+                            trail_rgb.2,
                             255,
                         ));
                     }
@@ -1706,13 +1835,25 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &st,
                         &mut prev_bg_theme,
                         &mut bg_scale_smooth,
-                        &bg_s,
+                        {
+                            let bg_sel = match c.get_var("player_bg_selected") {
+                                Some(Value::I32(v)) => v.max(0) as usize,
+                                _ => 0,
+                            }.min(bg_palettes_s.len().saturating_sub(1));
+                            &bg_palettes_s[bg_sel]
+                        },
                         &bg_p,
                         &bg_b,
                         &bg_sv,
                         &bg_pv,
                         &bg_bv,
-                        &bg_sf,
+                        {
+                            let bg_sel = match c.get_var("player_bg_selected") {
+                                Some(Value::I32(v)) => v.max(0) as usize,
+                                _ => 0,
+                            }.min(bg_palettes_sf.len().saturating_sub(1));
+                            &bg_palettes_sf[bg_sel]
+                        },
                         &bg_pf,
                         &bg_bf,
                         &bg_svf,
@@ -1792,14 +1933,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                         // Panels sit at bg's x-anchor minus the scroll offset.
                         // Panel B is exactly one bg_w to the right — seamless wrap.
+                        // Positions are rounded to whole pixels to prevent sub-pixel
+                        // jitter / blur that is most visible during lag spikes.
+                        let px = (bg_x - offset).round();
+                        // Slight Y offset avoids exact alignment with static stars,
+                        // reducing shimmer/blur artifacts during horizontal scroll.
+                        let py = (bg_y + 35.0).round();
                         if let Some(obj) = c.get_game_object_mut("bg_space") {
                             obj.size = (bg_w, bg_h);
-                            obj.position = (bg_x - offset, bg_y);
+                            obj.position = (px, py);
                             obj.visible = true;
                         }
                         if let Some(obj) = c.get_game_object_mut("bg_stars_b") {
                             obj.size = (bg_w, bg_h);
-                            obj.position = (bg_x - offset + bg_w, bg_y);
+                            obj.position = (px + bg_w, py);
                             obj.visible = true;
                         }
                     }

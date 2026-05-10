@@ -35,6 +35,16 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dirty_px       = q_px            != s.hud_last_px;
     let dirty_score    = score           != s.hud_last_score;
 
+    let flip_timer      = s.flip_timer;
+    let zero_g_timer    = s.zero_g_timer;
+    let score_x2_timer  = s.score_x2_timer;
+    let dirty_flip      = flip_timer     != s.hud_last_flip_timer;
+    let dirty_zero_g    = zero_g_timer   != s.hud_last_zero_g_timer;
+    let dirty_score_x2  = score_x2_timer != s.hud_last_score_x2_timer;
+    s.hud_last_flip_timer      = flip_timer;
+    s.hud_last_zero_g_timer    = zero_g_timer;
+    s.hud_last_score_x2_timer  = score_x2_timer;
+
     let previous_coins = s.hud_last_coins;
     let initialized = previous_coins != u32::MAX;
     let coin_gained = initialized && coins > previous_coins;
@@ -155,11 +165,48 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if let Some(obj) = c.get_game_object_mut("flip_timer") {
-        obj.visible = false;
+        if flip_timer > 0 {
+            obj.visible = true;
+            if dirty_flip {
+                obj.set_image(Image {
+                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
+                    image: flip_timer_img(flip_timer, FLIP_DURATION).into(),
+                    color: None,
+                });
+            }
+        } else {
+            obj.visible = false;
+        }
     }
 
     if let Some(obj) = c.get_game_object_mut("zero_g_timer") {
-        obj.visible = false;
+        if zero_g_timer > 0 {
+            obj.visible = true;
+            if dirty_zero_g {
+                obj.set_image(Image {
+                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
+                    image: flip_timer_img(zero_g_timer, ZERO_G_DURATION).into(),
+                    color: None,
+                });
+            }
+        } else {
+            obj.visible = false;
+        }
+    }
+
+    if let Some(obj) = c.get_game_object_mut("score_x2_timer") {
+        if score_x2_timer > 0 {
+            obj.visible = true;
+            if dirty_score_x2 {
+                obj.set_image(Image {
+                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
+                    image: score_x2_timer_img(score_x2_timer, SCORE_X2_DURATION).into(),
+                    color: None,
+                });
+            }
+        } else {
+            obj.visible = false;
+        }
     }
 
     // Hide combo flash periodically

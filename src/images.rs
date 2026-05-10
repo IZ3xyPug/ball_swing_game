@@ -690,6 +690,34 @@ pub fn asteroid_hook_image_cached() -> Arc<image::RgbaImage> {
     }).clone()
 }
 
+/// Brownish-red tinted asteroid image for floating space asteroids.
+/// Single resolution (256×256); Quartz scales it via the shape's display size.
+/// Loaded/tinted once and cached for the lifetime of the process.
+pub fn asteroid_space_img_cached() -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let d = 256u32;
+        let base = match image::open(ASSET_ASTEROID) {
+            Ok(img) => image::imageops::resize(
+                &img.into_rgba8(), d, d,
+                image::imageops::FilterType::Lanczos3,
+            ),
+            Err(_) => circle_img(d / 2, 160, 60, 30),
+        };
+        let mut tinted = base;
+        for px in tinted.pixels_mut() {
+            if px[3] == 0 { continue; }
+            let r = (px[0] as f32 * 1.05 + 50.0).min(255.0) as u8;
+            let g = (px[1] as f32 * 0.85 - 15.0).max(0.0) as u8;
+            let b = (px[2] as f32 * 0.78 - 20.0).max(0.0) as u8;
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+        }
+        Arc::new(tinted)
+    }).clone()
+}
+
 fn draw_block_char(img: &mut image::RgbaImage, x: u32, y: u32, s: u32, ch: u8, c: [u8; 4]) {
     let glyph: [u8; 25] = match ch {
         b'A' => [0,1,1,1,0, 1,0,0,0,1, 1,1,1,1,1, 1,0,0,0,1, 1,0,0,0,1],

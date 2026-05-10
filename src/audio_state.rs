@@ -61,3 +61,11 @@ pub fn has_menu_bgm() -> bool {
         .map(|slot| slot.is_some())
         .unwrap_or(false)
 }
+
+pub fn menu_bgm_finished() -> bool {
+    menu_bgm_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|h| h.is_finished()))
+        .unwrap_or(false)
+}

@@ -10,7 +10,7 @@ pub fn play_death_sound(c: &mut Canvas) {
         Some(Value::I32(v)) => v,
         _ => 0,
     };
-    let asset = if mode == 1 { ASSET_ARCADE_GAME_OVER } else { ASSET_MAN_GAME_OVER };
+    let asset = if mode == 1 { ASSET_ARCADE_GAME_OVER } else { ASSET_WOBBLY_MEOW };
     c.play_sound_with(asset, SoundOptions::new().volume(1.0));
 }
 
@@ -61,17 +61,17 @@ fn asteroid_state_idx(state: AsteroidHookState) -> usize {
 
 fn tint_asteroid_pixels(mut img: image::RgbaImage, state: AsteroidHookState) -> image::RgbaImage {
     let (mul, add_r, add_g, add_b) = match state {
-        AsteroidHookState::Base => (1.00, 0.0, 0.0, 0.0),
+        AsteroidHookState::Base => (1.00,  0.0,  0.0, 0.0),
         AsteroidHookState::Near => (1.12, 16.0, 12.0, 3.0),
-        AsteroidHookState::On => (1.25, 34.0, 24.0, 6.0),
+        AsteroidHookState::On   => (1.25, 34.0, 24.0, 6.0),
     };
     for px in img.pixels_mut() {
         if px[3] == 0 {
             continue;
         }
-        let r = (px[0] as f32 * mul + add_r).min(255.0);
-        let g = (px[1] as f32 * mul + add_g).min(255.0);
-        let b = (px[2] as f32 * mul + add_b).min(255.0);
+        let r = (px[0] as f32 * mul + add_r).clamp(0.0, 255.0);
+        let g = (px[1] as f32 * mul + add_g).clamp(0.0, 255.0);
+        let b = (px[2] as f32 * mul + add_b).clamp(0.0, 255.0);
         px[0] = r as u8;
         px[1] = g as u8;
         px[2] = b as u8;

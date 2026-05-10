@@ -317,15 +317,17 @@ pub const C_ZONE_BLACK_BOT: (u8,u8,u8) = (255, 175, 80);
 pub const C_PLAYER:   (u8,u8,u8) = (80,  220, 160);
 
 /// Player character colour palette — shared by shop.rs and build_scene.rs.
+/// Index 0 is the animated calicoball; the colour here is just for the shop card preview.
 pub const PLAYER_CHAR_COLORS: &[(u8, u8, u8)] = &[
-    (200, 200, 220), // 0 silver
-    ( 60, 160, 240), // 1 blue
-    ( 80, 210, 130), // 2 green
-    (240, 150,  60), // 3 orange
-    (180, 100, 240), // 4 purple
-    (240,  90,  90), // 5 red
+    (255, 195, 140), // 0 calico (animated cat ball — colour shown on shop card)
+    (200, 200, 220), // 1 silver
+    ( 60, 160, 240), // 2 blue
+    ( 80, 210, 130), // 3 green
+    (240, 150,  60), // 4 orange
+    (180, 100, 240), // 5 purple
+    (240,  90,  90), // 6 red
 ];
-pub const PLAYER_CHAR_NAMES: &[&str] = &["SILVER", "BLUE", "GREEN", "ORANGE", "PURPLE", "RED"];
+pub const PLAYER_CHAR_NAMES: &[&str] = &["CALICO", "SILVER", "BLUE", "GREEN", "ORANGE", "PURPLE", "RED"];
 
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
@@ -373,12 +375,15 @@ pub const ASSET_COIN_SFX_4: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/
 pub const ASSET_BGM_TRACK_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_1.mp3");
 pub const ASSET_BGM_TRACK_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_2.mp3");
 pub const ASSET_BGM_TRACK_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_3.mp3");
-pub const ASSET_MENU_BGM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Roses.mp3");
+pub const ASSET_MENU_BGM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Roses_new.mp3");
+pub const ASSET_MENU_BGM_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Pill.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
 pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background_2.webp");
 pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
 pub const ASSET_MAN_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/man_game_over.mp3");
 pub const ASSET_ARCADE_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/arcade_game_over.mp3");
+pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wobbly_meow.mp3");
+pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
 pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
 pub const ASSET_CALICOBALL_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/calicoball.gif");
@@ -479,7 +484,7 @@ pub const PASSIVE_SCORE_BLOCK_SIZE:  f32 = 5000.0;
 pub const PASSIVE_SCORE_DEAD_TICKS:  u32 = 720;
 
 // ── Starfield background ──────────────────────────────────────────────────────
-pub const STARFIELD_STAR_COUNT: u32 = 350;
+pub const STARFIELD_STAR_COUNT: u32 = 650;
 
 // ── Rocket pad (rare special pad that launches player into space) ─────────────
 pub const ROCKET_PAD_GAP_MIN:      f32   = 12000.0; // very wide gap → rare

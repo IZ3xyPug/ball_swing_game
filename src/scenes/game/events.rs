@@ -138,7 +138,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             }
 
             c.run(Action::Show { target: Target::name("rope") });
-            c.play_sound_with(ASSET_SWOOSH_SFX, SoundOptions::new().volume(0.6));
+            c.play_sound_with(ASSET_CARTOON_CAT, SoundOptions::new().volume(0.6));
         }
     });
 

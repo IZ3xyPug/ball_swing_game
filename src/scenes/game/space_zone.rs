@@ -1996,12 +1996,8 @@ fn spawn_space_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.rotation_momentum = rot_mom;
             obj.gravity           = 0.0;
             obj.visible           = true;
-            // Image already loaded in bootstrap; just resize the shape on the existing image.
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (size, size), 0.0),
-                image: asteroid_hook_image_cached(),
-                color: None,
-            });
+            // Size is set above; the brownish-red tinted AnimatedSprite (set in bootstrap)
+            // uses obj.size for its display dimensions — no set_image needed.
         }
 
         s = st.lock().unwrap();

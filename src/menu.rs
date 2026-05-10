@@ -6,6 +6,41 @@ use crate::images::*;
 use crate::objects::ui_text_spec;
 use crate::shop;
 
+const MENU_TRACKS: [&str; 2] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2];
+
+fn volume_value(c: &Canvas, var: &str, default: f32) -> f32 {
+    match c.get_var(var) {
+        Some(Value::F32(v)) => v.clamp(0.0, 1.0),
+        _ => default,
+    }
+}
+
+fn set_volume_value(c: &mut Canvas, var: &str, v: f32) {
+    c.set_var(var, v.clamp(0.0, 1.0));
+}
+
+fn slider_bar(v: f32, steps: usize) -> String {
+    let clamped = v.clamp(0.0, 1.0);
+    let filled = ((clamped * steps as f32).round() as usize).min(steps);
+    format!("{}{}", "#".repeat(filled), "-".repeat(steps - filled))
+}
+
+fn menu_music_volume(c: &Canvas, base: f32) -> f32 {
+    let master = volume_value(c, "vol_master", 1.0);
+    let music = volume_value(c, "vol_music", 1.0);
+    (base * master * music).clamp(0.0, 1.0)
+}
+
+fn play_menu_track(c: &mut Canvas, idx: usize) {
+    let track_idx = idx % MENU_TRACKS.len();
+    let handle = c.play_sound_with(
+        MENU_TRACKS[track_idx],
+        SoundOptions::new().volume(menu_music_volume(c, 0.18)).looping(false),
+    );
+    audio_state::replace_menu_bgm(handle);
+    c.set_var("menu_bgm_track_index", track_idx as i32);
+}
+
 /// Menu lives at y = MENU_Y..MENU_Y+VH; shop lives at y = 0..VH.
 /// Camera pans between these two regions (from VH down to 0) for the transition.
 const MENU_Y: f32 = VH;
@@ -29,6 +64,216 @@ fn bright_background_2(w: f32, h: f32) -> Image {
 }
 
 const MENU_UI_ANIM_FRAMES: i32 = 60;
+
+fn tutorial_apply_page(c: &mut Canvas, page: i32) {
+    let page = page.clamp(0, 2);
+    c.set_var("tutorial_page", page);
+
+    const TITLES: [&str; 3] = [
+        "TUTORIAL  1/3",
+        "TUTORIAL  2/3",
+        "TUTORIAL  3/3",
+    ];
+    const BODIES: [&str; 3] = [
+        "SWING BETWEEN HOOKS TO BUILD SPEED AND DISTANCE.",
+        "GRAB POWERUPS TO IMPROVE SURVIVAL AND MOMENTUM.",
+        "WATCH FLOOR DANGER, THEN CHAIN MOVES FOR LONG RUNS.",
+    ];
+
+    for i in 0..3 {
+        if let Some(obj) = c.get_game_object_mut(&format!("tutorial_window_{i}")) {
+            obj.visible = i == page;
+        }
+    }
+
+    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+        if let Some(obj) = c.get_game_object_mut("tutorial_title_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                TITLES[page as usize],
+                &font,
+                54.0,
+                Color(220, 238, 255, 255),
+                1300.0,
+            )));
+        }
+
+        if let Some(obj) = c.get_game_object_mut("tutorial_body_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                BODIES[page as usize],
+                &font,
+                28.0,
+                Color(200, 218, 236, 235),
+                1600.0,
+            )));
+        }
+
+        if let Some(obj) = c.get_game_object_mut("tutorial_next_text") {
+            let label = if page >= 2 { "FINISH" } else { "NEXT" };
+            obj.set_drawable(Box::new(ui_text_spec(
+                label,
+                &font,
+                18.0,
+                Color(245, 250, 255, 255),
+                95.0,
+            )));
+        }
+    }
+}
+
+pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
+    let bg = GameObject::new_rect(
+        ctx,
+        "tutorial_bg".into(),
+        Some(bright_background_2(VW + 800.0, VH)),
+        (VW + 800.0, VH),
+        (-400.0, 0.0),
+        vec![],
+        (0.0, 0.0),
+        (1.0, 1.0),
+        0.0,
+    );
+
+    let bg_tint = GameObject::new_rect(
+        ctx,
+        "tutorial_bg_tint".into(),
+        Some(tint_overlay(VW + 800.0, VH, Color(40, 70, 130, 165))),
+        (VW + 800.0, VH),
+        (-400.0, 0.0),
+        vec![],
+        (0.0, 0.0),
+        (1.0, 1.0),
+        0.0,
+    );
+
+    let mut scene = Scene::new("tutorial")
+        .with_object("tutorial_bg", bg)
+        .with_object("tutorial_bg_tint", bg_tint);
+
+    let win_w = 2960.0;
+    let win_h = 1680.0;
+    let win_x = VW * 0.5 - win_w * 0.5;
+    let win_y = VH * 0.09;
+
+    for i in 0..3 {
+        let mut img = image::RgbaImage::new(win_w as u32, win_h as u32);
+        for py in 0..img.height() {
+            for px in 0..img.width() {
+                let border = px < 5 || px >= img.width() - 5 || py < 5 || py >= img.height() - 5;
+                let glow = ((py as f32 / img.height() as f32) * 24.0) as u8;
+                img.put_pixel(
+                    px,
+                    py,
+                    image::Rgba([
+                        if border { 90 + i as u8 * 16 } else { 15 + glow / 4 },
+                        if border { 150 + i as u8 * 8 } else { 20 + glow / 3 },
+                        if border { 230 } else { 44 + glow / 2 },
+                        if border { 255 } else { 235 },
+                    ]),
+                );
+            }
+        }
+        let mut win = GameObject::new_rect(
+            ctx,
+            format!("tutorial_window_{i}").into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (win_w, win_h), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (win_w, win_h),
+            (win_x, win_y),
+            vec!["ui".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        win.visible = i == 0;
+        scene = scene.with_object(format!("tutorial_window_{i}"), win);
+    }
+
+    let title_w = 1600.0;
+    let body_w = 1600.0;
+    let text_shift_x = -1650.0;
+    let title_extra_x = 500.0;
+
+    let title_text = GameObject::build("tutorial_title_text")
+        .size(title_w, 120.0)
+        .position(
+            VW * 0.5 - title_w * 0.5 + text_shift_x + title_extra_x,
+            win_y + 120.0,
+        )
+        .tag("ui")
+        .build(ctx);
+    let body_text = GameObject::build("tutorial_body_text")
+        .size(body_w, 120.0)
+        .position(VW * 0.5 - body_w * 0.5 + text_shift_x, win_y + 330.0)
+        .tag("ui")
+        .build(ctx);
+
+    let next_btn_w = 300.0;
+    let next_btn_h = 105.0;
+    let next_btn_x = win_x + win_w - next_btn_w - 60.0;
+    let next_btn_y = win_y + win_h - next_btn_h - 60.0;
+    let next_btn = {
+        let mut img = image::RgbaImage::new(next_btn_w as u32, next_btn_h as u32);
+        for py in 0..img.height() {
+            for px in 0..img.width() {
+                let border = px < 3 || px >= img.width() - 3 || py < 3 || py >= img.height() - 3;
+                img.put_pixel(px, py, image::Rgba([55, if border { 170 } else { 120 }, 85, 235]));
+            }
+        }
+        GameObject::new_rect(
+            ctx,
+            "tutorial_next_btn".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (next_btn_w, next_btn_h), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (next_btn_w, next_btn_h),
+            (next_btn_x, next_btn_y),
+            vec!["ui".into(), "button".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        )
+    };
+    let next_text = GameObject::build("tutorial_next_text")
+        .size(next_btn_w, next_btn_h)
+        .position(next_btn_x, next_btn_y + 8.0)
+        .tag("ui")
+        .build(ctx);
+
+    scene
+        .with_object("tutorial_title_text", title_text)
+        .with_object("tutorial_body_text", body_text)
+        .with_object("tutorial_next_btn", next_btn)
+        .with_object("tutorial_next_text", next_text)
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom {
+                    name: "tutorial_next".into(),
+                },
+                target: Target::name("tutorial_next_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("tutorial_next_btn"),
+        )
+        .on_enter(|canvas| {
+            let cam = Camera::new((VW, VH), (VW, VH));
+            canvas.set_camera(cam);
+            tutorial_apply_page(canvas, 0);
+
+            canvas.register_custom_event("tutorial_next".into(), |c| {
+                let page = c.get_i32("tutorial_page");
+                if page >= 2 {
+                    c.load_scene("menu");
+                } else {
+                    tutorial_apply_page(c, page + 1);
+                }
+            });
+        })
+}
 
 pub static GAME_MODES: &[(&str, &str)] = &[
     ("FREE ROAM", "SWING FREELY   \u{2022}   SANDBOX MODE"),
@@ -355,14 +600,12 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .on_enter(|canvas| {
             // Returning to main menu is the only transition that stops in-game music.
             audio_state::stop_game_bgm();
-            // Start menu music if not already playing.
-            if !audio_state::has_menu_bgm() {
-                let handle = canvas.play_sound_with(
-                    ASSET_MENU_BGM,
-                    SoundOptions::new().volume(0.5).looping(true),
-                );
-                audio_state::replace_menu_bgm(handle);
-            }
+            // Menu track is randomized whenever entering menu.
+            let random_idx = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as usize)
+                .unwrap_or(0)) % MENU_TRACKS.len();
+            play_menu_track(canvas, random_idx);
             // World is 2×VH tall: shop at y=0..VH, menu at y=VH..2VH.
             // Camera starts pointing at menu (y=MENU_Y). goto_shop lerps y to 0.
             let mut cam = Camera::new((VW, VH * 2.0), (VW, VH));
@@ -371,68 +614,6 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("menu_cam_target_y", MENU_Y);
             canvas.set_var("menu_in_shop", false);
 
-            // Slide menu UI in from the left on every menu entry.
-            let off = -VW;
-            if let Some(obj) = canvas.get_game_object_mut("menu_title") {
-                obj.position.0 = off + (VW/2.0 - 1700.0/2.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_sub") {
-                obj.position.0 = off + (VW/2.0 - 600.0/2.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_mode_selector") {
-                obj.position.0 = off + (VW/2.0 - 400.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("start_btn") {
-                obj.position.0 = off + (VW/2.0 - 540.0/2.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_title_text") {
-                obj.position.0 = off + (VW * 0.5 - 850.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_sub_text") {
-                obj.position.0 = off + (VW * 0.5 - 300.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_mode_name_text") {
-                obj.position.0 = off + (VW * 0.5 - 320.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_mode_desc_text") {
-                obj.position.0 = off + (VW * 0.5 - 400.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_start_text") {
-                obj.position.0 = off + (VW * 0.5 - 270.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_shop_btn") {
-                obj.position.0 = off + (VW / 2.0 - 420.0 - 20.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_settings_btn") {
-                obj.position.0 = off + (VW / 2.0 + 20.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_shop_text") {
-                obj.position.0 = off + (VW / 2.0 - 420.0 - 20.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_settings_text") {
-                obj.position.0 = off + (VW / 2.0 + 20.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_achievements_btn") {
-                obj.position.0 = off + (VW / 2.0 - 440.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_stats_btn") {
-                obj.position.0 = off + (VW / 2.0 - 140.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_daily_btn") {
-                obj.position.0 = off + (VW / 2.0 + 160.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_achievements_text") {
-                obj.position.0 = off + (VW / 2.0 - 440.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_stats_text") {
-                obj.position.0 = off + (VW / 2.0 - 140.0);
-            }
-            if let Some(obj) = canvas.get_game_object_mut("menu_daily_text") {
-                obj.position.0 = off + (VW / 2.0 + 160.0);
-            }
-            canvas.set_var("menu_ui_animating", true);
-            canvas.set_var("menu_ui_anim_frames", MENU_UI_ANIM_FRAMES);
-            canvas.set_var("menu_ui_anim_total", MENU_UI_ANIM_FRAMES);
             canvas.set_var("menu_text_dirty", true);
 
             let selected = Arc::new(Mutex::new(0usize));
@@ -506,6 +687,13 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     // ── Shop carousel tick ──────────────────────────────
                     if matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) {
                         shop::tick_shop(c);
+                    }
+
+                    // ── Menu BGM alternation ───────────────────────────
+                    if audio_state::menu_bgm_finished() {
+                        let cur = c.get_i32("menu_bgm_track_index").max(0) as usize;
+                        let next = (cur + 1) % MENU_TRACKS.len();
+                        play_menu_track(c, next);
                     }
 
                     if matches!(c.get_var("menu_text_dirty"), Some(Value::Bool(true))) {
@@ -633,18 +821,34 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 c.set_var("menu_in_shop", true);
                 shop::init_shop(c);
             });
-            // Pan camera back down to menu.
+            // Back: if on carousel screen return to categories; otherwise return to menu.
             canvas.register_custom_event("shop_back".into(), |c| {
-                c.set_var("menu_cam_target_y", MENU_Y);
-                c.set_var("menu_in_shop", false);
+                if c.get_i32("shop_screen") == 1 {
+                    shop::show_categories(c);
+                } else {
+                    c.set_var("menu_cam_target_y", MENU_Y);
+                    c.set_var("menu_in_shop", false);
+                }
             });
-            // Confirm selection and return to menu.
+            // Confirm selection for the active category and return to categories.
             canvas.register_custom_event("shop_select".into(), |c| {
                 let sel = c.get_i32("shop_selected");
-                c.set_var("player_char_selected", sel);
-                c.set_var("menu_cam_target_y", MENU_Y);
-                c.set_var("menu_in_shop", false);
+                let cat = c.get_i32("shop_active_category");
+                match cat {
+                    0 => c.set_var("player_char_selected", sel),
+                    1 => c.set_var("player_rope_selected", sel),
+                    2 => c.set_var("player_bg_selected",   sel),
+                    3 => c.set_var("player_trail_selected", sel),
+                    _ => {}
+                }
+                shop::show_categories(c);
             });
+            // Category button events — each opens the carousel for that category.
+            canvas.register_custom_event("shop_cat_0".into(), |c| { shop::show_carousel(c, 0); });
+            canvas.register_custom_event("shop_cat_1".into(), |c| { shop::show_carousel(c, 1); });
+            canvas.register_custom_event("shop_cat_2".into(), |c| { shop::show_carousel(c, 2); });
+            canvas.register_custom_event("shop_cat_3".into(), |c| { shop::show_carousel(c, 3); });
+            canvas.register_custom_event("shop_cat_4".into(), |c| { shop::show_carousel(c, 4); });
             canvas.register_custom_event("goto_menu_settings".into(), |c| c.load_scene("menu_settings"));
             canvas.register_custom_event("goto_achievements".into(), |c| c.load_scene("achievements"));
             canvas.register_custom_event("goto_stats".into(), |c| c.load_scene("stats"));
@@ -754,20 +958,14 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
             let cam = Camera::new((VW, VH), (VW, VH));
             canvas.set_camera(cam);
 
-            // Initialise toggle vars if not yet set (first load before game).
-            for (var, default) in [
-                ("spawn_pads_on",     true),
-                ("spawn_spinners_on", true),
-                ("spawn_coins_on",    true),
-                ("spawn_flips_on",    true),
-                ("spawn_score_x2_on", false),
-                ("spawn_zero_g_on",   false),
-                ("spawn_gwells_on",   true),
-                ("spawn_turrets_on",  true),
-            ] {
-                if canvas.get_var(var).is_none() {
-                    canvas.set_var(var, default);
-                }
+            if canvas.get_var("vol_master").is_none() {
+                canvas.set_var("vol_master", 1.0f32);
+            }
+            if canvas.get_var("vol_music").is_none() {
+                canvas.set_var("vol_music", 1.0f32);
+            }
+            if canvas.get_var("vol_sound").is_none() {
+                canvas.set_var("vol_sound", 1.0f32);
             }
 
             // Render text
@@ -792,20 +990,18 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
             if !ms_key_registered {
                 canvas.on_key_press(|c, key| {
                     if !c.is_scene("menu_settings") { return; }
-                    let toggle_var: Option<&str> = match key {
-                        Key::Character(ch) if ch == "q" => Some("spawn_pads_on"),
-                        Key::Character(ch) if ch == "w" => Some("spawn_spinners_on"),
-                        Key::Character(ch) if ch == "e" => Some("spawn_coins_on"),
-                        Key::Character(ch) if ch == "r" => Some("spawn_flips_on"),
-                        Key::Character(ch) if ch == "t" => Some("spawn_score_x2_on"),
-                        Key::Character(ch) if ch == "y" => Some("spawn_zero_g_on"),
-                        Key::Character(ch) if ch == "u" => Some("spawn_gwells_on"),
-                        Key::Character(ch) if ch == "i" => Some("spawn_turrets_on"),
+                    let adjust = match key {
+                        Key::Character(ch) if ch == "a" => Some(("vol_master", -0.05f32)),
+                        Key::Character(ch) if ch == "d" => Some(("vol_master",  0.05f32)),
+                        Key::Character(ch) if ch == "j" => Some(("vol_music",  -0.05f32)),
+                        Key::Character(ch) if ch == "l" => Some(("vol_music",   0.05f32)),
+                        Key::Character(ch) if ch == "n" => Some(("vol_sound",  -0.05f32)),
+                        Key::Character(ch) if ch == "m" => Some(("vol_sound",   0.05f32)),
                         _ => None,
                     };
-                    if let Some(var) = toggle_var {
-                        let cur = matches!(c.get_var(var), Some(Value::Bool(true)));
-                        c.set_var(var, !cur);
+                    if let Some((var, delta)) = adjust {
+                        let cur = volume_value(c, var, 1.0);
+                        set_volume_value(c, var, cur + delta);
                         menu_settings_update_text(c);
                     }
                 });
@@ -817,27 +1013,26 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
 }
 
 fn menu_settings_update_text(c: &mut Canvas) {
-    let on_off = |var: &str| -> &str {
-        if matches!(c.get_var(var), Some(Value::Bool(true))) { "ON" } else { "OFF" }
-    };
+    let master = volume_value(c, "vol_master", 1.0);
+    let music = volume_value(c, "vol_music", 1.0);
+    let sound = volume_value(c, "vol_sound", 1.0);
     let text = format!(
-        "[Q] Pads: {}   [W] Spinners: {}   [E] Coins: {}\n\
-         [R] Flips: {}   [T] Score x2: {}   [Y] Zero-G: {}\n\
-         [U] Gravity Wells: {}   [I] Turrets: {}",
-        on_off("spawn_pads_on"),
-        on_off("spawn_spinners_on"),
-        on_off("spawn_coins_on"),
-        on_off("spawn_flips_on"),
-        on_off("spawn_score_x2_on"),
-        on_off("spawn_zero_g_on"),
-        on_off("spawn_gwells_on"),
-        on_off("spawn_turrets_on"),
+        "MASTER VOLUME\n  [{}] {:>3}%\n\
+         MUSIC VOLUME\n  [{}] {:>3}%\n\
+         SOUND VOLUME\n  [{}] {:>3}%\n\
+         CONTROLS: [A]/[D] MASTER   [J]/[L] MUSIC   [N]/[M] SOUND",
+        slider_bar(master, 20),
+        (master * 100.0).round() as i32,
+        slider_bar(music, 20),
+        (music * 100.0).round() as i32,
+        slider_bar(sound, 20),
+        (sound * 100.0).round() as i32,
     );
     if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
         let s = c.virtual_scale();
         if let Some(obj) = c.get_game_object_mut("ms_settings_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                &text, &font, 42.0 * s, Color(235, 245, 255, 255), 1600.0 * s,
+                &text, &font, 38.0 * s, Color(235, 245, 255, 255), 1600.0 * s,
             )));
         }
     }
