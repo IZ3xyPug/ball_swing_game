@@ -36,8 +36,8 @@
                     .into_iter()
                     .filter(|o| o.tags.iter().any(|t| t == "hook"))
                     .map(|o| {
-                        let hcx = o.position.0 + HOOK_R;
-                        let hcy = o.position.1 + HOOK_R;
+                        let hcx = o.position.0 + o.size.0 * 0.5;
+                        let hcy = o.position.1 + o.size.1 * 0.5;
                         let dx = hcx - s.px;
                         let dy = hcy - s.py;
                         (o.id.clone(), hcx, hcy, (dx*dx + dy*dy).sqrt())

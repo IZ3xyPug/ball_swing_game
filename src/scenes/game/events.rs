@@ -75,8 +75,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 .into_iter()
                 .filter(|o| o.tags.iter().any(|t| t == "hook"))
                 .map(|o| {
-                    let hcx = o.position.0 + HOOK_R;
-                    let hcy = o.position.1 + HOOK_R;
+                    let hcx = o.position.0 + o.size.0 * 0.5;
+                    let hcy = o.position.1 + o.size.1 * 0.5;
                     let pdx = hcx - s.px;
                     let pdy = hcy - s.py;
                     let player_d2 = pdx * pdx + pdy * pdy;

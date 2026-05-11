@@ -907,7 +907,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             }),
             (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
             (-6300.0, -6300.0),
-            vec![],
+            vec!["hook".into()],
             (0.0, 0.0),
             (1.0, 1.0),
             0.0,

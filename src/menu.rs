@@ -6,7 +6,7 @@ use crate::images::*;
 use crate::objects::ui_text_spec;
 use crate::shop;
 
-const MENU_TRACKS: [&str; 2] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2];
+const MENU_TRACKS: [&str; 3] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2, ASSET_MENU_BGM_3];
 
 fn volume_value(c: &Canvas, var: &str, default: f32) -> f32 {
     match c.get_var(var) {

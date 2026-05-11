@@ -205,6 +205,21 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         return;
     }
 
+    // If hooked onto a moving asteroid, track its current centre each tick.
+    if s.active_hook.starts_with("space_asteroid_") {
+        let hook_id = s.active_hook.clone();
+        drop(s);
+        if let Some(hook_obj) = c.get_game_object(&hook_id) {
+            let new_hx = hook_obj.position.0 + hook_obj.size.0 * 0.5;
+            let new_hy = hook_obj.position.1 + hook_obj.size.1 * 0.5;
+            s = st.lock().unwrap();
+            s.hook_x = new_hx;
+            s.hook_y = new_hy;
+        } else {
+            s = st.lock().unwrap();
+        }
+    }
+
     let dx   = s.px - s.hook_x;
     let dy   = s.py - s.hook_y;
     let dist = (dx*dx + dy*dy).sqrt().max(1.0);
