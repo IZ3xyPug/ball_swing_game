@@ -812,7 +812,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Space coin pool ───────────────────────────────────────────────────
     let space_cat_static = load_image_sized(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
+        include_bytes!("../../../assets/catcoin.gif"),
         SPACE_COIN_R * 2.0,
         SPACE_COIN_R * 2.0,
     );
@@ -843,7 +843,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Space blue-coin pool ─────────────────────────────────────────────
     let space_cat_blue_static = load_image_sized(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
+        include_bytes!("../../../assets/catcoinblue.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
     );
@@ -926,7 +926,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Space red-coin pool ───────────────────────────────────────────────
     let space_cat_red_static = load_image_sized(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif"),
+        include_bytes!("../../../assets/catcoinred.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
     );

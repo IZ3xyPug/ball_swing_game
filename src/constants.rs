@@ -361,11 +361,11 @@ pub const SPAWN_Y: f32 = VH * 0.38;
 pub const START_HOOK_X: f32 = SPAWN_X + 160.0;
 pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 
-// ── Asset paths ──────────────────────────────────────────────────────────────
-pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif");
-pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
-pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/techbouncernew.gif");
-pub const TECH_BOUNCE_FPS: f32 = 8.0;
+// ── Asset bytes ──────────────────────────────────────────────────────────────
+pub const ASSET_COIN_GIF: &[u8] = include_bytes!("../assets/coin.gif");
+pub const ASSET_SCORE_X2_GIF: &[u8] = include_bytes!("../assets/2x.gif");
+pub const ASSET_TECH_BOUNCE_GIF: &[u8] = include_bytes!("../assets/techbouncernew.gif");
+pub const TECH_BOUNCE_FPS: f32 = 12.0;
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
 pub const ASSET_COIN_SFX_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_collect.mp3");
@@ -379,14 +379,14 @@ pub const ASSET_MENU_BGM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Ro
 pub const ASSET_MENU_BGM_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Pill.mp3");
 pub const ASSET_MENU_BGM_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Menumusic.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
-pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background_2.webp");
+pub const ASSET_BACKGROUND_2: &[u8] = include_bytes!("../assets/background_2.webp");
 pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
 pub const ASSET_MAN_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/man_game_over.mp3");
 pub const ASSET_ARCADE_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/arcade_game_over.mp3");
 pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wobbly_meow.mp3");
 pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
-pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
+pub const ASSET_THRUSTER1_GIF: &[u8] = include_bytes!("../assets/thruster1.gif");
 pub const ASSET_CALICOBALL_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/calicoball.gif");
 pub const ASSET_BLACKHOLE1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/blackhole1.gif");
 pub const ASSET_WORMHOLE2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wormhole2.gif");
