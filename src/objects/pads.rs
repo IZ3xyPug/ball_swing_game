@@ -5,7 +5,7 @@ use crate::images::*;
 
 pub fn make_pad(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
     let corner_r = pad_corner_radius();
-    GameObject::new_rect(
+    let mut obj = GameObject::new_rect(
         ctx,
         id.into(),
         Some(Image {
@@ -19,5 +19,7 @@ pub fn make_pad(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         (0.0, 0.0),
         (1.0, 1.0),
         0.0,
-    )
+    );
+    obj.shadow_caster = true;
+    obj
 }

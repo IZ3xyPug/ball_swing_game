@@ -529,3 +529,4 @@ fn tick_player_ball_animation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 }
+

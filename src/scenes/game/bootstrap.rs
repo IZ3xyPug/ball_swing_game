@@ -148,7 +148,7 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
         let mut framed = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([0, 0, 0, 0]));
         image::imageops::overlay(&mut framed, &scaled, offset_x, offset_y);
         out.push(Image {
-            shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
+            shape: ShapeType::RoundedRectangle(0.0, (PAD_W, PAD_H), 0.0, pad_corner_radius()),
             image: framed.into(),
             color: None,
         });

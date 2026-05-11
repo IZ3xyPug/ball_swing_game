@@ -144,7 +144,7 @@ pub const PAD_MOVE_SPEED: f32 = 3.0;
 
 pub fn pad_corner_radius() -> f32 {
     // techbouncernew.gif has a pill/capsule shape — corner radius ≈ half height.
-    (PAD_H * 0.45).clamp(1.0, PAD_H * 0.5 - 1.0)
+    (PAD_H * 0.5 - 1.0).clamp(1.0, PAD_H * 0.5 - 1.0)
 }
 
 // ── Generation — Spinners ─────────────────────────────────────────────────────

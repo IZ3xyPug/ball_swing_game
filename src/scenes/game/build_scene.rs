@@ -3,6 +3,7 @@
 // wires up callbacks, and dispatches the per-frame tick in order.
 
 use quartz::*;
+use quartz::plugin::terrain_collision::TerrainCollisionPlugin;
 use std::sync::{Arc, Mutex};
 
 use crate::audio_state;
@@ -25,10 +26,39 @@ use super::background;
 use super::gravity_wells;
 use super::turrets;
 use super::helpers::*;
+use super::mega_shaders;
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
 const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
 const PLAYER_TRAIL_MID_NAME:  &str = "player_trail_b";
+
+/// Apply the combined post-processing shader (bloom + vignette + chromatic
+/// aberration) based on the current state of individual fx_* canvas vars.
+/// This always writes through the night-mode combined shader so all three
+/// effects can coexist in post slot 1 simultaneously.
+/// Call whenever any of the three effects is toggled on or off.
+/// Does nothing if night mode is active — night mode manages slot 1 itself.
+fn apply_combined_post(c: &mut Canvas) {
+    // Night mode owns slot 1; let it manage its own shader.
+    if matches!(c.get_var("night_mode_active"), Some(Value::Bool(true))) {
+        return;
+    }
+    let bloom_on = matches!(c.get_var("fx_bloom_on"), Some(Value::Bool(true)));
+    let vig_on   = matches!(c.get_var("fx_vig_on"),   Some(Value::Bool(true)));
+    let ca_on    = matches!(c.get_var("fx_ca_on"),    Some(Value::Bool(true)));
+
+    if !bloom_on && !vig_on && !ca_on {
+        c.clear_post_override();
+    } else {
+        // Disabled bloom: push threshold above maximum possible brightness.
+        let bloom_thresh = if bloom_on { 0.35 } else { 10.0 };
+        let bloom_str    = if bloom_on { 1.2  } else { 0.0  };  // toned down to 1.2 from 1.5
+        let vig_str      = if vig_on   { 0.6  } else { 0.0  };
+        let ca_int       = if ca_on    { 3.0  } else { 0.0  };
+        c.enable_night_mode_shader(bloom_thresh, bloom_str, vig_str, 0.4, 0.35, ca_int);
+    }
+}
+
 
 fn update_settings_text(c: &mut Canvas) {
     let on_off = |var: &str| -> &str {
@@ -165,6 +195,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             if !crystalline_ready {
                 canvas.enable_crystalline();
                 canvas.set_var("crystalline_ready", true);
+            }
+
+            // ── Terrain collision plugin (dynamic outline support) ──────
+            let terrain_collision_registered = matches!(
+                canvas.get_var("terrain_collision_registered"),
+                Some(Value::Bool(true))
+            );
+            if !terrain_collision_registered {
+                canvas.add_plugin(TerrainCollisionPlugin::new());
+                canvas.set_var("terrain_collision_registered", true);
             }
 
             // ── Player particle trail (3-emitter arc gradient) ──────────
@@ -383,6 +423,154 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
+                    // ── Night mode toggle (key 'n') ──────────────────────────────
+                    if *key == Key::Character("n".into()) {
+                        if c.has_lighting() {
+                            c.disable_lighting();
+                            c.set_var("night_mode_active", false);
+                            // Restore HUD objects to lit pipeline
+                            for name in c.get_names_by_tag("hud") {
+                                if let Some(obj) = c.get_game_object_mut(&name) {
+                                    obj.unlit = false;
+                                }
+                            }
+                            // Restore user's bloom/vignette/CA settings to slot 1.
+                            apply_combined_post(c);
+                        } else {
+                            c.enable_lighting(LightingConfig::night());
+                            c.set_var("night_mode_active", true);
+
+                            // Combined night-mode post shader
+                            c.enable_night_mode_shader(
+                                0.30,   // bloom threshold
+                                1.2,    // bloom strength
+                                0.55,   // vignette strength
+                                0.45,   // vignette radius
+                                0.35,   // vignette softness
+                                2.0,    // chromatic aberration intensity
+                            );
+
+                            // Mark all HUD objects as unlit so they render at full brightness
+                            for name in c.get_names_by_tag("hud") {
+                                if let Some(obj) = c.get_game_object_mut(&name) {
+                                    obj.unlit = true;
+                                }
+                            }
+
+                            // Main player light — large radius, bright
+                            let light = LightSource::new(
+                                "player_light",
+                                (0.0, 0.0),
+                                Color(180, 255, 220, 255),
+                                1200.0,
+                                4.0,
+                            );
+                            c.add_light(light);
+                            c.attach_light("player_light", "player", (0.0, 0.0));
+
+                            // Trailing glow behind the player (proportionate to player light)
+                            let trail_light = LightSource::new(
+                                "trail_light",
+                                (0.0, 0.0),
+                                Color(170, 255, 170, 200),
+                                420.0,
+                                2.2,
+                            ).with_effect(LightEffect::Pulse {
+                                min_intensity: 1.7,
+                                max_intensity: 2.7,
+                                speed: 3.0,
+                            });
+                            c.add_light(trail_light);
+                            c.attach_light("trail_light", "player", (-60.0, 0.0));
+
+                            // Add lights to all currently visible coins
+                            for name in c.get_names_by_tag("coin") {
+                                if let Some(obj) = c.get_game_object(&name) {
+                                    if obj.visible {
+                                        let light_id = format!("coin_light_{}", name);
+                                        let coin_light = LightSource::new(
+                                            light_id.clone(),
+                                            (0.0, 0.0),
+                                            Color(255, 220, 80, 255),
+                                            300.0,
+                                            1.0,
+                                        ).with_shadows(false).with_effect(LightEffect::Pulse {
+                                            min_intensity: 0.75,
+                                            max_intensity: 1.25,
+                                            speed: 2.0,
+                                        });
+                                        c.add_light(coin_light);
+                                        c.attach_light(&light_id, &name, (0.0, 0.0));
+                                    }
+                                }
+                            }
+
+                            // Trail particle lights — 1/4 the radius of player_light (300 = 1200 / 4)
+                            for (i, (offset_x, intensity)) in [
+                                (-50.0_f32, 2.0_f32),
+                                (-120.0, 1.5),
+                                (-200.0, 1.0),
+                            ].iter().enumerate() {
+                                let pid = format!("trail_p{}_light", i);
+                                let tl = LightSource::new(
+                                    pid.clone(),
+                                    (0.0, 0.0),
+                                    Color(170, 255, 170, 200),
+                                    300.0,
+                                    *intensity,
+                                );
+                                c.add_light(tl);
+                                c.attach_light(&pid, "player", (*offset_x, 0.0));
+                            }
+
+                            // Spotlights aiming down from all currently visible spinners
+                            for name in c.get_names_by_tag("spinner") {
+                                if let Some(obj) = c.get_game_object(&name) {
+                                    if obj.visible {
+                                        let light_id = format!("spinner_light_{}", name);
+                                        let mut spot = LightSource::new(
+                                            light_id.clone(),
+                                            (0.0, 0.0),
+                                            Color(180, 180, 255, 200),
+                                            480.0,
+                                            3.5,
+                                        );
+                                        spot.light_type = LightType::Spot {
+                                            direction: std::f32::consts::FRAC_PI_2,
+                                            cone_angle: 1.0,
+                                        };
+                                        spot.casts_shadows = false;
+                                        c.add_light(spot);
+                                        c.attach_light(&light_id, &name, (0.0, 0.0));
+                                    }
+                                }
+                            }
+
+                            // Point lights on all currently visible turrets
+                            for name in c.get_names_by_tag("turret") {
+                                if let Some(obj) = c.get_game_object(&name) {
+                                    if obj.visible {
+                                        let light_id = format!("turret_light_{}", name);
+                                        let turret_light = LightSource::new(
+                                            light_id.clone(),
+                                            (0.0, 0.0),
+                                            Color(C_TURRET_BODY.0, C_TURRET_BODY.1, C_TURRET_BODY.2, 220),
+                                            400.0,
+                                            1.5,
+                                        ).with_shadows(false).with_effect(LightEffect::Pulse {
+                                            min_intensity: 0.9,
+                                            max_intensity: 1.6,
+                                            speed: 1.5,
+                                        });
+                                        c.add_light(turret_light);
+                                        c.attach_light(&light_id, &name, (0.0, 0.0));
+                                    }
+                                }
+                            }
+                        }
+                        return;
+                    }
+
                     // ── Settings toggle keys (only when settings panel is open) ──
                     if matches!(c.get_var("settings_open"), Some(Value::Bool(true))) {
                         let toggle_var = match key {
@@ -560,6 +748,89 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
                 });
                 canvas.set_var("pause_key_registered", true);
+            
+                        // ── FX control keys (lighting, weather, visual effects) ──
+                        let fx_keys_registered = matches!(
+                            canvas.get_var("fx_keys_registered"),
+                            Some(Value::Bool(true))
+                        );
+                        if !fx_keys_registered {
+                            canvas.on_key_press(|c, key| {
+                                if !c.is_scene("game") { return; }
+            
+                                // Toggle bloom on/off via combined post shader.
+                                if *key == Key::Character("2".into()) {
+                                    let bloom_on = matches!(c.get_var("fx_bloom_on"), Some(Value::Bool(true)));
+                                    c.set_var("fx_bloom_on", !bloom_on);
+                                    apply_combined_post(c);
+                                    return;
+                                }
+            
+                                // Toggle night mode — dark ambient, player light with shadows,
+                                // combined post shader (bloom + vignette + chromatic aberration).
+                                if *key == Key::Character("3".into()) {
+                                    if c.has_lighting() {
+                                        c.disable_lighting();
+                                        c.set_var("night_mode_active", false);
+                                        // Restore HUD objects to lit pipeline
+                                        for name in c.get_names_by_tag("hud") {
+                                            if let Some(obj) = c.get_game_object_mut(&name) {
+                                                obj.unlit = false;
+                                            }
+                                        }
+                                        // Restore user's bloom/vignette/CA settings to slot 1.
+                                        apply_combined_post(c);
+                                    } else {
+                                        c.enable_lighting(LightingConfig::night());
+                                        c.set_var("night_mode_active", true);
+            
+                                        // Combined night-mode post shader
+                                        c.enable_night_mode_shader(
+                                            0.30,   // bloom threshold
+                                            1.2,    // bloom strength (toned down from 1.5)
+                                            0.55,   // vignette strength
+                                            0.45,   // vignette radius
+                                            0.35,   // vignette softness
+                                            2.0,    // chromatic aberration intensity
+                                        );
+            
+                                        // Mark all HUD objects as unlit so they render at full brightness
+                                        for name in c.get_names_by_tag("hud") {
+                                            if let Some(obj) = c.get_game_object_mut(&name) {
+                                                obj.unlit = true;
+                                            }
+                                        }
+            
+                                        // Main player light — large radius, bright
+                                        let light = LightSource::new(
+                                            "player_light",
+                                            (0.0, 0.0),
+                                            Color(180, 255, 220, 255),
+                                            1200.0,
+                                            4.0,
+                                        );
+                                        c.add_light(light);
+                                        c.attach_light("player_light", "player", (0.0, 0.0));
+                                    }
+                                    return;
+                                }
+            
+                                // Cycle rain state: 0 (off) → 1 (right) → 2 (left) → 3 (down) → 4 (strong diagonal) → 0
+                                if *key == Key::Character("6".into()) {
+                                    let current = c.get_i32("rain_state").max(0) as u32;
+                                    c.set_var("rain_state", ((current + 1) % 5) as i32);
+                                    return;
+                                }
+            
+                                // Toggle air shield electricity mode
+                                if *key == Key::Character("9".into()) {
+                                    let on = matches!(c.get_var("air_shield_elec"), Some(Value::Bool(true)));
+                                    c.set_var("air_shield_elec", !on);
+                                    return;
+                                }
+                            });
+                            canvas.set_var("fx_keys_registered", true);
+                        }
             }
 
             canvas.set_var("pause_anim_frames", 0);
@@ -567,6 +838,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("pause_animating", false);
             canvas.set_var("game_paused", false);
             canvas.set_var("start_prompt_active", false);
+                        canvas.set_var("fx_bloom_on", true);
+                        canvas.set_var("fx_vig_on", false);
+                        canvas.set_var("fx_ca_on", false);
+                        canvas.set_var("fx_shader_airshield_on", false);
+                        canvas.set_var("fx_comets_on", false);
+                        canvas.set_var("player_effect_idx", 0i32);
+                        canvas.set_var("rain_state", 0i32);
+                        canvas.set_var("air_shield_elec", false);
+                        apply_combined_post(canvas);
             canvas.set_var("manual_flip_queued", false);
             canvas.set_var("mouse_grab_queued", false);
             canvas.set_var("mouse_release_queued", false);
@@ -1241,6 +1521,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let pad_thruster_anim_template = pad_thruster_anim_template.clone();
                 let pad_thruster_anim_template_flipped = pad_thruster_anim_template_flipped.clone();
 
+                // ── Mega shader VFX initialization ──────────────────
+                // White circles are sprite textures; shader effects create visual interest.
+                let player_mega_img: std::sync::Arc<image::RgbaImage> =
+                    std::sync::Arc::new(circle_img(PLAYER_R as u32, 255, 255, 255));
+                let comet_mega_img: std::sync::Arc<image::RgbaImage> =
+                    std::sync::Arc::new(circle_img(70, 255, 180, 60));
+                let mut comets = mega_shaders::CometState::init_comets();
+                let mut droplets = mega_shaders::DropletState::init_droplets();
+
                 canvas.on_update(move |c| {
                     // ── Dead check ───────────────────────────────────────
                     {
@@ -1615,6 +1904,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         &tech_bounce_anim,
                         &tech_bounce_img_flipped,
                         &tech_bounce_anim_flipped,
+                    );
+
+                    // ── Mega shader VFX overlays ─────────────────────────
+                    mega_shaders::tick_mega_shaders(
+                        c,
+                        &st,
+                        &player_mega_img,
+                        &comet_mega_img,
+                        &mut comets,
+                        &mut droplets,
                     );
 
                     // ── Coin magnet radius debug visual ──────────────────

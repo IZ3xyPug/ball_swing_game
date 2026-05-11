@@ -1,4 +1,5 @@
 use quartz::*;
+use quartz::plugin::terrain_collision::TerrainCollisionCall;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::constants::*;
@@ -24,6 +25,80 @@ fn spawn_anim_ticks_for_speed(vx: f32) -> u32 {
     // Lerp from SPAWN_ANIM_TICKS down to SPAWN_ANIM_TICKS/2 as speed goes 0→cap.
     let ticks = SPAWN_ANIM_TICKS as f32 * (1.0 - speed_t * 0.5);
     (ticks as u32).max(10)
+}
+
+fn ensure_pad_dynamic_outline(c: &mut Canvas, id: &str) {
+    // Use frame 0 of the actual GIF processed through the same crop+scale
+    // pipeline as the visual renderer.  This guarantees the collision hull
+    // matches what the player sees for the dormant/resting pad state and
+    // stays constant while the bounce animation plays.
+    let frame0 = pad_gif_frame0_cached();
+    if frame0.width() == 0 || frame0.height() == 0 {
+        return;
+    }
+
+    // GIF frames have 1-bit alpha (0 or 255); threshold 10 is safe and avoids
+    // anti-alias noise without excluding any real pad pixels.
+    // PinCollisionImage accepts the Arc directly — no manual byte extraction.
+    c.run(Action::PluginCall {
+        name: "terrain_collision".into(),
+        payload: Arc::new(TerrainCollisionCall::PinCollisionImage {
+            name: id.to_string(),
+            image: frame0,
+            object_size: (PAD_W, PAD_H),
+            threshold: 10,
+            rdp_epsilon: 2.0,
+        }),
+    });
+}
+
+fn alpha_crop_for_outline(
+    img: &image::RgbaImage,
+    full_dims: (u32, u32),
+    full_size: (f32, f32),
+    threshold: u8,
+) -> (Vec<u8>, (u32, u32), (f32, f32)) {
+    let (sw, sh) = full_dims;
+    let mut min_x = sw;
+    let mut min_y = sh;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+
+    for y in 0..sh {
+        for x in 0..sw {
+            if img.get_pixel(x, y)[3] > threshold {
+                found = true;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+
+    if !found {
+        return (img.as_raw().clone(), full_dims, full_size);
+    }
+
+    let cw = max_x.saturating_sub(min_x).saturating_add(1);
+    let ch = max_y.saturating_sub(min_y).saturating_add(1);
+    if cw == 0 || ch == 0 {
+        return (img.as_raw().clone(), full_dims, full_size);
+    }
+
+    let mut cropped = Vec::with_capacity((cw as usize) * (ch as usize) * 4);
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let p = img.get_pixel(x, y);
+            cropped.extend_from_slice(&p.0);
+        }
+    }
+
+    let sx = cw as f32 / sw.max(1) as f32;
+    let sy = ch as f32 / sh.max(1) as f32;
+    let effective_size = (full_size.0 * sx, full_size.1 * sy);
+    (cropped, (cw, ch), effective_size)
 }
 
 /// Advance all active spawn-build animations by one tick.
@@ -516,6 +591,7 @@ fn spawn_pads(
             obj.rotation = 0.0;
             obj.set_image(pad_img.clone());
         }
+        ensure_pad_dynamic_outline(c, &id);
         let thr_id = pad_thruster_id(&id);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
             let thruster_embed = PAD_THRUSTER_HIDE_TOP + PAD_THRUSTER_RAISE_Y;

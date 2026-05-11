@@ -11,7 +11,7 @@ pub fn make_gate_segment(
     h: f32,
     image: Arc<image::RgbaImage>,
 ) -> GameObject {
-    GameObject::new_rect(
+    let mut obj = GameObject::new_rect(
         ctx,
         id.into(),
         Some(Image {
@@ -25,5 +25,7 @@ pub fn make_gate_segment(
         (0.0, 0.0),
         (1.0, 1.0),
         0.0,
-    )
+    );
+    obj.shadow_caster = true;
+    obj
 }

@@ -15,5 +15,6 @@ pub fn make_spinner(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameObject {
         .tag("spinner")
         .tag("obstacle")
         .rotation_resistance(1.0)
+        .casts_shadow()
         .build(ctx)
 }

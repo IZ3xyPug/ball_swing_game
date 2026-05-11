@@ -1,4 +1,5 @@
 use quartz::*;
+use quartz::plugin::terrain_collision::TerrainCollisionCall;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -73,6 +74,10 @@ fn cull_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3000.0, -3000.0); }
+        c.run(Action::PluginCall {
+            name: "terrain_collision".into(),
+            payload: Arc::new(TerrainCollisionCall::UnregisterDynamicOutline { name: name.clone() }),
+        });
         let thr_id = pad_thruster_id(name);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
             thr.visible = false;

@@ -1,3 +1,6 @@
 /target
 /src/*.sw*
 /test_dir
+/cache.db
+/cache.db-shm
+/cache.db-wal

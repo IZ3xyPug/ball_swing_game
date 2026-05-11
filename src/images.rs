@@ -512,6 +512,108 @@ fn pause_pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
 
 cached_image!(pad_image_cached, pad_img(PAD_W as u32, PAD_H as u32, C_PAD.0, C_PAD.1, C_PAD.2));
 
+/// Frame 0 of techbouncernew.gif processed with the **exact same** pipeline as
+/// `decode_tech_bounce_frames_stretched` (union crop bounds across all frames,
+/// then crop+scale+top-anchor to PAD_W×PAD_H).  This is the definitive
+/// resting-state RGBA for the pad collision outline — it matches what the
+/// renderer actually draws for the dormant pad.
+pub fn pad_gif_frame0_cached() -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let out_w = PAD_W.max(1.0).round() as u32;
+        let out_h = PAD_H.max(1.0).round() as u32;
+
+        let decoded: Option<image::RgbaImage> = (|| {
+            use image::{AnimationDecoder, ImageDecoder};
+            // ── Decode all frames (compositing), collect frame-0 canvas ──────
+            let cursor = std::io::Cursor::new(ASSET_TECH_BOUNCE_GIF);
+            let decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
+            let (gif_w, gif_h) = decoder.dimensions();
+            if gif_w == 0 || gif_h == 0 { return None; }
+
+            let frames = decoder.into_frames().collect_frames().ok()?;
+            if frames.is_empty() { return None; }
+
+            // Composite frames in order, keeping each accumulated canvas.
+            let mut composed = image::RgbaImage::from_pixel(
+                gif_w, gif_h, image::Rgba([0, 0, 0, 0]),
+            );
+            let mut composed_frames: Vec<image::RgbaImage> = Vec::with_capacity(frames.len());
+            for frame in &frames {
+                image::imageops::overlay(
+                    &mut composed,
+                    frame.buffer(),
+                    frame.left() as i64,
+                    frame.top() as i64,
+                );
+                composed_frames.push(composed.clone());
+            }
+
+            // ── Union crop bounds across ALL frames (same as visual path) ────
+            let mut min_x = gif_w;
+            let mut min_y = gif_h;
+            let mut max_x = 0u32;
+            let mut max_y = 0u32;
+            let mut found = false;
+            for frame in &composed_frames {
+                for y in 0..frame.height() {
+                    for x in 0..frame.width() {
+                        if frame.get_pixel(x, y)[3] > 0 {
+                            found = true;
+                            min_x = min_x.min(x);
+                            min_y = min_y.min(y);
+                            max_x = max_x.max(x);
+                            max_y = max_y.max(y);
+                        }
+                    }
+                }
+            }
+
+            let crop_bounds = if found {
+                let pad = 2u32;
+                let crop_x = min_x.saturating_sub(pad);
+                let crop_y = min_y.saturating_sub(pad);
+                let crop_right  = (max_x + pad).min(gif_w.saturating_sub(1));
+                let crop_bottom = (max_y + pad).min(gif_h.saturating_sub(1));
+                (
+                    crop_x,
+                    crop_y,
+                    crop_right.saturating_sub(crop_x).saturating_add(1),
+                    crop_bottom.saturating_sub(crop_y).saturating_add(1),
+                )
+            } else {
+                (0, 0, gif_w.max(1), gif_h.max(1))
+            };
+
+            // ── Same scale formula as decode_tech_bounce_frames_stretched ────
+            let draw_w = ((out_w as f32) * (crop_bounds.2 as f32 / gif_w.max(1) as f32))
+                .round()
+                .clamp(1.0, out_w as f32) as u32;
+            let draw_h = ((draw_w as f32) * (crop_bounds.3 as f32 / crop_bounds.2.max(1) as f32))
+                .round()
+                .clamp(1.0, out_h as f32) as u32;
+            let offset_x = (out_w.saturating_sub(draw_w) / 2) as i64;
+
+            // ── Apply crop+scale only to frame 0 ────────────────────────────
+            let frame0 = composed_frames.into_iter().next()?;
+            let cropped = image::imageops::crop_imm(
+                &frame0,
+                crop_bounds.0, crop_bounds.1,
+                crop_bounds.2, crop_bounds.3,
+            ).to_image();
+            let scaled = image::imageops::resize(
+                &cropped, draw_w, draw_h,
+                image::imageops::FilterType::Nearest,
+            );
+            let mut framed = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([0, 0, 0, 0]));
+            image::imageops::overlay(&mut framed, &scaled, offset_x, 0i64);
+            Some(framed)
+        })();
+
+        Arc::new(decoded.unwrap_or_else(|| (*pad_image_cached()).clone()))
+    }).clone()
+}
+
 /// Cached pad image keyed by (w, h, r, g, b). Each unique color/size combo
 /// is rasterized once; subsequent calls return the cached Arc.
 pub fn pad_cached(w: u32, h: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
