@@ -210,6 +210,16 @@ pub fn circle_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     img
 }
 
+/// Multiply every pixel's RGB channels by `factor`, clamping to 255. Alpha is unchanged.
+pub fn brighten_image(mut img: image::RgbaImage, factor: f32) -> image::RgbaImage {
+    for px in img.pixels_mut() {
+        px[0] = (px[0] as f32 * factor).min(255.0) as u8;
+        px[1] = (px[1] as f32 * factor).min(255.0) as u8;
+        px[2] = (px[2] as f32 * factor).min(255.0) as u8;
+    }
+    img
+}
+
 /// Cached circle: returns `Arc<RgbaImage>` keyed by (radius, r, g, b).
 /// Each unique combo is rasterized once; subsequent calls return the cached Arc.
 pub fn circle_cached(radius: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
@@ -677,6 +687,34 @@ pub fn asteroid_hook_image_cached() -> Arc<image::RgbaImage> {
             )),
             Err(_) => Arc::new(circle_img(HOOK_R as u32, 128, 128, 128)),
         }
+    }).clone()
+}
+
+/// Brownish-red tinted asteroid image for floating space asteroids.
+/// Single resolution (256×256); Quartz scales it via the shape's display size.
+/// Loaded/tinted once and cached for the lifetime of the process.
+pub fn asteroid_space_img_cached() -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let d = 256u32;
+        let base = match image::open(ASSET_ASTEROID) {
+            Ok(img) => image::imageops::resize(
+                &img.into_rgba8(), d, d,
+                image::imageops::FilterType::Lanczos3,
+            ),
+            Err(_) => circle_img(d / 2, 160, 60, 30),
+        };
+        let mut tinted = base;
+        for px in tinted.pixels_mut() {
+            if px[3] == 0 { continue; }
+            let r = (px[0] as f32 * 1.05 + 50.0).min(255.0) as u8;
+            let g = (px[1] as f32 * 0.85 - 15.0).max(0.0) as u8;
+            let b = (px[2] as f32 * 0.78 - 20.0).max(0.0) as u8;
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+        }
+        Arc::new(tinted)
     }).clone()
 }
 

@@ -3209,6 +3209,7 @@ dependencies = [
  "image 0.25.9",
  "prism2",
  "ramp2",
+ "rand 0.8.5",
  "rodio",
  "serde_json",
  "wgpu_canvas",

@@ -7,6 +7,11 @@ fn game_bgm_slot() -> &'static Mutex<Option<SoundHandle>> {
     GAME_BGM.get_or_init(|| Mutex::new(None))
 }
 
+fn menu_bgm_slot() -> &'static Mutex<Option<SoundHandle>> {
+    static MENU_BGM: OnceLock<Mutex<Option<SoundHandle>>> = OnceLock::new();
+    MENU_BGM.get_or_init(|| Mutex::new(None))
+}
+
 pub fn replace_game_bgm(handle: SoundHandle) {
     if let Ok(mut slot) = game_bgm_slot().lock() {
         if let Some(prev) = slot.take() {
@@ -29,5 +34,38 @@ pub fn has_game_bgm() -> bool {
         .lock()
         .ok()
         .map(|slot| slot.is_some())
+        .unwrap_or(false)
+}
+
+pub fn replace_menu_bgm(handle: SoundHandle) {
+    if let Ok(mut slot) = menu_bgm_slot().lock() {
+        if let Some(prev) = slot.take() {
+            prev.stop();
+        }
+        *slot = Some(handle);
+    }
+}
+
+pub fn stop_menu_bgm() {
+    if let Ok(mut slot) = menu_bgm_slot().lock() {
+        if let Some(prev) = slot.take() {
+            prev.stop();
+        }
+    }
+}
+
+pub fn has_menu_bgm() -> bool {
+    menu_bgm_slot()
+        .lock()
+        .ok()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false)
+}
+
+pub fn menu_bgm_finished() -> bool {
+    menu_bgm_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|h| h.is_finished()))
         .unwrap_or(false)
 }

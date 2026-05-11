@@ -1,15 +1,17 @@
 use quartz::*;
 use std::collections::HashMap;
+use std::f32::consts::PI;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use image::AnimationDecoder;
 
 use crate::constants::*;
+use crate::shop::SHOP_ROPE_COLORS;
 use crate::state::*;
 
 static ROPE_FX_FRAMES: OnceLock<Vec<Arc<image::RgbaImage>>> = OnceLock::new();
-static ROPE_FX_CACHE: OnceLock<Mutex<HashMap<(usize, u32, u32), Arc<image::RgbaImage>>>> = OnceLock::new();
+static ROPE_FX_CACHE: OnceLock<Mutex<HashMap<(usize, u32, u32, u8, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
 const ROPE_FX_SUPERSAMPLE: u32 = 1;
 const ROPE_LEN_QUANTUM_PX: u32 = 20;
 // How far the rope image extends past the hook center (away from player).
@@ -45,12 +47,18 @@ fn rope_fx_frames() -> &'static Vec<Arc<image::RgbaImage>> {
 
 /// Builds the rope image from the GIF itself (no tiling), stretched along
 /// the GIF's vertical axis: width -> beam thickness, height -> rope length.
-fn rope_fx_image(frame_idx: usize, rope_len_px: u32, beam_px: u32) -> Arc<image::RgbaImage> {
+fn rope_fx_image(
+    frame_idx: usize,
+    rope_len_px: u32,
+    beam_px: u32,
+    style_idx: u8,
+    rope_rgb: (u8, u8, u8),
+) -> Arc<image::RgbaImage> {
     let frames = rope_fx_frames();
     let idx = frame_idx % frames.len().max(1);
     let len_px = quantize_len_px(rope_len_px.max(1)).max(1);
     let thick_px = beam_px.max(1);
-    let key = (idx, len_px, thick_px);
+    let key = (idx, len_px, thick_px, style_idx, rope_rgb.0, rope_rgb.1, rope_rgb.2);
 
     let cache = ROPE_FX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(img) = cache.lock().unwrap().get(&key).cloned() {
@@ -61,7 +69,83 @@ fn rope_fx_image(frame_idx: usize, rope_len_px: u32, beam_px: u32) -> Arc<image:
     let target_w = thick_px.saturating_mul(ss);
     let target_h = len_px.saturating_mul(ss);
     let src = frames[idx].as_ref();
-    let resized = image::imageops::resize(src, target_w, target_h, image::imageops::FilterType::Nearest);
+    let mut resized = image::imageops::resize(src, target_w, target_h, image::imageops::FilterType::Nearest);
+
+    // Style 0 preserves the original animated energy rope unchanged.
+    // Styles 1-4 are drawn fresh onto a blank canvas — completely new rope shapes,
+    // not a recolor of the GIF.
+    if style_idx != 0 {
+        let w = target_w.max(1) as f32;
+        let h = target_h.max(1) as f32;
+        let phase = frame_idx as f32 * 0.27;
+        let style = style_idx.min(4);
+        let mut fresh = image::RgbaImage::new(target_w, target_h);
+        for y in 0..target_h {
+            for x in 0..target_w {
+                let xf = x as f32 / w;
+                let yf = y as f32 / h;
+
+                let shade: f32 = match style {
+                    // Braided rope: two crossing strands with a bright highlight core.
+                    1 => {
+                        let lane_a = 0.35 + 0.22 * (yf * 30.0 + phase).sin();
+                        let lane_b = 0.65 + 0.22 * (yf * 30.0 + phase + PI).sin();
+                        let da = (xf - lane_a).abs();
+                        let db = (xf - lane_b).abs();
+                        let near = da.min(db);
+                        let strand = (1.0 - near / 0.18).clamp(0.0, 1.0);
+                        // Highlight: bright center of each strand.
+                        let hi_a = (1.0 - da / 0.06).clamp(0.0, 1.0);
+                        let hi_b = (1.0 - db / 0.06).clamp(0.0, 1.0);
+                        (strand * 0.7 + hi_a.max(hi_b) * 0.3).clamp(0.0, 1.0)
+                    }
+                    // Segmented cable: dark gaps between metallic link sections.
+                    2 => {
+                        let seg_len = 12u32;
+                        let seg_phase = ((y / seg_len + (frame_idx / 2) as u32) % 2) as f32;
+                        let core = (1.0 - (xf - 0.5).abs() / 0.40).clamp(0.0, 1.0);
+                        // Gap at segment boundary.
+                        let local_y = (y % seg_len) as f32 / seg_len as f32;
+                        let gap = if local_y < 0.12 || local_y > 0.88 { 0.0 } else { 1.0 };
+                        let brightness = if seg_phase > 0.5 { 0.90 } else { 0.55 };
+                        core * gap * brightness
+                    }
+                    // Chain: oval links with dark holes in the centre.
+                    3 => {
+                        let link_h = 18u32;
+                        let local_y = (y % link_h) as f32 / link_h as f32;
+                        // Outer oval of the link.
+                        let oy = (local_y - 0.5).abs() * 2.0; // 0 = mid, 1 = top/bot
+                        let outer_r = 0.44 + 0.1 * (1.0 - oy);
+                        let ox = (xf - 0.5).abs();
+                        let on_link = (ox < outer_r) as u8 as f32;
+                        // Cut out inner hole.
+                        let inner_r = outer_r * 0.45;
+                        let in_hole = (ox < inner_r && oy < 0.55) as u8 as f32;
+                        // Pulsing highlight along the top of each link.
+                        let hi = ((local_y * PI * 2.0 + phase).sin() * 0.5 + 0.5) * 0.35;
+                        (on_link - in_hole).clamp(0.0, 1.0) * (0.65 + hi)
+                    }
+                    // Plasma ribbon: bright animated wave core.
+                    _ => {
+                        let wave = 0.5 + 0.5 * (yf * 44.0 + phase * 2.4 + xf * 8.0).sin();
+                        let core = (1.0 - (xf - 0.5).abs() / 0.42).clamp(0.0, 1.0);
+                        let glow_edge = (1.0 - (xf - 0.5).abs() / 0.50).clamp(0.0, 1.0);
+                        0.15 * glow_edge + 0.85 * (0.55 * core + 0.45 * wave) * core
+                    }
+                };
+
+                if shade > 0.02 {
+                    let r = (rope_rgb.0 as f32 * shade).clamp(0.0, 255.0) as u8;
+                    let g = (rope_rgb.1 as f32 * shade).clamp(0.0, 255.0) as u8;
+                    let b = (rope_rgb.2 as f32 * shade).clamp(0.0, 255.0) as u8;
+                    let a = (shade * 255.0).clamp(0.0, 255.0) as u8;
+                    fresh.put_pixel(x, y, image::Rgba([r, g, b, a]));
+                }
+            }
+        }
+        resized = fresh;
+    }
     let out = Arc::new(resized);
 
     let mut cache_guard = cache.lock().unwrap();
@@ -88,7 +172,9 @@ pub fn prewarm_rope_fx_cache() {
         let mut len = min_q;
         while len <= max_q {
             for frame_idx in 0..n_frames {
-                rope_fx_image(frame_idx, len, beam_px);
+                for (style_idx, &(rr, rg, rb)) in SHOP_ROPE_COLORS.iter().enumerate() {
+                    rope_fx_image(frame_idx, len, beam_px, style_idx as u8, (rr, rg, rb));
+                }
             }
             len += step;
         }
@@ -117,6 +203,21 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.visible = false;
         }
         return;
+    }
+
+    // If hooked onto a moving asteroid, track its current centre each tick.
+    if s.active_hook.starts_with("space_asteroid_") {
+        let hook_id = s.active_hook.clone();
+        drop(s);
+        if let Some(hook_obj) = c.get_game_object(&hook_id) {
+            let new_hx = hook_obj.position.0 + hook_obj.size.0 * 0.5;
+            let new_hy = hook_obj.position.1 + hook_obj.size.1 * 0.5;
+            s = st.lock().unwrap();
+            s.hook_x = new_hx;
+            s.hook_y = new_hy;
+        } else {
+            s = st.lock().unwrap();
+        }
     }
 
     let dx   = s.px - s.hook_x;
@@ -184,7 +285,15 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let rope_beam_px = rope_beam.round().max(2.0) as u32;
     let rope_len_px = rope_draw_len.round().max(1.0) as u32;
     let frame_idx = ((rope_tick as usize) / 2) % rope_fx_frames().len().max(1);
-    let rope_img = rope_fx_image(frame_idx, rope_len_px, rope_beam_px);
+    let (rope_sel_idx, rope_rgb) = {
+        let idx = match c.get_var("player_rope_selected") {
+            Some(Value::I32(v)) => v.max(0) as usize,
+            _ => 0,
+        }
+        .min(SHOP_ROPE_COLORS.len() - 1);
+        (idx as u8, SHOP_ROPE_COLORS[idx])
+    };
+    let rope_img = rope_fx_image(frame_idx, rope_len_px, rope_beam_px, rope_sel_idx, rope_rgb);
 
     if let Some(rope_obj) = c.get_game_object_mut("rope") {
         rope_obj.size = (rope_beam, rope_draw_len);

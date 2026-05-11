@@ -19,28 +19,34 @@ mod shop;
 mod sim_tests;
 
 use menu::{
+    build_tutorial_scene,
     build_gameover_oxygen_scene,
     build_gameover_scene,
     build_gameover_sun_scene,
     build_menu_scene,
     build_menu_settings_scene,
+    build_achievements_scene,
+    build_stats_scene,
+    build_daily_reward_scene,
 };
 use scenes::game::build_game_scene;
-use shop::build_shop_scene;
 
 pub struct App;
 
 impl App {
     fn new(ctx: &mut Context) -> impl Drawable {
         let mut canvas = Canvas::new(ctx, CanvasMode::Landscape);
+        canvas.add_scene(build_tutorial_scene(ctx));
         canvas.add_scene(build_menu_scene(ctx));
         canvas.add_scene(build_game_scene(ctx));
         canvas.add_scene(build_gameover_scene(ctx));
         canvas.add_scene(build_gameover_sun_scene(ctx));
         canvas.add_scene(build_gameover_oxygen_scene(ctx));
-        canvas.add_scene(build_shop_scene(ctx));
         canvas.add_scene(build_menu_settings_scene(ctx));
-        canvas.load_scene("menu");
+        canvas.add_scene(build_achievements_scene(ctx));
+        canvas.add_scene(build_stats_scene(ctx));
+        canvas.add_scene(build_daily_reward_scene(ctx));
+        canvas.load_scene("tutorial");
         canvas
     }
 }

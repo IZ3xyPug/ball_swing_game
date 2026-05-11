@@ -137,6 +137,9 @@ pub const PAD_Y_MIN: f32 = HOOK_Y_MAX + 150.0; // ≈ 1200.0
 /// Fixed upward velocity applied when the player hits a bounce pad.
 pub const PAD_BOUNCE_VY: f32 = -52.0;
 
+/// Restitution (bounciness) applied when a space asteroid hits a bounce pad.
+pub const PAD_ASTEROID_RESTITUTION: f32 = 0.75;
+
 /// How far a moving pad travels from its origin (px). 0 = static.
 pub const PAD_MOVE_RANGE: f32 = 250.0;
 /// Speed of pad oscillation (px/tick).
@@ -229,6 +232,14 @@ pub const COIN_GRID_SPACING_X: f32   = 120.0;
 pub const COIN_GRID_SPACING_Y: f32   = 120.0;
 /// Probability (0–1) that a coin spawn is a 3×3 grid.
 pub const COIN_GRID_CHANCE:    f32   = 0.30;
+/// Coin cross formation: center with four sides.
+pub const COIN_CROSS_COUNT:     usize = 5;
+pub const COIN_CROSS_SPACING:   f32   = 140.0;
+pub const COIN_CROSS_CHANCE:    f32   = 0.18;
+/// Coin diamond formation: large diamond shape around a center point.
+pub const COIN_DIAMOND_COUNT:   usize = 9;
+pub const COIN_DIAMOND_SPACING: f32   = 100.0;
+pub const COIN_DIAMOND_CHANCE:  f32   = 0.12;
 /// Radius of the coin magnet pickup effect (px).
 pub const COIN_MAGNET_RADIUS:f32 = 180.0;
 pub const COIN_MAGNET_PULL:  f32 = 0.37;
@@ -304,6 +315,20 @@ pub const C_ZONE_PURPLE_BOT:(u8,u8,u8) = (88,  36, 128 );
 pub const C_ZONE_BLACK_TOP: (u8,u8,u8) = (220, 130, 35);
 pub const C_ZONE_BLACK_BOT: (u8,u8,u8) = (255, 175, 80);
 pub const C_PLAYER:   (u8,u8,u8) = (80,  220, 160);
+
+/// Player character colour palette — shared by shop.rs and build_scene.rs.
+/// Index 0 is the animated calicoball; the colour here is just for the shop card preview.
+pub const PLAYER_CHAR_COLORS: &[(u8, u8, u8)] = &[
+    (255, 195, 140), // 0 calico (animated cat ball — colour shown on shop card)
+    (200, 200, 220), // 1 silver
+    ( 60, 160, 240), // 2 blue
+    ( 80, 210, 130), // 3 green
+    (240, 150,  60), // 4 orange
+    (180, 100, 240), // 5 purple
+    (240,  90,  90), // 6 red
+];
+pub const PLAYER_CHAR_NAMES: &[&str] = &["CALICO", "SILVER", "BLUE", "GREEN", "ORANGE", "PURPLE", "RED"];
+
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
 pub const C_HOOK_NEAR:(u8,u8,u8) = (255, 120, 50 );
@@ -350,9 +375,16 @@ pub const ASSET_COIN_SFX_4: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/
 pub const ASSET_BGM_TRACK_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_1.mp3");
 pub const ASSET_BGM_TRACK_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_2.mp3");
 pub const ASSET_BGM_TRACK_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_3.mp3");
+pub const ASSET_MENU_BGM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Roses_new.mp3");
+pub const ASSET_MENU_BGM_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Pill.mp3");
+pub const ASSET_MENU_BGM_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Menumusic.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
 pub const ASSET_BACKGROUND_2: &[u8] = include_bytes!("../assets/background_2.webp");
 pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
+pub const ASSET_MAN_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/man_game_over.mp3");
+pub const ASSET_ARCADE_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/arcade_game_over.mp3");
+pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wobbly_meow.mp3");
+pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
 pub const ASSET_THRUSTER1_GIF: &[u8] = include_bytes!("../assets/thruster1.gif");
 pub const ASSET_CALICOBALL_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/calicoball.gif");
@@ -453,7 +485,7 @@ pub const PASSIVE_SCORE_BLOCK_SIZE:  f32 = 5000.0;
 pub const PASSIVE_SCORE_DEAD_TICKS:  u32 = 720;
 
 // ── Starfield background ──────────────────────────────────────────────────────
-pub const STARFIELD_STAR_COUNT: u32 = 350;
+pub const STARFIELD_STAR_COUNT: u32 = 650;
 
 // ── Rocket pad (rare special pad that launches player into space) ─────────────
 pub const ROCKET_PAD_GAP_MIN:      f32   = 12000.0; // very wide gap → rare
@@ -558,7 +590,7 @@ pub const SPACE_CATCOIN_BLUE_SCORE: u32 = SPACE_COIN_SCORE * 5;
 pub const SPACE_CATCOIN_RED_SCORE:  u32 = SPACE_COIN_SCORE * 25;
 pub const SPACE_CATCOIN_BLUE_CHANCE: f32 = 0.22;
 pub const SPACE_CATCOIN_RED_CHANCE:  f32 = 0.08;
-pub const SPACE_COIN_ANIM_FPS: f32 = 12.0;
+pub const SPACE_COIN_ANIM_FPS: f32 = 6.0;
 pub const SPACE_COIN_R:        f32 = 27.0;
 pub const SPACE_COIN_FORMATION_COUNT: usize = 4;
 pub const SPACE_COIN_FORMATION_SPACING: f32 = 210.0;
@@ -729,6 +761,9 @@ pub const SPACE_ASTEROID_VX_MIN: f32 = -4.0;
 pub const SPACE_ASTEROID_VX_MAX: f32 =  4.0;
 pub const SPACE_ASTEROID_VY_MIN: f32 = -2.0;
 pub const SPACE_ASTEROID_VY_MAX: f32 =  2.0;
+// Fraction of the player's incoming velocity transferred to an asteroid on hook.
+// Scaled by (SIZE_MIN / actual_size) so smaller asteroids receive more impulse.
+pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.08;
 
 // Stasis orbit (shared between entry/exit stasis and game-start stasis)
 pub const STASIS_ORBIT_R:     f32 = 240.0;

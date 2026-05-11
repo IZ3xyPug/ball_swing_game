@@ -219,3 +219,53 @@ pub fn flip_timer_img(remaining_ticks: u32, total_ticks: u32) -> image::RgbaImag
 
     img
 }
+
+pub fn score_x2_timer_img(remaining_ticks: u32, total_ticks: u32) -> image::RgbaImage {
+    let w = 504u32;
+    let h = 118u32;
+    let mut img = image::RgbaImage::new(w, h);
+    // Background panel
+    draw_rect(&mut img, 0, 0, w, h, [15, 18, 28, 220]);
+    draw_rect(&mut img, 0, 0, w, 2, [120, 255, 160, 255]);
+    draw_rect(&mut img, 0, h - 2, w, 2, [120, 255, 160, 255]);
+    draw_rect(&mut img, 0, 0, 2, h, [120, 255, 160, 255]);
+    draw_rect(&mut img, w - 2, 0, 2, h, [120, 255, 160, 255]);
+
+    // "2X" icon
+    draw_rect(&mut img, 20, 18, 16, 6, [120, 255, 160, 255]);
+    draw_rect(&mut img, 32, 24, 6, 12, [120, 255, 160, 255]);
+    draw_rect(&mut img, 20, 36, 18, 6, [120, 255, 160, 255]);
+    draw_rect(&mut img, 20, 42, 6, 12, [120, 255, 160, 255]);
+    draw_rect(&mut img, 20, 54, 18, 6, [120, 255, 160, 255]);
+    // X
+    for i in 0u32..18 {
+        img.put_pixel(52 + i, 18 + i, image::Rgba([120, 255, 160, 255]));
+        img.put_pixel(52 + i, 70 - i - 1, image::Rgba([120, 255, 160, 255]));
+        if i > 0 && i < 17 {
+            img.put_pixel(53 + i, 18 + i, image::Rgba([120, 255, 160, 255]));
+            img.put_pixel(53 + i, 70 - i - 1, image::Rgba([120, 255, 160, 255]));
+        }
+    }
+
+    // Seconds remaining
+    let secs = (remaining_ticks + 59) / 60;
+    let secs = secs.min(99);
+    let tens = (secs / 10) as u8;
+    let ones = (secs % 10) as u8;
+    draw_digit_7seg(&mut img, 98, 17, 3, tens, [120, 255, 160, 255]);
+    draw_digit_7seg(&mut img, 154, 17, 3, ones, [120, 255, 160, 255]);
+
+    // "S" label
+    draw_rect(&mut img, 220, 20, 28, 6, [200, 200, 210, 255]);
+    draw_rect(&mut img, 220, 20, 6, 17, [200, 200, 210, 255]);
+    draw_rect(&mut img, 220, 37, 28, 6, [200, 200, 210, 255]);
+    draw_rect(&mut img, 242, 37, 6, 17, [200, 200, 210, 255]);
+    draw_rect(&mut img, 220, 54, 28, 6, [200, 200, 210, 255]);
+
+    // Depleting bar
+    let fill = if total_ticks > 0 { remaining_ticks as f32 / total_ticks as f32 } else { 0.0 };
+    let bar = bar_img(420, 20, fill, 120, 255, 160);
+    image::imageops::overlay(&mut img, &bar, 42, 87);
+
+    img
+}

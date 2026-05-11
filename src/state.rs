@@ -173,6 +173,7 @@ pub struct State {
     pub hud_last_px:            i32,
     pub hud_last_flip_timer:    u32,
     pub hud_last_zero_g_timer:  u32,
+    pub hud_last_score_x2_timer: u32,
     pub hud_last_score:         u32,
     pub hud_coin_fade_ticks:    u32,
     pub hud_coin_alpha:         u8,

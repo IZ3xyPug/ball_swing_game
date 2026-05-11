@@ -75,8 +75,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 .into_iter()
                 .filter(|o| o.tags.iter().any(|t| t == "hook"))
                 .map(|o| {
-                    let hcx = o.position.0 + HOOK_R;
-                    let hcy = o.position.1 + HOOK_R;
+                    let hcx = o.position.0 + o.size.0 * 0.5;
+                    let hcy = o.position.1 + o.size.1 * 0.5;
                     let pdx = hcx - s.px;
                     let pdy = hcy - s.py;
                     let player_d2 = pdx * pdx + pdy * pdy;
@@ -106,6 +106,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         if let Some((hook_id, hx, hy, player_d2, _cursor_d2)) = nearest {
             let rope_len = player_d2.sqrt().clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
 
+            // Capture incoming velocity before it's redirected by the grab impulse.
+            let (pvx, pvy) = (s.vx, s.vy);
             apply_grab_impulse(&mut s, hx, hy);
 
             s.hooked = true;
@@ -135,10 +137,17 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     obj.set_image(hook_img(r, g, b));
                     obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
                 }
+                // Transfer player momentum to asteroid on grab; smaller asteroids react more.
+                if hook_id.starts_with("space_asteroid_") {
+                    let factor = ASTEROID_HOOK_IMPULSE_FACTOR
+                        * (SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(1.0));
+                    obj.momentum.0 += pvx * factor;
+                    obj.momentum.1 += pvy * factor;
+                }
             }
 
             c.run(Action::Show { target: Target::name("rope") });
-            c.play_sound_with(ASSET_SWOOSH_SFX, SoundOptions::new().volume(0.6));
+            c.play_sound_with(ASSET_CARTOON_CAT, SoundOptions::new().volume(0.6));
         }
     });
 

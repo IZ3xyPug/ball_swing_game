@@ -1,6 +1,30 @@
 use quartz::*;
 use image::{AnimationDecoder, ImageDecoder};
 
+/// Decode a GIF from bytes, tint each frame with a brownish-red colour shift,
+/// and return it as an `AnimatedSprite` using `from_frames`.
+fn tint_asteroid_gif_brownish_red(bytes: &'static [u8], size: (f32, f32), fps: f32) -> Option<AnimatedSprite> {
+    use std::io::Cursor;
+    let cursor  = Cursor::new(bytes);
+    let decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
+    let frames: Vec<image::RgbaImage> = decoder.into_frames()
+        .filter_map(|f| f.ok())
+        .map(|f| {
+            let mut img = f.into_buffer();
+            for px in img.pixels_mut() {
+                if px[3] == 0 { continue; }
+                let r = (px[0] as f32 * 0.82 + 18.0).min(255.0) as u8;
+                let g = (px[1] as f32 * 0.42).max(0.0) as u8;
+                let b = (px[2] as f32 * 0.34).max(0.0) as u8;
+                px[0] = r; px[1] = g; px[2] = b;
+            }
+            img
+        })
+        .collect();
+    if frames.is_empty() { return None; }
+    Some(AnimatedSprite::from_frames(frames, size, fps))
+}
+
 use crate::constants::*;
 use crate::hud::*;
 use crate::images::*;
@@ -198,7 +222,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     bg_space.ignore_zoom = true;
     bg_space.visible = false;
-    bg_space.set_tint(Color(255, 255, 255, 0));
+
+    let mut bg_stars_b = GameObject::new_rect(
+        ctx, "bg_stars_b".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+            image: solid(0, 0, 0, 0).into(),
+            color: None,
+        }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    bg_stars_b.ignore_zoom = true;
+    bg_stars_b.visible = false;
 
     // ── Energy hook reference display (top-right corner) ─────────────────
     const ASTEROID_W: f32 = 480.0;
@@ -469,6 +504,20 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     zero_g_timer_hud.ignore_zoom = true;
     zero_g_timer_hud.layer = 100;
 
+    let mut score_x2_timer_hud = GameObject::new_rect(
+        ctx, "score_x2_timer".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
+            image: score_x2_timer_img(SCORE_X2_DURATION, SCORE_X2_DURATION).into(),
+            color: None,
+        }),
+        (504.0, 118.0), (VW * 0.5 - 252.0, 820.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    score_x2_timer_hud.visible = false;
+    score_x2_timer_hud.ignore_zoom = true;
+    score_x2_timer_hud.layer = 100;
+
     let mut coin_magnet_radius = {
         let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;
         let mut img = image::RgbaImage::new(d, d);
@@ -512,6 +561,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut scene = Scene::new("game")
         .with_object("bg",           bg)
         .with_object("bg_space",     bg_space)
+        .with_object("bg_stars_b",   bg_stars_b)
         .with_object("asteroid",     asteroid)
         .with_object("danger_floor", floor)
         .with_object("rope",         rope)
@@ -527,6 +577,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("combo_flash",  combo_flash)
         .with_object("flip_timer", flip_timer_hud)
         .with_object("zero_g_timer", zero_g_timer_hud)
+        .with_object("score_x2_timer", score_x2_timer_hud)
         .with_object("coin_magnet_radius", coin_magnet_radius);
 
     // ── Hook pool ────────────────────────────────────────────────────────
@@ -621,9 +672,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Coin pool ────────────────────────────────────────────────────────
     let coin_static_sprite = load_image_sized(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
     let coin_anim_template = AnimatedSprite::new(
-        include_bytes!("../../../assets/coin.gif"),
+        include_bytes!("../../../assets/catcoingold.gif"),
         (COIN_R * 2.0, COIN_R * 2.0),
-        12.0,
+        6.0,
     ).ok();
     let score_x2_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/2x.gif"),
@@ -838,11 +889,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .or_else(|_| image::open(ASSET_ASTEROID))
         .map(|img| img.into_rgba8())
         .unwrap_or_else(|_| solid(120, 120, 132, 255));
-    let asteroid_anim_template = AnimatedSprite::new(
+    let asteroid_anim_template = tint_asteroid_gif_brownish_red(
         include_bytes!("../../../assets/asteroid.gif"),
         (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
         8.0,
-    ).ok();
+    );
     let mut space_asteroid_free: Vec<String> = Vec::new();
     for i in 0..SPACE_ASTEROID_POOL_SIZE {
         let id = format!("space_asteroid_{i}");
@@ -856,7 +907,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             }),
             (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
             (-6300.0, -6300.0),
-            vec![],
+            vec!["hook".into()],
             (0.0, 0.0),
             (1.0, 1.0),
             0.0,
@@ -880,7 +931,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         SPACE_RED_COIN_R * 2.0,
     );
     let space_cat_red_anim_template = AnimatedSprite::new(
-        include_bytes!("../../../assets/catcoinred.gif"),
+        include_bytes!("../../../assets/catcoingold.gif"),
         (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0),
         SPACE_COIN_ANIM_FPS,
     ).ok();

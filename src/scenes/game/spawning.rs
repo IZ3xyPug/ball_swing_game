@@ -616,9 +616,18 @@ fn spawn_coins(
         let roll = lcg(&mut s.seed);
         let spawn_grid  = s.coin_free.len() >= COIN_GRID_COLS * COIN_GRID_ROWS
             && roll < COIN_GRID_CHANCE;
+        let spawn_diamond = !spawn_grid
+            && s.coin_free.len() >= COIN_DIAMOND_COUNT
+            && roll < COIN_GRID_CHANCE + COIN_DIAMOND_CHANCE;
+        let spawn_cross = !spawn_grid
+            && !spawn_diamond
+            && s.coin_free.len() >= COIN_CROSS_COUNT
+            && roll < COIN_GRID_CHANCE + COIN_DIAMOND_CHANCE + COIN_CROSS_CHANCE;
         let spawn_array = !spawn_grid
+            && !spawn_diamond
+            && !spawn_cross
             && s.coin_free.len() >= COIN_ARRAY_COUNT
-            && roll < COIN_GRID_CHANCE + COIN_ARRAY_CHANCE;
+            && roll < COIN_GRID_CHANCE + COIN_DIAMOND_CHANCE + COIN_CROSS_CHANCE + COIN_ARRAY_CHANCE;
         let mut spawn_batch: Vec<(String, f32, f32, usize)> = Vec::new();
         let mut spawned_start_x = desired_start_x;
         let coin_anim_frames = coin_spawn_anim.as_ref().map(|a| a.frame_count().max(1)).unwrap_or(1);
@@ -639,7 +648,7 @@ fn spawn_coins(
                     spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
                 }
             }
-        } else if spawn_array {
+        } else {
             let mut best_anchor: Option<(f32, f32)> = None;
             let mut best_score = f32::INFINITY;
             let hook_ids = s.live_hooks.clone();
@@ -668,31 +677,79 @@ fn spawn_coins(
                 lcg_range(&mut s.seed, center_min, COIN_ARRAY_Y_MAX)
             };
 
-            let half = (COIN_ARRAY_COUNT as f32 - 1.0) * 0.5;
-            for i in 0..COIN_ARRAY_COUNT {
-                let x = spawned_start_x + i as f32 * COIN_ARRAY_SPACING;
-                let t = i as f32 - half;
-                let norm = if half > 0.0 { (t.abs() / half).clamp(0.0, 1.0) } else { 0.0 };
-                let arch = 1.0 - norm * norm;
-                let raw_y = center_raw_y - arch * COIN_CURVE_RISE;
-                let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
-                let Some(id) = s.coin_free.pop() else { break; };
-                s.coin_live.push(id.clone());
-                spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
+            if spawn_diamond {
+                let spacing = COIN_DIAMOND_SPACING;
+                // True diamond (rhombus): 1-2-3-2-1 pattern, widest at centre row.
+                let center_x = spawned_start_x + 2.0 * spacing;
+                let positions = [
+                    // tip – top
+                    (center_x,                 center_raw_y - 2.0 * spacing),
+                    // upper row
+                    (center_x - spacing,       center_raw_y - spacing),
+                    (center_x + spacing,       center_raw_y - spacing),
+                    // centre row (widest)
+                    (center_x - 2.0 * spacing, center_raw_y),
+                    (center_x,                 center_raw_y),
+                    (center_x + 2.0 * spacing, center_raw_y),
+                    // lower row
+                    (center_x - spacing,       center_raw_y + spacing),
+                    (center_x + spacing,       center_raw_y + spacing),
+                    // tip – bottom
+                    (center_x,                 center_raw_y + 2.0 * spacing),
+                ];
+                for (x, raw_y) in positions {
+                    let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
+                    let Some(id) = s.coin_free.pop() else { break; };
+                    s.coin_live.push(id.clone());
+                    spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
+                }
+            } else if spawn_cross {
+                let spacing = COIN_CROSS_SPACING;
+                let center_x = spawned_start_x + spacing;
+                let positions = [
+                    (center_x, center_raw_y),
+                    (center_x, center_raw_y - spacing),
+                    (center_x, center_raw_y + spacing),
+                    (center_x - spacing, center_raw_y),
+                    (center_x + spacing, center_raw_y),
+                ];
+                for (x, raw_y) in positions {
+                    let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
+                    let Some(id) = s.coin_free.pop() else { break; };
+                    s.coin_live.push(id.clone());
+                    spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
+                }
+            } else if spawn_array {
+                let half = (COIN_ARRAY_COUNT as f32 - 1.0) * 0.5;
+                for i in 0..COIN_ARRAY_COUNT {
+                    let x = spawned_start_x + i as f32 * COIN_ARRAY_SPACING;
+                    let t = i as f32 - half;
+                    let norm = if half > 0.0 { (t.abs() / half).clamp(0.0, 1.0) } else { 0.0 };
+                    let arch = 1.0 - norm * norm;
+                    let raw_y = center_raw_y - arch * COIN_CURVE_RISE;
+                    let y = if s.gravity_dir < 0.0 { VH - raw_y } else { raw_y };
+                    let Some(id) = s.coin_free.pop() else { break; };
+                    s.coin_live.push(id.clone());
+                    spawn_batch.push((id, x, y, array_phase_frame.min(coin_anim_frames - 1)));
+                }
+            } else {
+                // No pattern this slot — advance rightmost and continue.
+                s.coin_rightmost = desired_start_x;
+                batches += 1;
+                drop(s);
+                s = st.lock().unwrap();
+                continue;
             }
-        } else {
-            // No pattern this slot — advance rightmost and continue.
-            s.coin_rightmost = desired_start_x;
-            batches += 1;
-            drop(s);
-            s = st.lock().unwrap();
-            continue;
         }
 
         if spawn_batch.is_empty() { break; }
 
         s.coin_rightmost = if spawn_grid {
             spawned_start_x + (COIN_GRID_COLS as f32 - 1.0) * COIN_GRID_SPACING_X
+        } else if spawn_diamond {
+            spawned_start_x + 4.0 * COIN_DIAMOND_SPACING
+        } else if spawn_cross {
+            spawned_start_x + 2.0 * COIN_CROSS_SPACING
         } else {
             spawned_start_x + (COIN_ARRAY_COUNT as f32 - 1.0) * COIN_ARRAY_SPACING
         };
