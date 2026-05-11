@@ -761,6 +761,9 @@ pub const SPACE_ASTEROID_VX_MIN: f32 = -4.0;
 pub const SPACE_ASTEROID_VX_MAX: f32 =  4.0;
 pub const SPACE_ASTEROID_VY_MIN: f32 = -2.0;
 pub const SPACE_ASTEROID_VY_MAX: f32 =  2.0;
+// Fraction of the player's incoming velocity transferred to an asteroid on hook.
+// Scaled by (SIZE_MIN / actual_size) so smaller asteroids receive more impulse.
+pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.08;
 
 // Stasis orbit (shared between entry/exit stasis and game-start stasis)
 pub const STASIS_ORBIT_R:     f32 = 240.0;

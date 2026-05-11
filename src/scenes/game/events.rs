@@ -106,6 +106,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         if let Some((hook_id, hx, hy, player_d2, _cursor_d2)) = nearest {
             let rope_len = player_d2.sqrt().clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
 
+            // Capture incoming velocity before it's redirected by the grab impulse.
+            let (pvx, pvy) = (s.vx, s.vy);
             apply_grab_impulse(&mut s, hx, hy);
 
             s.hooked = true;
@@ -134,6 +136,13 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     let (r, g, b) = hook_on_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
                     obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
+                }
+                // Transfer player momentum to asteroid on grab; smaller asteroids react more.
+                if hook_id.starts_with("space_asteroid_") {
+                    let factor = ASTEROID_HOOK_IMPULSE_FACTOR
+                        * (SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(1.0));
+                    obj.momentum.0 += pvx * factor;
+                    obj.momentum.1 += pvy * factor;
                 }
             }
 

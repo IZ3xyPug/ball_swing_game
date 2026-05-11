@@ -51,6 +51,8 @@
                 let rope_len = dist.clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
                 let speed    = (s.vx*s.vx + s.vy*s.vy).sqrt();
 
+                // Capture incoming velocity before it's redirected by the grab impulse.
+                let (pvx, pvy) = (s.vx, s.vy);
                 apply_grab_impulse(&mut s, hx, hy);
 
                     s.hooked     = true;
@@ -75,6 +77,13 @@
                             color: None,
                         });
                         obj.set_glow(GlowConfig { color: Color(220, 80, 30, 200), width: 8.0 });
+                        // Transfer player momentum to asteroid on grab; smaller asteroids react more.
+                        if hook_id.starts_with("space_asteroid_") {
+                            let factor = ASTEROID_HOOK_IMPULSE_FACTOR
+                                * (SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(1.0));
+                            obj.momentum.0 += pvx * factor;
+                            obj.momentum.1 += pvy * factor;
+                        }
                     }
                     // Track glow flash for hook
                     {
