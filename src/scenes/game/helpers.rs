@@ -11,7 +11,21 @@ pub fn play_death_sound(c: &mut Canvas) {
         _ => 0,
     };
     let asset = if mode == 1 { ASSET_ARCADE_GAME_OVER } else { ASSET_WOBBLY_MEOW };
-    c.play_sound_with(asset, SoundOptions::new().volume(1.0));
+    let vol = sfx_vol(c, 0.65);
+    c.play_sound_with(asset, SoundOptions::new().volume(vol));
+}
+
+/// Compute effective SFX volume: base * vol_master * vol_sound.
+pub fn sfx_vol(c: &Canvas, base: f32) -> f32 {
+    let master = match c.get_var("vol_master") {
+        Some(Value::F32(v)) => v.clamp(0.0, 1.0),
+        _ => 1.0,
+    };
+    let sound = match c.get_var("vol_sound") {
+        Some(Value::F32(v)) => v.clamp(0.0, 1.0),
+        _ => 1.0,
+    };
+    (base * master * sound).clamp(0.0, 1.0)
 }
 
 /// Hook image using circle_cached — keeps hooks in the same

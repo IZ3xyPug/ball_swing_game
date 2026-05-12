@@ -1,5 +1,6 @@
 use quartz::*;
 use image::{AnimationDecoder, ImageDecoder};
+use std::sync::OnceLock;
 
 /// Decode a GIF from bytes, tint each frame with a brownish-red colour shift,
 /// and return it as an `AnimatedSprite` using `from_frames`.
@@ -13,9 +14,9 @@ fn tint_asteroid_gif_brownish_red(bytes: &'static [u8], size: (f32, f32), fps: f
             let mut img = f.into_buffer();
             for px in img.pixels_mut() {
                 if px[3] == 0 { continue; }
-                let r = (px[0] as f32 * 0.82 + 18.0).min(255.0) as u8;
-                let g = (px[1] as f32 * 0.42).max(0.0) as u8;
-                let b = (px[2] as f32 * 0.34).max(0.0) as u8;
+                let r = (px[0] as f32 * 0.85 + 28.0).min(255.0) as u8;
+                let g = (px[1] as f32 * 0.35).max(0.0) as u8;
+                let b = (px[2] as f32 * 0.12).max(0.0) as u8;
                 px[0] = r; px[1] = g; px[2] = b;
             }
             img
@@ -23,6 +24,19 @@ fn tint_asteroid_gif_brownish_red(bytes: &'static [u8], size: (f32, f32), fps: f
         .collect();
     if frames.is_empty() { return None; }
     Some(AnimatedSprite::from_frames(frames, size, fps))
+}
+
+/// Returns the brownish-red asteroid animation template.
+/// The GIF is decoded and tinted once on first call; subsequent calls clone the cached result.
+pub fn hook_asteroid_anim_for_spawn() -> Option<AnimatedSprite> {
+    static CACHED: OnceLock<Option<AnimatedSprite>> = OnceLock::new();
+    CACHED.get_or_init(|| {
+        tint_asteroid_gif_brownish_red(
+            include_bytes!("../../../assets/asteroid.gif"),
+            (crate::constants::SPACE_ASTEROID_SIZE_MIN, crate::constants::SPACE_ASTEROID_SIZE_MIN),
+            8.0,
+        )
+    }).clone()
 }
 
 use crate::constants::*;
@@ -580,17 +594,51 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("score_x2_timer", score_x2_timer_hud)
         .with_object("coin_magnet_radius", coin_magnet_radius);
 
+    // ── Asteroid animation template (shared by hook pool and asteroid pool) ───
+    // Decode once here; hook pool and space_asteroid pool both clone from this.
+    let hook_asteroid_anim = tint_asteroid_gif_brownish_red(
+        include_bytes!("../../../assets/asteroid.gif"),
+        (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
+        8.0,
+    );
+
     // ── Hook pool ────────────────────────────────────────────────────────
     let mut starter_names: Vec<String> = Vec::new();
     let mut pool_free: Vec<String> = Vec::new();
     for i in 0..HOOK_POOL_SIZE {
         let id = format!("hook_{i}");
-        let mut obj = if i < starter_hooks.len() {
+        // Vary size across the asteroid range so hooks have different scales.
+        let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 73.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        // Gentle deterministic drift — small enough not to leave the play area fast.
+        let dv_x = ((i as f32 * 0.7 + 0.3) % 1.0 - 0.5) * 0.35;
+        let dv_y = ((i as f32 * 1.3 + 0.2) % 1.0 - 0.5) * 0.18;
+        let (init_x, init_y) = if i < starter_hooks.len() {
             let (hx, hy) = starter_hooks[i];
-            make_hook(ctx, &id, hx, hy)
+            (hx - size * 0.5, hy - size * 0.5)
         } else {
-            make_hook(ctx, &id, -2000.0, -2000.0)
+            (-2000.0, -2000.0)
         };
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (size, size),
+            (init_x, init_y),
+            vec!["hook".into()],
+            (dv_x, dv_y),
+            (1.0, 1.0),
+            0.0,
+        );
+        // Only set animation on starter hooks (initially visible).
+        // Pool hooks are invisible; enabling their animation would tick
+        // all 60+ GIF sprites every frame even off-screen, causing lag.
+        if i < starter_hooks.len() {
+            if let Some(anim) = &hook_asteroid_anim {
+                obj.set_animation(anim.clone());
+            }
+        }
+        obj.gravity = 0.0;
+        obj.rotation_momentum = ((i as f32 * 0.9 + 0.1) % 1.0 - 0.5) * 0.008;
         obj.layer = LAYER_SPACE_HOOK;
         if i < starter_hooks.len() {
             starter_names.push(id.clone());
@@ -800,10 +848,25 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space hook pool ───────────────────────────────────────────────────
+    // Animations are NOT set here to avoid ticking 160 invisible GIF sprites every frame.
+    // call `hook_asteroid_anim_for_spawn()` in space_zone.rs when a hook becomes visible.
     let mut space_hook_free: Vec<String> = Vec::new();
     for i in 0..SPACE_HOOK_POOL_SIZE {
         let id = format!("space_hook_{i}");
-        let mut obj = make_hook(ctx, &id, -5700.0, -5700.0);
+        let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 59.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (size, size),
+            (-5700.0, -5700.0),
+            vec!["hook".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.rotation_momentum = ((i as f32 * 1.1 + 0.4) % 1.0 - 0.5) * 0.008;
         obj.visible = false;
         obj.layer = LAYER_SPACE_HOOK;
         space_hook_free.push(id.clone());
@@ -1057,16 +1120,79 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     start_prompt_text.layer = 10_002;
     start_prompt_text.ignore_zoom = true;
 
-    let mut settings_text = GameObject::build("settings_text")
-        .size(1400.0, 800.0)
-        .position((VW - 1400.0) * 0.5, VH * 0.15)
-        .tag("hud")
-        .build(ctx);
-    settings_text.visible = false;
-    settings_text.layer = 10_002;
-    settings_text.ignore_zoom = true;
+    // Three independent label objects — one above each slider track — so
+    // vertical positioning is exact rather than relying on \n spacing.
+    // Positioned at SLIDER_Y[i] - 100 so the label sits just above its track.
+    let make_settings_label = |ctx: &mut Context, id: &str, y: f32| {
+        let mut obj = GameObject::build(id)
+            .size(1400.0, 80.0)
+            .position((VW - 1400.0) * 0.5, y)
+            .tag("hud")
+            .build(ctx);
+        obj.visible = false;
+        obj.layer = 10_004;
+        obj.ignore_zoom = true;
+        obj
+    };
+    let settings_label_0 = make_settings_label(ctx, "settings_label_0", 720.0);
+    let settings_label_1 = make_settings_label(ctx, "settings_label_1", 1020.0);
+    let settings_label_2 = make_settings_label(ctx, "settings_label_2", 1320.0);
 
     let settings_back_btn = make_pause_btn(ctx, "settings_back_btn", 80, 80, 100, "BACK", 1660.0);
+
+    // ── Settings volume sliders ───────────────────────────────────────────
+    // Tracks are thin solid-color rectangles; thumbs are small rounded rects.
+    // Both are ignore_zoom so they sit in virtual-screen space like the pause buttons.
+    const SLIDER_TRACK_W: f32 = 1400.0;
+    const SLIDER_TRACK_H: f32 = 24.0;
+    const SLIDER_THUMB_W: f32 = 60.0;
+    const SLIDER_THUMB_H: f32 = 80.0;
+    const SLIDER_TRACK_X: f32 = (VW - SLIDER_TRACK_W) / 2.0;
+    // Track Y positions (one per volume: master, music, sound)
+    const SLIDER_Y: [f32; 3] = [820.0, 1120.0, 1420.0];
+
+    let make_slider_track = |ctx: &mut Context, id: &str, y: f32| {
+        let mut obj = GameObject::new_rect(
+            ctx, id.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (SLIDER_TRACK_W, SLIDER_TRACK_H), 0.0),
+                image: solid(60, 62, 88, 220).into(),
+                color: None,
+            }),
+            (SLIDER_TRACK_W, SLIDER_TRACK_H),
+            (SLIDER_TRACK_X, y),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        obj.visible = false;
+        obj.layer = 10_003;
+        obj.ignore_zoom = true;
+        obj
+    };
+
+    let make_slider_thumb = |ctx: &mut Context, id: &str, y: f32| {
+        let mut obj = GameObject::new_rect(
+            ctx, id.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (SLIDER_THUMB_W, SLIDER_THUMB_H), 0.0),
+                image: solid(210, 220, 255, 255).into(),
+                color: None,
+            }),
+            (SLIDER_THUMB_W, SLIDER_THUMB_H),
+            (SLIDER_TRACK_X, y - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        obj.visible = false;
+        obj.layer = 10_005;
+        obj.ignore_zoom = true;
+        obj
+    };
+
+    let slider_master_track = make_slider_track(ctx, "slider_master_track", SLIDER_Y[0]);
+    let slider_master_thumb = make_slider_thumb(ctx, "slider_master_thumb", SLIDER_Y[0]);
+    let slider_music_track  = make_slider_track(ctx, "slider_music_track",  SLIDER_Y[1]);
+    let slider_music_thumb  = make_slider_thumb(ctx, "slider_music_thumb",  SLIDER_Y[1]);
+    let slider_sound_track  = make_slider_track(ctx, "slider_sound_track",  SLIDER_Y[2]);
+    let slider_sound_thumb  = make_slider_thumb(ctx, "slider_sound_thumb",  SLIDER_Y[2]);
 
     scene = scene
         .with_object("pause_title", pause_title)
@@ -1075,8 +1201,16 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("pause_settings_btn", pause_settings_btn)
         .with_object("pause_menu_btn", pause_menu_btn)
         .with_object("start_prompt_text", start_prompt_text)
-        .with_object("settings_text", settings_text)
-        .with_object("settings_back_btn", settings_back_btn);
+        .with_object("settings_label_0", settings_label_0)
+        .with_object("settings_label_1", settings_label_1)
+        .with_object("settings_label_2", settings_label_2)
+        .with_object("settings_back_btn", settings_back_btn)
+        .with_object("slider_master_track", slider_master_track)
+        .with_object("slider_master_thumb", slider_master_thumb)
+        .with_object("slider_music_track",  slider_music_track)
+        .with_object("slider_music_thumb",  slider_music_thumb)
+        .with_object("slider_sound_track",  slider_sound_track)
+        .with_object("slider_sound_thumb",  slider_sound_thumb);
 
     // ── Zone divider lines ────────────────────────────────────────────────
     // Thin vertical white lines at each zone boundary, drawn in world space.

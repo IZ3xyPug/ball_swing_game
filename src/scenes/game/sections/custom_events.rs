@@ -67,7 +67,7 @@
                     drop(s);
 
                     // Swing sound
-                    c.play_sound_with(ASSET_SWOOSH_SFX, SoundOptions::new().volume(3.0));
+                    c.play_sound_with(ASSET_SWOOSH_SFX, SoundOptions::new().volume(sfx_vol(c, 3.0)));
 
                     // Highlight active hook
                     if let Some(obj) = c.get_game_object_mut(&hook_id) {

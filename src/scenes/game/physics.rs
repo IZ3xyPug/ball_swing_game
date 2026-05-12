@@ -205,8 +205,9 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         return;
     }
 
-    // If hooked onto a moving asteroid, track its current centre each tick.
-    if s.active_hook.starts_with("space_asteroid_") {
+    // All hooks (asteroid GIFs, space hooks, regular hooks) now drift, so
+    // refresh the anchor from the object's current centre every tick.
+    if !s.active_hook.is_empty() {
         let hook_id = s.active_hook.clone();
         drop(s);
         if let Some(hook_obj) = c.get_game_object(&hook_id) {

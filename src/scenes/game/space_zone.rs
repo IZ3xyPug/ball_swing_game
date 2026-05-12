@@ -1300,13 +1300,25 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_hook_live.push(id.clone());
         s.space_hook_rightmost = x;
         spawned += 1;
+        let size     = lcg_range(&mut s.seed, SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MAX);
+        let drift_vx = lcg_range(&mut s.seed, SPACE_ASTEROID_VX_MIN, SPACE_ASTEROID_VX_MAX);
+        let drift_vy = lcg_range(&mut s.seed, SPACE_ASTEROID_VY_MIN, SPACE_ASTEROID_VY_MAX);
+        let rot_mom  = (lcg(&mut s.seed) - 0.5) * 0.016;
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x - HOOK_R, y - HOOK_R);
-            obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
-            obj.visible  = true;
-            obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
+            obj.position          = (x - size * 0.5, y - size * 0.5);
+            obj.size              = (size, size);
+            obj.momentum          = (drift_vx, drift_vy);
+            obj.rotation_momentum = rot_mom;
+            obj.visible           = true;
+            // Set GIF animation lazily at spawn time (not at boot) to avoid
+            // ticking 160 invisible sprites every frame.
+            if obj.animated_sprite.is_none() {
+                if let Some(anim) = super::bootstrap::hook_asteroid_anim_for_spawn() {
+                    obj.set_animation(anim);
+                }
+            }
         }
 
         s = st.lock().unwrap();
@@ -2341,7 +2353,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if !collected.is_empty() {
         c.play_sound_with(
             crate::constants::ASSET_COIN_SFX_2,
-            SoundOptions::new().volume(0.28),
+            SoundOptions::new().volume(sfx_vol(c, 0.28)),
         );
     }
 
@@ -2421,7 +2433,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if !blue_collected.is_empty() || !red_collected.is_empty() {
             c.play_sound_with(
                 crate::constants::ASSET_COIN_SFX_2,
-                SoundOptions::new().volume(0.45),
+                SoundOptions::new().volume(sfx_vol(c, 0.45)),
             );
         }
     }

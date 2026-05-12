@@ -8,6 +8,17 @@ use crate::shop;
 
 const MENU_TRACKS: [&str; 3] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2, ASSET_MENU_BGM_3];
 
+/// Parse font.ttf once and clone the Arc on subsequent calls — avoids
+/// re-parsing the TTF bytes on every mouse-move event during slider drag.
+fn menu_font() -> Option<Font> {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Font> = OnceLock::new();
+    CACHED.get_or_init(|| {
+        Font::from_bytes(include_bytes!("../assets/font.ttf"))
+            .expect("font.ttf must be valid")
+    }).clone().into()
+}
+
 fn volume_value(c: &Canvas, var: &str, default: f32) -> f32 {
     match c.get_var(var) {
         Some(Value::F32(v)) => v.clamp(0.0, 1.0),
@@ -17,12 +28,6 @@ fn volume_value(c: &Canvas, var: &str, default: f32) -> f32 {
 
 fn set_volume_value(c: &mut Canvas, var: &str, v: f32) {
     c.set_var(var, v.clamp(0.0, 1.0));
-}
-
-fn slider_bar(v: f32, steps: usize) -> String {
-    let clamped = v.clamp(0.0, 1.0);
-    let filled = ((clamped * steps as f32).round() as usize).min(steps);
-    format!("{}{}", "#".repeat(filled), "-".repeat(steps - filled))
 }
 
 fn menu_music_volume(c: &Canvas, base: f32) -> f32 {
@@ -857,7 +862,55 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
 }
 
 // ── Stand-alone Settings scene (accessible from main menu) ──────────────────
-// Mirrors the in-game settings panel: same toggle vars, same keys (Q/W/E/R/T/Y/U/I).
+// Mirrors the in-game settings panel: slider tracks + thumbs, same layout.
+
+// Layout constants — identical to bootstrap.rs / build_scene.rs.
+const MS_SLIDER_TRACK_W: f32 = 1400.0;
+const MS_SLIDER_TRACK_H: f32 = 24.0;
+const MS_SLIDER_THUMB_W: f32 = 60.0;
+const MS_SLIDER_THUMB_H: f32 = 80.0;
+const MS_SLIDER_TRACK_X: f32 = (VW - MS_SLIDER_TRACK_W) / 2.0;
+const MS_SLIDER_Y: [f32; 3] = [820.0, 1120.0, 1420.0];
+const MS_SLIDER_VARS:   [&str; 3] = ["vol_master", "vol_music", "vol_sound"];
+const MS_SLIDER_THUMBS: [&str; 3] = ["ms_slider_master_thumb", "ms_slider_music_thumb", "ms_slider_sound_thumb"];
+const MS_SLIDER_TRACKS: [&str; 3] = ["ms_slider_master_track", "ms_slider_music_track", "ms_slider_sound_track"];
+const MS_LABEL_NAMES:   [&str; 3] = ["ms_settings_label_0", "ms_settings_label_1", "ms_settings_label_2"];
+
+fn ms_position_slider_thumbs(c: &mut Canvas) {
+    for i in 0..3 {
+        let vol = volume_value(c, MS_SLIDER_VARS[i], 1.0);
+        let thumb_x = MS_SLIDER_TRACK_X + vol * (MS_SLIDER_TRACK_W - MS_SLIDER_THUMB_W);
+        let thumb_y = MS_SLIDER_Y[i] - (MS_SLIDER_THUMB_H - MS_SLIDER_TRACK_H) / 2.0;
+        if let Some(obj) = c.get_game_object_mut(MS_SLIDER_THUMBS[i]) {
+            obj.position = (thumb_x, thumb_y);
+        }
+    }
+}
+
+fn menu_settings_update_labels(c: &mut Canvas) {
+    let master = volume_value(c, "vol_master", 1.0);
+    let music  = volume_value(c, "vol_music",  1.0);
+    let sound  = volume_value(c, "vol_sound",  1.0);
+    let labels = [
+        format!("MASTER VOLUME   {:>3}%", (master * 100.0).round() as i32),
+        format!("MUSIC VOLUME    {:>3}%",  (music  * 100.0).round() as i32),
+        format!("SOUND VOLUME    {:>3}%",  (sound  * 100.0).round() as i32),
+    ];
+    if let Some(font) = menu_font() {
+        let s = c.virtual_scale();
+        for i in 0..3 {
+            if let Some(obj) = c.get_game_object_mut(MS_LABEL_NAMES[i]) {
+                obj.set_drawable(Box::new(ui_text_spec(
+                    &labels[i], &font, 38.0 * s, Color(235, 245, 255, 255), 1500.0 * s,
+                )));
+            }
+        }
+    }
+}
+
+fn ms_update_menu_bgm(c: &Canvas) {
+    audio_state::set_menu_bgm_volume(menu_music_volume(c, 0.18));
+}
 
 pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
@@ -871,32 +924,6 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
-    // Panel background
-    let panel = {
-        let (pw, ph) = (1700u32, 750u32);
-        let mut img = image::RgbaImage::new(pw, ph);
-        for py in 0..ph { for px in 0..pw {
-            let border = px < 4 || px >= pw - 4 || py < 4 || py >= ph - 4;
-            img.put_pixel(px, py, image::Rgba([
-                if border { 90 } else { 14 },
-                if border { 150 } else { 22 },
-                if border { 220 } else { 45 },
-                if border { 255 } else { 230 },
-            ]));
-        }}
-        GameObject::new_rect(
-            ctx, "ms_panel".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (pw as f32, ph as f32), 0.0),
-                image: img.into(),
-                color: None,
-            }),
-            (pw as f32, ph as f32),
-            (VW / 2.0 - pw as f32 / 2.0, VH * 0.24),
-            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        )
-    };
-
     // Title text
     let title_obj = GameObject::build("ms_title_text")
         .size(1400.0, 200.0)
@@ -904,20 +931,61 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
         .tag("ui")
         .build(ctx);
 
-    // Settings text (toggle display)
-    let settings_text_obj = GameObject::build("ms_settings_text")
-        .size(1600.0, 600.0)
-        .position(VW / 2.0 - 800.0, VH * 0.24 + 60.0)
-        .tag("ui")
-        .build(ctx);
+    // Three label objects — one above each slider track.
+    let make_ms_label = |ctx: &mut Context, id: &str, y: f32| {
+        GameObject::build(id)
+            .size(MS_SLIDER_TRACK_W, 80.0)
+            .position(MS_SLIDER_TRACK_X, y)
+            .tag("ui")
+            .build(ctx)
+    };
+    let ms_label_0 = make_ms_label(ctx, MS_LABEL_NAMES[0], MS_SLIDER_Y[0] - 100.0);
+    let ms_label_1 = make_ms_label(ctx, MS_LABEL_NAMES[1], MS_SLIDER_Y[1] - 100.0);
+    let ms_label_2 = make_ms_label(ctx, MS_LABEL_NAMES[2], MS_SLIDER_Y[2] - 100.0);
+
+    // Slider tracks
+    let make_ms_track = |ctx: &mut Context, id: &str, y: f32| {
+        GameObject::new_rect(
+            ctx, id.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (MS_SLIDER_TRACK_W, MS_SLIDER_TRACK_H), 0.0),
+                image: solid(60, 62, 88, 220).into(),
+                color: None,
+            }),
+            (MS_SLIDER_TRACK_W, MS_SLIDER_TRACK_H),
+            (MS_SLIDER_TRACK_X, y),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+    let ms_track_0 = make_ms_track(ctx, MS_SLIDER_TRACKS[0], MS_SLIDER_Y[0]);
+    let ms_track_1 = make_ms_track(ctx, MS_SLIDER_TRACKS[1], MS_SLIDER_Y[1]);
+    let ms_track_2 = make_ms_track(ctx, MS_SLIDER_TRACKS[2], MS_SLIDER_Y[2]);
+
+    // Slider thumbs
+    let make_ms_thumb = |ctx: &mut Context, id: &str, y: f32| {
+        GameObject::new_rect(
+            ctx, id.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (MS_SLIDER_THUMB_W, MS_SLIDER_THUMB_H), 0.0),
+                image: solid(210, 220, 255, 255).into(),
+                color: None,
+            }),
+            (MS_SLIDER_THUMB_W, MS_SLIDER_THUMB_H),
+            (MS_SLIDER_TRACK_X, y - (MS_SLIDER_THUMB_H - MS_SLIDER_TRACK_H) / 2.0),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+    let ms_thumb_0 = make_ms_thumb(ctx, MS_SLIDER_THUMBS[0], MS_SLIDER_Y[0]);
+    let ms_thumb_1 = make_ms_thumb(ctx, MS_SLIDER_THUMBS[1], MS_SLIDER_Y[1]);
+    let ms_thumb_2 = make_ms_thumb(ctx, MS_SLIDER_THUMBS[2], MS_SLIDER_Y[2]);
 
     // Back button
     let back_btn = {
-        let (w, h) = (420u32, 110u32);
+        let (w, h) = (700u32, 170u32);
         let mut img = image::RgbaImage::new(w, h);
         for py in 0..h { for px in 0..w {
-            let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
-            img.put_pixel(px, py, image::Rgba([50, 80, 130, if border { 255 } else { 200 }]));
+            let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
+            img.put_pixel(px, py, image::Rgba([80, 80, 100, if border { 255 } else { 200 }]));
         }}
         GameObject::new_rect(
             ctx, "ms_back_btn".into(),
@@ -927,25 +995,38 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
                 color: None,
             }),
             (w as f32, h as f32),
-            (VW / 2.0 - w as f32 / 2.0, VH * 0.86),
-            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+            ((VW - w as f32) / 2.0, 1660.0),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
         )
     };
 
     let back_text_obj = GameObject::build("ms_back_text")
-        .size(420.0, 110.0)
-        .position(VW / 2.0 - 210.0, VH * 0.86 + (110.0 - 36.0) / 2.0)
+        .size(700.0, 170.0)
+        .position((VW - 700.0) / 2.0, 1660.0)
         .tag("ui")
         .build(ctx);
 
     Scene::new("menu_settings")
-        .with_object("ms_bg",            bg)
-        .with_object("ms_bg_tint",       bg_tint)
-        .with_object("ms_panel",         panel)
-        .with_object("ms_title_text",    title_obj)
-        .with_object("ms_settings_text", settings_text_obj)
-        .with_object("ms_back_btn",      back_btn)
-        .with_object("ms_back_text",     back_text_obj)
+        .with_object("ms_bg",                    bg)
+        .with_object("ms_bg_tint",               bg_tint)
+        .with_object("ms_title_text",            title_obj)
+        .with_object(MS_LABEL_NAMES[0],          ms_label_0)
+        .with_object(MS_LABEL_NAMES[1],          ms_label_1)
+        .with_object(MS_LABEL_NAMES[2],          ms_label_2)
+        .with_object(MS_SLIDER_TRACKS[0],        ms_track_0)
+        .with_object(MS_SLIDER_TRACKS[1],        ms_track_1)
+        .with_object(MS_SLIDER_TRACKS[2],        ms_track_2)
+        .with_object(MS_SLIDER_THUMBS[0],        ms_thumb_0)
+        .with_object(MS_SLIDER_THUMBS[1],        ms_thumb_1)
+        .with_object(MS_SLIDER_THUMBS[2],        ms_thumb_2)
+        .with_object("ms_back_btn",              back_btn)
+        .with_object("ms_back_text",             back_text_obj)
+        // Use the Quartz event system for the back button so that
+        // load_scene fires *within* process_mouse_press_events — after
+        // objects_under_cursor is computed with the menu_settings camera.
+        // A manual on_mouse_press callback calling load_scene changes the
+        // camera first, causing process_mouse_press_events to hit menu
+        // buttons with the wrong camera, randomly re-opening settings.
         .with_event(
             GameEvent::MousePress {
                 action: Action::Custom { name: "ms_back".into() },
@@ -968,10 +1049,18 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
                 canvas.set_var("vol_sound", 1.0f32);
             }
 
-            // Render text
-            menu_settings_update_text(canvas);
+            canvas.set_var("ms_dragging", -1i32);
 
-            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+            // Position thumbs immediately (virtual coords, no scale dependency).
+            ms_position_slider_thumbs(canvas);
+
+            // Mark labels dirty so the on_update tick renders them at the
+            // correct window scale (virtual_scale() is guaranteed correct
+            // inside on_update, unlike on_enter which may fire before the
+            // first real build() pass sets actual_size).
+            canvas.set_var("ms_text_dirty", true);
+
+            if let Some(font) = menu_font() {
                 let s = canvas.virtual_scale();
                 if let Some(obj) = canvas.get_game_object_mut("ms_title_text") {
                     obj.set_drawable(Box::new(ui_text_spec(
@@ -980,13 +1069,93 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
                 }
                 if let Some(obj) = canvas.get_game_object_mut("ms_back_text") {
                     obj.set_drawable(Box::new(ui_text_spec(
-                        "\u{25C4}  BACK", &font, 32.0 * s, Color(220, 235, 255, 255), 420.0 * s,
+                        "\u{25C4}  BACK", &font, 48.0 * s, Color(220, 235, 255, 255), 700.0 * s,
                     )));
                 }
             }
 
-            // Key handler for toggles
-            let ms_key_registered = matches!(canvas.get_var("ms_key_registered"), Some(Value::Bool(true)));
+            // Register the on_update handler once.  It flushes ms_text_dirty
+            // on the first tick after scene load — when virtual_scale() is
+            // guaranteed to reflect the real window dimensions.
+            let ms_update_registered = matches!(
+                canvas.get_var("ms_update_registered"),
+                Some(Value::Bool(true))
+            );
+            if !ms_update_registered {
+                canvas.on_update(|c| {
+                    if !c.is_scene("menu_settings") { return; }
+                    if matches!(c.get_var("ms_text_dirty"), Some(Value::Bool(true))) {
+                        menu_settings_update_labels(c);
+                        ms_position_slider_thumbs(c);
+                        c.set_var("ms_text_dirty", false);
+                    }
+                });
+                canvas.set_var("ms_update_registered", true);
+            }
+
+            // Mouse move — drag slider thumb.
+            let ms_mouse_registered = matches!(
+                canvas.get_var("ms_mouse_registered"),
+                Some(Value::Bool(true))
+            );
+            if !ms_mouse_registered {
+                canvas.on_mouse_move(|c, pos| {
+                    if !c.is_scene("menu_settings") { return; }
+                    let dragging = c.get_i32("ms_dragging");
+                    if dragging < 0 { return; }
+                    let idx = dragging as usize;
+                    if idx >= 3 { return; }
+                    // Menu camera has no zoom — pos is already in virtual-screen space.
+                    let vol = ((pos.0 - MS_SLIDER_TRACK_X) / MS_SLIDER_TRACK_W).clamp(0.0, 1.0);
+                    set_volume_value(c, MS_SLIDER_VARS[idx], vol);
+                    let thumb_x = MS_SLIDER_TRACK_X + vol * (MS_SLIDER_TRACK_W - MS_SLIDER_THUMB_W);
+                    let thumb_y = MS_SLIDER_Y[idx] - (MS_SLIDER_THUMB_H - MS_SLIDER_TRACK_H) / 2.0;
+                    if let Some(obj) = c.get_game_object_mut(MS_SLIDER_THUMBS[idx]) {
+                        obj.position = (thumb_x, thumb_y);
+                    }
+                    menu_settings_update_labels(c);
+                    ms_update_menu_bgm(c);
+                });
+
+                // Slider click-to-set only.  Back button is handled via
+                // with_event so load_scene fires inside process_mouse_press_events.
+                canvas.on_mouse_press(|c, btn, pos| {
+                    if !c.is_scene("menu_settings") { return; }
+                    if btn != MouseButton::Left { return; }
+                    let ux = pos.0;
+                    let uy = pos.1;
+                    if ux >= MS_SLIDER_TRACK_X && ux <= MS_SLIDER_TRACK_X + MS_SLIDER_TRACK_W {
+                        for idx in 0..3usize {
+                            if uy >= MS_SLIDER_Y[idx] - 40.0 && uy <= MS_SLIDER_Y[idx] + 64.0 {
+                                let vol = ((ux - MS_SLIDER_TRACK_X) / MS_SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                set_volume_value(c, MS_SLIDER_VARS[idx], vol);
+                                let thumb_x = MS_SLIDER_TRACK_X + vol * (MS_SLIDER_TRACK_W - MS_SLIDER_THUMB_W);
+                                let thumb_y = MS_SLIDER_Y[idx] - (MS_SLIDER_THUMB_H - MS_SLIDER_TRACK_H) / 2.0;
+                                if let Some(obj) = c.get_game_object_mut(MS_SLIDER_THUMBS[idx]) {
+                                    obj.position = (thumb_x, thumb_y);
+                                }
+                                menu_settings_update_labels(c);
+                                ms_update_menu_bgm(c);
+                                c.set_var("ms_dragging", idx as i32);
+                                return;
+                            }
+                        }
+                    }
+                });
+
+                canvas.on_mouse_release(|c, _btn, _pos| {
+                    if !c.is_scene("menu_settings") { return; }
+                    c.set_var("ms_dragging", -1i32);
+                });
+
+                canvas.set_var("ms_mouse_registered", true);
+            }
+
+            // Key handler — A/D J/L N/M adjust sliders by 5%.
+            let ms_key_registered = matches!(
+                canvas.get_var("ms_key_registered"),
+                Some(Value::Bool(true))
+            );
             if !ms_key_registered {
                 canvas.on_key_press(|c, key| {
                     if !c.is_scene("menu_settings") { return; }
@@ -1002,40 +1171,14 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
                     if let Some((var, delta)) = adjust {
                         let cur = volume_value(c, var, 1.0);
                         set_volume_value(c, var, cur + delta);
-                        menu_settings_update_text(c);
+                        ms_position_slider_thumbs(c);
+                        menu_settings_update_labels(c);
+                        ms_update_menu_bgm(c);
                     }
                 });
                 canvas.set_var("ms_key_registered", true);
             }
-
-            canvas.register_custom_event("ms_back".into(), |c| c.load_scene("menu"));
         })
-}
-
-fn menu_settings_update_text(c: &mut Canvas) {
-    let master = volume_value(c, "vol_master", 1.0);
-    let music = volume_value(c, "vol_music", 1.0);
-    let sound = volume_value(c, "vol_sound", 1.0);
-    let text = format!(
-        "MASTER VOLUME\n  [{}] {:>3}%\n\
-         MUSIC VOLUME\n  [{}] {:>3}%\n\
-         SOUND VOLUME\n  [{}] {:>3}%\n\
-         CONTROLS: [A]/[D] MASTER   [J]/[L] MUSIC   [N]/[M] SOUND",
-        slider_bar(master, 20),
-        (master * 100.0).round() as i32,
-        slider_bar(music, 20),
-        (music * 100.0).round() as i32,
-        slider_bar(sound, 20),
-        (sound * 100.0).round() as i32,
-    );
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
-        let s = c.virtual_scale();
-        if let Some(obj) = c.get_game_object_mut("ms_settings_text") {
-            obj.set_drawable(Box::new(ui_text_spec(
-                &text, &font, 38.0 * s, Color(235, 245, 255, 255), 1600.0 * s,
-            )));
-        }
-    }
 }
 
 pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
@@ -1658,6 +1801,9 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
 }
 
 // ── Stats scene ──────────────────────────────────────────────────────────────
+// Two-column layout.  Stats are placeholders (not yet tracked).
+// Left col:  Coins Collected / Deaths / Best Distance / Turrets Destroyed
+// Right col: Hooks / Time Played / Bosses Defeated / Bounces
 
 pub fn build_stats_scene(ctx: &mut Context) -> Scene {
     let bg = GameObject::new_rect(
@@ -1667,35 +1813,61 @@ pub fn build_stats_scene(ctx: &mut Context) -> Scene {
     );
     let bg_tint = GameObject::new_rect(
         ctx, "stats_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(140, 80, 40, 140))),
+        Some(tint_overlay(VW + 800.0, VH, Color(80, 40, 100, 160))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
     );
 
     let back_btn = {
-        let (w, h) = (420u32, 110u32);
+        let (w, h) = (700u32, 170u32);
         let mut img = image::RgbaImage::new(w, h);
         for py in 0..h { for px in 0..w {
-            let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
-            img.put_pixel(px, py, image::Rgba([50, 80, 130, if border { 255 } else { 200 }]));
+            let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
+            img.put_pixel(px, py, image::Rgba([80, 80, 100, if border { 255 } else { 200 }]));
         }}
         GameObject::new_rect(
             ctx, "stats_back_btn".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
-            (w as f32, h as f32), (VW / 2.0 - w as f32 / 2.0, VH * 0.86),
-            vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+            (w as f32, h as f32), ((VW - w as f32) / 2.0, 1810.0),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
         )
     };
 
-    let title_obj = GameObject::build("stats_title_text").size(1400.0, 200.0).position(VW * 0.5 - 700.0, VH * 0.08).tag("ui").build(ctx);
-    let body_obj  = GameObject::build("stats_body_text").size(1600.0, 600.0).position(VW / 2.0 - 800.0, VH * 0.28).tag("ui").build(ctx);
-    let back_text = GameObject::build("stats_back_text").size(420.0, 110.0).position(VW / 2.0 - 210.0, VH * 0.86 + (110.0 - 36.0) / 2.0).tag("ui").build(ctx);
+    // Thin vertical divider between the two columns.
+    let divider = GameObject::new_rect(
+        ctx, "stats_divider".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (4.0, 1320.0), 0.0),
+            image: solid(255, 255, 255, 60).into(),
+            color: None,
+        }),
+        (4.0, 1320.0), (VW / 2.0 - 2.0, 310.0),
+        vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+
+    // Two text objects, one per column.  Populated in on_enter.
+    let make_col_text = |ctx: &mut Context, id: &str, x: f32| {
+        GameObject::build(id)
+            .size(1380.0, 1300.0)
+            .position(x, 320.0)
+            .tag("ui")
+            .build(ctx)
+    };
+    let left_col  = make_col_text(ctx, "stats_left_col",  360.0);
+    let right_col = make_col_text(ctx, "stats_right_col", 2100.0);
+
+    let title_obj = GameObject::build("stats_title_text")
+        .size(1400.0, 200.0).position(VW * 0.5 - 700.0, VH * 0.04).tag("ui").build(ctx);
+    let back_text = GameObject::build("stats_back_text")
+        .size(700.0, 170.0).position((VW - 700.0) / 2.0, 1810.0).tag("ui").build(ctx);
 
     Scene::new("stats")
         .with_object("stats_bg",         bg)
         .with_object("stats_bg_tint",    bg_tint)
-        .with_object("stats_back_btn",   back_btn)
+        .with_object("stats_divider",    divider)
+        .with_object("stats_left_col",   left_col)
+        .with_object("stats_right_col",  right_col)
         .with_object("stats_title_text", title_obj)
-        .with_object("stats_body_text",  body_obj)
+        .with_object("stats_back_btn",   back_btn)
         .with_object("stats_back_text",  back_text)
         .with_event(
             GameEvent::MousePress {
@@ -1709,16 +1881,83 @@ pub fn build_stats_scene(ctx: &mut Context) -> Scene {
             let cam = Camera::new((VW, VH), (VW, VH));
             canvas.set_camera(cam);
 
-            if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+            if let Some(font) = menu_font() {
                 let s = canvas.virtual_scale();
+
                 if let Some(obj) = canvas.get_game_object_mut("stats_title_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("STATS", &font, 72.0 * s, Color(255, 210, 160, 255), 1400.0 * s)));
-                }
-                if let Some(obj) = canvas.get_game_object_mut("stats_body_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("Coming soon!", &font, 48.0 * s, Color(220, 200, 180, 200), 1600.0 * s)));
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "STATISTICS", &font, 72.0 * s, Color(255, 210, 160, 255), 1400.0 * s,
+                    )));
                 }
                 if let Some(obj) = canvas.get_game_object_mut("stats_back_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("\u{25C4}  BACK", &font, 32.0 * s, Color(220, 235, 255, 255), 420.0 * s)));
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "\u{25C4}  BACK", &font, 48.0 * s, Color(220, 235, 255, 255), 700.0 * s,
+                    )));
+                }
+
+                // Left column: 4 stats.  Values are all 0 (not yet tracked).
+                let lc_name = Color(190, 210, 255, 220);
+                let lc_val  = Color(255, 240, 200, 255);
+                let col_w   = 1380.0 * s;
+
+                let left_stats = [
+                    ("COINS COLLECTED", "0"),
+                    ("DEATHS",          "0"),
+                    ("BEST DISTANCE",   "0"),
+                    ("TURRETS DESTROYED", "0"),
+                ];
+                let right_stats = [
+                    ("HOOKS",           "0"),
+                    ("TIME PLAYED",     "0"),
+                    ("BOSSES DEFEATED", "0"),
+                    ("BOUNCES",         "0"),
+                ];
+
+                let make_stat_text = |name: &str, val: &str, font: &Font, s: f32, name_col: Color, val_col: Color, w: f32| {
+                    Text::new(
+                        vec![
+                            Span::new(name.to_string(), 38.0 * s, Some(46.0 * s), Arc::new(font.clone()), name_col, 0.0),
+                            Span::new(format!("  {}", val), 48.0 * s, Some(46.0 * s), Arc::new(font.clone()), val_col, 0.0),
+                        ],
+                        Some(w),
+                        Align::Left,
+                        None,
+                    )
+                };
+
+                // Build multiline text for each column by stacking stat blocks.
+                // Each stat gets 2 lines (name row, value row) with visual gap.
+                // We use individual drawables stacked via a helper below.
+                // For simplicity, combine stat entries into one multi-span Text
+                // using newlines between entries.
+                let mut left_spans: Vec<Span> = Vec::new();
+                let mut right_spans: Vec<Span> = Vec::new();
+                let line_h = Some(52.0 * s);
+                let gap_h  = Some(28.0 * s);
+                let _ = make_stat_text; // suppress unused warning
+
+                for (i, &(name, val)) in left_stats.iter().enumerate() {
+                    left_spans.push(Span::new(name.to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
+                    left_spans.push(Span::new(format!("\n"), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
+                    left_spans.push(Span::new(val.to_string(), 52.0 * s, line_h, Arc::new(font.clone()), lc_val, 0.0));
+                    if i < left_stats.len() - 1 {
+                        left_spans.push(Span::new("\n\n".to_string(), 20.0 * s, gap_h, Arc::new(font.clone()), lc_val, 0.0));
+                    }
+                }
+                for (i, &(name, val)) in right_stats.iter().enumerate() {
+                    right_spans.push(Span::new(name.to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
+                    right_spans.push(Span::new("\n".to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
+                    right_spans.push(Span::new(val.to_string(), 52.0 * s, line_h, Arc::new(font.clone()), lc_val, 0.0));
+                    if i < right_stats.len() - 1 {
+                        right_spans.push(Span::new("\n\n".to_string(), 20.0 * s, gap_h, Arc::new(font.clone()), lc_val, 0.0));
+                    }
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("stats_left_col") {
+                    obj.set_drawable(Box::new(Text::new(left_spans, Some(col_w), Align::Left, None)));
+                }
+                if let Some(obj) = canvas.get_game_object_mut("stats_right_col") {
+                    obj.set_drawable(Box::new(Text::new(right_spans, Some(col_w), Align::Left, None)));
                 }
             }
 

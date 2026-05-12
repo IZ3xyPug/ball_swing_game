@@ -41,40 +41,71 @@ fn set_volume_value(c: &mut Canvas, var: &str, v: f32) {
     c.set_var(var, v.clamp(0.0, 1.0));
 }
 
-fn slider_bar(v: f32, steps: usize) -> String {
-    let clamped = v.clamp(0.0, 1.0);
-    let filled = ((clamped * steps as f32).round() as usize).min(steps);
-    format!("{}{}", "#".repeat(filled), "-".repeat(steps - filled))
-}
-
 fn game_music_volume(c: &Canvas, base: f32) -> f32 {
     let master = volume_value(c, "vol_master", 1.0);
     let music = volume_value(c, "vol_music", 1.0);
     (base * master * music).clamp(0.0, 1.0)
 }
 
+// Slider layout constants (must match bootstrap.rs SLIDER_Y / SLIDER_TRACK_W).
+const SLIDER_TRACK_W: f32 = 1400.0;
+const SLIDER_THUMB_W: f32 = 60.0;
+const SLIDER_THUMB_H: f32 = 80.0;
+const SLIDER_TRACK_H: f32 = 24.0;
+const SLIDER_TRACK_X: f32 = (VW - SLIDER_TRACK_W) / 2.0;
+const SLIDER_Y: [f32; 3] = [820.0, 1120.0, 1420.0];
+const SLIDER_VARS:   [&str; 3] = ["vol_master", "vol_music", "vol_sound"];
+const SLIDER_THUMBS: [&str; 3] = ["slider_master_thumb", "slider_music_thumb", "slider_sound_thumb"];
+const SLIDER_TRACKS: [&str; 3] = ["slider_master_track", "slider_music_track", "slider_sound_track"];
+
+fn position_slider_thumbs(c: &mut Canvas) {
+    for i in 0..3 {
+        let vol = volume_value(c, SLIDER_VARS[i], 1.0);
+        let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+        let thumb_y = SLIDER_Y[i] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+        if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[i]) {
+            obj.position = (thumb_x, thumb_y);
+        }
+    }
+    // Engine may be hard-paused — sync offsets so the renderer sees new positions.
+    c.sync_ignore_zoom_offsets();
+}
+
+fn update_bgm_volume(c: &Canvas) {
+    let base = c.get_f32("bgm_base_vol");
+    if base > 0.0 {
+        audio_state::set_game_bgm_volume(game_music_volume(c, base));
+    }
+}
+
+/// Returns a cached copy of the UI font — parses the TTF once, clones cheaply after.
+fn settings_font() -> Option<Font> {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Font> = OnceLock::new();
+    CACHED.get_or_init(||
+        Font::from_bytes(include_bytes!("../../../assets/font.ttf"))
+            .expect("font.ttf must be valid")
+    ).clone().into()
+}
+
 fn update_settings_text(c: &mut Canvas) {
     let master = volume_value(c, "vol_master", 1.0);
-    let music = volume_value(c, "vol_music", 1.0);
-    let sound = volume_value(c, "vol_sound", 1.0);
-    let text = format!(
-        "MASTER VOLUME\n  [{}] {:>3}%\n\
-         MUSIC VOLUME\n  [{}] {:>3}%\n\
-         SOUND VOLUME\n  [{}] {:>3}%\n\
-         CONTROLS: [A]/[D] MASTER   [J]/[L] MUSIC   [N]/[M] SOUND",
-        slider_bar(master, 20),
-        (master * 100.0).round() as i32,
-        slider_bar(music, 20),
-        (music * 100.0).round() as i32,
-        slider_bar(sound, 20),
-        (sound * 100.0).round() as i32,
-    );
-    if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+    let music  = volume_value(c, "vol_music",  1.0);
+    let sound  = volume_value(c, "vol_sound",  1.0);
+    let labels = [
+        format!("MASTER VOLUME   {:>3}%", (master * 100.0).round() as i32),
+        format!("MUSIC VOLUME    {:>3}%",  (music  * 100.0).round() as i32),
+        format!("SOUND VOLUME    {:>3}%",  (sound  * 100.0).round() as i32),
+    ];
+    let names = ["settings_label_0", "settings_label_1", "settings_label_2"];
+    if let Some(font) = settings_font() {
         let s = c.virtual_scale();
-        if let Some(obj) = c.get_game_object_mut("settings_text") {
-            obj.set_drawable(Box::new(ui_text_spec(
-                &text, &font, 38.0 * s, Color(235, 245, 255, 255), 1500.0 * s,
-            )));
+        for i in 0..3 {
+            if let Some(obj) = c.get_game_object_mut(names[i]) {
+                obj.set_drawable(Box::new(ui_text_spec(
+                    &labels[i], &font, 38.0 * s, Color(235, 245, 255, 255), 1500.0 * s,
+                )));
+            }
         }
     }
 }
@@ -316,6 +347,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 );
                 audio_state::replace_game_bgm(handle);
                 canvas.set_var("bgm_track_index", 0);
+                canvas.set_var("bgm_base_vol", 0.084_f32);
             }
             // Stop menu music when starting the game.
             audio_state::stop_menu_bgm();
@@ -400,6 +432,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 1);
+                            c.set_var("bgm_base_vol", 0.167_f32);
                         }
                         return;
                     }
@@ -412,6 +445,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 2);
+                            c.set_var("bgm_base_vol", 0.5_f32);
                         }
                         return;
                     }
@@ -424,6 +458,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 3);
+                            c.set_var("bgm_base_vol", 0.18_f32);
                         }
                         return;
                     }
@@ -481,6 +516,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             let cur = volume_value(c, var, 1.0);
                             set_volume_value(c, var, cur + delta);
                             update_settings_text(c);
+                            position_slider_thumbs(c);
+                            update_bgm_volume(c);
                             return;
                         }
                     }
@@ -539,13 +576,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                      "pause_resume_btn", "pause_restart_btn",
                                      "pause_settings_btn", "pause_menu_btn",
                                      "start_prompt_text",
-                                     "settings_text", "settings_back_btn"] {
+                                     "settings_label_0", "settings_label_1", "settings_label_2",
+                                     "settings_back_btn",
+                                     "slider_master_track", "slider_master_thumb",
+                                     "slider_music_track",  "slider_music_thumb",
+                                     "slider_sound_track",  "slider_sound_thumb"] {
                             if let Some(obj) = c.get_game_object_mut(name) {
                                 obj.visible = false;
                                 obj.clear_highlight();
                             }
                         }
                         c.set_var("settings_open", false);
+                        c.set_var("settings_dragging", -1i32);
 
                         // If launching from orbit start, give the ball its tangential velocity
                         // and release the intro zoom so tick_zoom takes over naturally.
@@ -653,6 +695,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("bg_force_refresh", true);
             canvas.set_var("pause_hover_idx", -1);
             canvas.set_var("settings_open", false);
+            canvas.set_var("settings_dragging", -1i32);
 
             if canvas.get_var("vol_master").is_none() {
                 canvas.set_var("vol_master", 1.0f32);
@@ -1073,13 +1116,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     for name in ["pause_overlay", "pause_title",
                                  "pause_resume_btn", "pause_restart_btn",
                                  "pause_settings_btn", "pause_menu_btn",
-                                 "settings_text", "settings_back_btn"] {
+                                 "settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn",
+                                 "slider_master_track", "slider_master_thumb",
+                                 "slider_music_track",  "slider_music_thumb",
+                                 "slider_sound_track",  "slider_sound_thumb"] {
                         if let Some(obj) = c.get_game_object_mut(name) {
                             obj.visible = false;
                             obj.clear_highlight();
                         }
                     }
                     c.set_var("settings_open", false);
+                    c.set_var("settings_dragging", -1i32);
                 });
                 canvas.register_custom_event("pause_restart_click".into(), |c| {
                     if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
@@ -1088,11 +1136,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.set_var("pause_anim_frames", 0);
                     c.set_var("pause_hover_idx", -1);
                     c.set_var("settings_open", false);
+                    c.set_var("settings_dragging", -1i32);
                     c.set_var("game_paused", false);
                     for name in ["pause_overlay", "pause_title",
                                  "pause_resume_btn", "pause_restart_btn",
                                  "pause_settings_btn", "pause_menu_btn",
-                                 "settings_text", "settings_back_btn"] {
+                                 "settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn",
+                                 "slider_master_track", "slider_master_thumb",
+                                 "slider_music_track",  "slider_music_thumb",
+                                 "slider_sound_track",  "slider_sound_thumb"] {
                         if let Some(obj) = c.get_game_object_mut(name) {
                             obj.visible = false;
                             obj.clear_highlight();
@@ -1109,11 +1162,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.set_var("pause_anim_frames", 0);
                     c.set_var("pause_hover_idx", -1);
                     c.set_var("settings_open", false);
+                    c.set_var("settings_dragging", -1i32);
                     c.set_var("game_paused", false);
                     for name in ["pause_overlay", "pause_title",
                                  "pause_resume_btn", "pause_restart_btn",
                                  "pause_settings_btn", "pause_menu_btn",
-                                 "settings_text", "settings_back_btn"] {
+                                 "settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn",
+                                 "slider_master_track", "slider_master_thumb",
+                                 "slider_music_track",  "slider_music_thumb",
+                                 "slider_sound_track",  "slider_sound_thumb"] {
                         if let Some(obj) = c.get_game_object_mut(name) {
                             obj.visible = false;
                             obj.clear_highlight();
@@ -1136,18 +1194,32 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
                     }
                     c.set_var("settings_open", true);
-                    // Render toggle text
+                    c.set_var("settings_dragging", -1i32);
+                    // Render label text (percentages only)
                     update_settings_text(c);
-                    if let Some(obj) = c.get_game_object_mut("settings_text") { obj.visible = true; }
+                    for name in ["settings_label_0", "settings_label_1", "settings_label_2"] {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
+                    }
                     if let Some(obj) = c.get_game_object_mut("settings_back_btn") {
                         obj.position = ((VW - 700.0) / 2.0, 1660.0);
                         obj.visible = true;
                     }
+                    // Show slider tracks and thumbs at positions matching current vols
+                    position_slider_thumbs(c);
+                    for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
+                    }
                 });
                 canvas.register_custom_event("settings_back_click".into(), |c| {
                     c.set_var("settings_open", false);
-                    if let Some(obj) = c.get_game_object_mut("settings_text") { obj.visible = false; }
-                    if let Some(obj) = c.get_game_object_mut("settings_back_btn") { obj.visible = false; }
+                    c.set_var("settings_dragging", -1i32);
+                    for name in ["settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn"] {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                    }
+                    for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                    }
                     // Re-show pause menu.
                     let btn_layout: &[(&str, f32, f32)] = &[
                         ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
@@ -1179,9 +1251,31 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 return;
                             }
 
-                            // `pos` is in scaled virtual space (layout scale includes zoom).
-                            // Ignore-zoom UI is authored in base virtual space, so rescale.
-                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                            // pos is world-space; multiply by zoom to get virtual-screen space
+                            // so ignore_zoom UI hit tests are correct at any camera zoom level.
+                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
+
+                            // If dragging a settings slider, update its position/value.
+                            let dragging = c.get_i32("settings_dragging");
+                            if dragging >= 0 && matches!(c.get_var("settings_open"), Some(Value::Bool(true))) {
+                                let idx = dragging as usize;
+                                if idx < 3 {
+                                    let vol = ((pos.0 * zoom - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                    set_volume_value(c, SLIDER_VARS[idx], vol);
+                                    let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+                                    let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+                                    if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
+                                        obj.position = (thumb_x, thumb_y);
+                                    }
+                                    // Sync so the renderer sees the new thumb position
+                                    // while the engine is hard-paused.
+                                    c.sync_ignore_zoom_offsets();
+                                    update_settings_text(c);
+                                    update_bgm_volume(c);
+                                }
+                                return;
+                            }
+
                             let ux = pos.0 * zoom;
                             let uy = pos.1 * zoom;
                             let bx = (VW - 700.0) / 2.0;
@@ -1239,9 +1333,34 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             return;
                         }
 
-                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                        // pos is world-space (divided by zoom); ignore_zoom UI lives in
+                        // virtual-screen space (0..VW, 0..VH). Multiply by zoom to convert.
+                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
                         let ux = pos.0 * zoom;
                         let uy = pos.1 * zoom;
+
+                        // If settings panel is open, check for slider track hits first.
+                        if matches!(c.get_var("settings_open"), Some(Value::Bool(true))) {
+                            if ux >= SLIDER_TRACK_X && ux <= SLIDER_TRACK_X + SLIDER_TRACK_W {
+                                for idx in 0..3usize {
+                                    if uy >= SLIDER_Y[idx] - 40.0 && uy <= SLIDER_Y[idx] + 64.0 {
+                                        let vol = ((ux - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                        set_volume_value(c, SLIDER_VARS[idx], vol);
+                                        let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+                                        let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+                                        if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
+                                            obj.position = (thumb_x, thumb_y);
+                                        }
+                                        c.sync_ignore_zoom_offsets();
+                                        update_settings_text(c);
+                                        update_bgm_volume(c);
+                                        c.set_var("settings_dragging", idx as i32);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
                         let bx = (VW - 700.0) / 2.0;
 
                         if ux >= bx && ux <= bx + 700.0 {
@@ -1257,6 +1376,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 c.run(Action::Custom { name: "settings_back_click".into() });
                             }
                         }
+                    });
+
+                    canvas.on_mouse_release(move |c, _btn, _pos| {
+                        if !c.is_scene("game") { return; }
+                        c.set_var("settings_dragging", -1i32);
                     });
 
                     canvas.set_var("pause_ui_mouse_registered", true);

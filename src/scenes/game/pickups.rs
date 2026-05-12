@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::state::*;
-use super::helpers::pad_thruster_id;
+use super::helpers::{pad_thruster_id, sfx_vol};
 
 pub fn tick_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     tick_coin_magnet(c, st);
@@ -285,7 +285,8 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             3 => ASSET_COIN_SFX_4,
             _ => ASSET_COIN_SFX_3,
         };
-        c.play_sound_with(sfx_path, SoundOptions::new().volume(0.2));
+        c.play_sound_with(sfx_path, SoundOptions::new().volume(sfx_vol(c, 0.2)));
+        c.set_var("coin_sfx_index", (c.get_i32("coin_sfx_index") + 1) % 4);
     }
 }
 
@@ -328,7 +329,7 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &I
         trigger_flip(c, st, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
 
         // coin_up SFX on gravity flip collect
-        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(0.2));
+        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2)));
 
         // Purple flash + screen shake on gravity flip collect
         if let Some(cam) = c.camera_mut() {
@@ -417,7 +418,7 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(0.2));
+        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2)));
     }
 }
 
