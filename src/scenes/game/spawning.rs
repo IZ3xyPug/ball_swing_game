@@ -1,4 +1,5 @@
 use quartz::*;
+use quartz::plugin::terrain_collision::TerrainCollisionCall;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::constants::*;
@@ -24,6 +25,24 @@ fn spawn_anim_ticks_for_speed(vx: f32) -> u32 {
     // Lerp from SPAWN_ANIM_TICKS down to SPAWN_ANIM_TICKS/2 as speed goes 0→cap.
     let ticks = SPAWN_ANIM_TICKS as f32 * (1.0 - speed_t * 0.5);
     (ticks as u32).max(10)
+}
+
+fn ensure_pad_dynamic_outline(c: &mut Canvas, id: &str) {
+    use crate::images::pad_gif_frame0_cached;
+    let frame0 = pad_gif_frame0_cached();
+    if frame0.width() == 0 || frame0.height() == 0 {
+        return;
+    }
+    c.run(Action::PluginCall {
+        name: "terrain_collision".into(),
+        payload: Arc::new(TerrainCollisionCall::PinCollisionImage {
+            name: id.to_string(),
+            image: frame0,
+            object_size: (PAD_W, PAD_H),
+            threshold: 10,
+            rdp_epsilon: 2.0,
+        }),
+    });
 }
 
 /// Advance all active spawn-build animations by one tick.
@@ -516,6 +535,7 @@ fn spawn_pads(
             obj.rotation = 0.0;
             obj.set_image(pad_img.clone());
         }
+        ensure_pad_dynamic_outline(c, &id);
         let thr_id = pad_thruster_id(&id);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
             let thruster_embed = PAD_THRUSTER_HIDE_TOP + PAD_THRUSTER_RAISE_Y;

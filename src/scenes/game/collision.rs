@@ -1,4 +1,5 @@
 use quartz::*;
+use quartz::plugin::terrain_collision::TerrainCollisionPlugin;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
@@ -178,16 +179,28 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let pad_w      = pad_collision_w();
             let pad_top    = obj.position.1;
             let pad_bottom = pad_top + PAD_H;
-            let rounded_hit = circle_overlaps_rounded_rect(
-                s.px,
-                s.py,
-                PLAYER_R,
-                pad_left,
-                pad_top,
-                pad_w,
-                PAD_H,
-                pad_corner_radius(),
-            );
+            let rounded_hit = c.get_plugin::<TerrainCollisionPlugin>()
+                .and_then(|plugin| {
+                    plugin.circle_overlaps_dynamic_outline(
+                        name,
+                        (s.px, s.py),
+                        PLAYER_R,
+                        obj.position,
+                        obj.rotation,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    circle_overlaps_rounded_rect(
+                        s.px,
+                        s.py,
+                        PLAYER_R,
+                        pad_left,
+                        pad_top,
+                        pad_w,
+                        PAD_H,
+                        pad_corner_radius(),
+                    )
+                });
             let hit = if falling_down {
                 rounded_hit
                     && player_bottom >= pad_top

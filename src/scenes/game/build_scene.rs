@@ -3,6 +3,7 @@
 // wires up callbacks, and dispatches the per-frame tick in order.
 
 use quartz::*;
+use quartz::plugin::terrain_collision::TerrainCollisionPlugin;
 use std::sync::{Arc, Mutex};
 
 use crate::audio_state;
@@ -258,6 +259,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // stale solver state or leftover particles from a previous run.
             canvas.enable_crystalline();
             canvas.set_var("crystalline_ready", true);
+
+            // ── Terrain collision plugin (dynamic outline support) ──────
+            let terrain_collision_registered = matches!(
+                canvas.get_var("terrain_collision_registered"),
+                Some(Value::Bool(true))
+            );
+            if !terrain_collision_registered {
+                canvas.add_plugin(TerrainCollisionPlugin::new());
+                canvas.set_var("terrain_collision_registered", true);
+            }
+
             // ── Player particle trail ────────────────────────────────────
             // Determine selected trail colour first so it can be used here and on resume.
             let trail_color = {
