@@ -16,6 +16,21 @@ pub fn tick_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_asteroid_asteroid_collision(c, st);
     tick_asteroid_pad_bounce(c, st);
     tick_asteroid_spinner_collision(c, st);
+    tick_hook_player_impact(c, st);
+    tick_freeze_hooks(c, st);
+}
+
+/// Zero out momentum on all live hooks every tick so they are completely immovable.
+fn tick_freeze_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    if !asteroid_mode { return; }
+    let live_hooks = st.lock().unwrap().live_hooks.clone();
+    for name in &live_hooks {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.momentum = (0.0, 0.0);
+            obj.rotation_momentum = 0.0;
+        }
+    }
 }
 
 /// Sets state fields for unhook + queues canvas ops (rope hide, gravity restore).
@@ -47,7 +62,7 @@ fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
         let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         if let Some(hobj) = c.get_game_object_mut(&ops.prev_hook) {
             if asteroid_mode {
-                hobj.set_image(hook_asteroid_img_for_id(&ops.prev_hook, AsteroidHookState::Base));
+                if let Some(sprite) = &mut hobj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
             } else {
                 let (r, g, b) = hook_base_for_zone(ops.zone_idx);
                 hobj.set_image(hook_img(r, g, b));
@@ -216,6 +231,10 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.pad_bounce_anim.push((pad_name.clone(), 1, 0));
         drop(s);
 
+        // Signal cap_momentum_and_write_back to skip capping this frame so the
+        // full PAD_BOUNCE_VY is preserved regardless of current speed.
+        c.set_var("post_bounce", true);
+
         if let Some(ref ops) = unhook_ops {
             apply_unhook(c, ops);
         }
@@ -361,10 +380,11 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // so collisions are detected and resolved the moment any two circles overlap.
 
 fn tick_asteroid_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let live = {
+    let ast_live = {
         let s = st.lock().unwrap();
         s.space_asteroid_live.clone()
     };
+    let live = ast_live;
     if live.len() < 2 { return; }
 
     // Snapshot: all values needed for contact math, read before any mutation.
@@ -452,10 +472,11 @@ fn tick_asteroid_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // Each live space asteroid is treated as a circle; bounce it off any pad top/bottom.
 
 pub fn tick_asteroid_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let s = st.lock().unwrap();
-    let pads    = s.pad_live.clone();
-    let asteroids = s.space_asteroid_live.clone();
-    drop(s);
+    let (pads, ast_live) = {
+        let s = st.lock().unwrap();
+        (s.pad_live.clone(), s.space_asteroid_live.clone())
+    };
+    let asteroids = ast_live;
 
     for ast_name in &asteroids {
         let snap = {
@@ -503,11 +524,12 @@ pub fn tick_asteroid_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // Each live asteroid treated as a circle; deflect off rotating spinner OBBs.
 
 pub fn tick_asteroid_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let s = st.lock().unwrap();
-    if !s.spinners_enabled { return; }
-    let spinners  = s.spinner_live.clone();
-    let asteroids = s.space_asteroid_live.clone();
-    drop(s);
+    let (spinners_enabled, spinners, ast_live) = {
+        let s = st.lock().unwrap();
+        (s.spinners_enabled, s.spinner_live.clone(), s.space_asteroid_live.clone())
+    };
+    if !spinners_enabled { return; }
+    let asteroids = ast_live;
 
     for ast_name in &asteroids {
         let snap = {
@@ -546,6 +568,55 @@ pub fn tick_asteroid_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
                 break; // one spinner collision per asteroid per tick
             }
+        }
+    }
+}
+
+// ── Asteroid-hook / player collision ─────────────────────────────────────────
+// In asteroid-hook mode the hooks are solid obstacles.  When the player body
+// overlaps a hook circle we push the player out and nudge the hook away —
+// identical treatment to the floating asteroid gifs.
+// Hooks the player is currently grappled to are skipped so rope physics isn't
+// disturbed while swinging.
+
+pub fn tick_hook_player_impact(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    if !asteroid_mode { return; }
+
+    let (px, py, hooked, active_hook, live_hooks) = {
+        let s = st.lock().unwrap();
+        (s.px, s.py, s.hooked, s.active_hook.clone(), s.live_hooks.clone())
+    };
+
+    for hook_name in &live_hooks {
+        // Never push the hook the player is hanging from.
+        if hooked && active_hook == *hook_name { continue; }
+
+        let hit_info: Option<(f32, f32)> = {
+            if let Some(obj) = c.get_game_object(hook_name) {
+                if !obj.visible { continue; }
+                let hx = obj.position.0 + obj.size.0 * 0.5;
+                let hy = obj.position.1 + obj.size.1 * 0.5;
+                let hook_r = obj.size.0 * 0.45;
+                let min_dist = PLAYER_R + hook_r;
+                let dx = px - hx;
+                let dy = py - hy;
+                let dist2 = dx * dx + dy * dy;
+                if dist2 < min_dist * min_dist {
+                    let dist = dist2.sqrt().max(0.001);
+                    let pen = min_dist - dist;
+                    Some((dx / dist * pen, dy / dist * pen))
+                } else {
+                    None
+                }
+            } else { None }
+        };
+
+        if let Some((push_x, push_y)) = hit_info {
+            // Push player out of overlap; hooks are stationary, they don't move.
+            let mut s = st.lock().unwrap();
+            s.px += push_x;
+            s.py += push_y;
         }
     }
 }

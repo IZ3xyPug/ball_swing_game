@@ -11,6 +11,7 @@ pub fn tick_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_turret_shoot(c, st);
     tick_bullets(c, st);
     tick_bullet_collision(c, st);
+    tick_bullet_solid_collision(c, st);
     tick_turret_player_collision(c, st);
     tick_asteroid_turret_collision(c, st);
 }
@@ -345,8 +346,8 @@ fn tick_bullet_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(hobj) = c.get_game_object_mut(&prev) {
                 if asteroid_mode {
-                    hobj.set_image(hook_asteroid_img_for_id(&prev, AsteroidHookState::Base));
-                } else {
+                    if let Some(sprite) = &mut hobj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
+                } else if !asteroid_mode {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     hobj.set_image(hook_img(r, g, b));
                 }
@@ -413,6 +414,105 @@ fn tick_asteroid_turret_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.visible = false;
             obj.position = (-4500.0, -4500.0);
+        }
+    }
+}
+
+// ── Bullet ↔ solid-object collision ─────────────────────────────────────────
+// Kill bullets that hit pads, spinners, or asteroid-mode hooks.
+
+fn tick_bullet_solid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (live_bullets, pads, spinners, hooks, asteroid_mode) = {
+        let s = st.lock().unwrap();
+        if s.bullet_live.is_empty() { return; }
+        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+        (
+            s.bullet_live.iter().map(|(id, _, _, _)| id.clone()).collect::<Vec<_>>(),
+            s.pad_live.clone(),
+            s.spinner_live.clone(),
+            if asteroid_mode { s.live_hooks.clone() } else { vec![] },
+            asteroid_mode,
+        )
+    };
+
+    let bullet_snaps: Vec<(String, f32, f32)> = live_bullets.iter().filter_map(|id| {
+        c.get_game_object(id).map(|obj| {
+            let bcx = obj.position.0 + BULLET_W * 0.5;
+            let bcy = obj.position.1 + BULLET_H * 0.5;
+            (id.clone(), bcx, bcy)
+        })
+    }).collect();
+
+    let mut kill_ids: Vec<String> = Vec::new();
+
+    for (id, bcx, bcy) in &bullet_snaps {
+        if kill_ids.contains(id) { continue; }
+
+        // ── Pads (AABB) ──────────────────────────────────────────────────────
+        for pad_name in &pads {
+            if let Some(pad) = c.get_game_object(pad_name) {
+                if !pad.visible { continue; }
+                let px0 = pad.position.0;
+                let py0 = pad.position.1;
+                let px1 = px0 + pad.size.0;
+                let py1 = py0 + pad.size.1;
+                if *bcx >= px0 && *bcx <= px1 && *bcy >= py0 && *bcy <= py1 {
+                    kill_ids.push(id.clone());
+                    break;
+                }
+            }
+        }
+        if kill_ids.last().map(|n| n == id).unwrap_or(false) { continue; }
+
+        // ── Spinners (circumscribed-circle) ──────────────────────────────────
+        let spinner_r = SPINNER_W * 0.5;
+        for spin_name in &spinners {
+            if let Some(sp) = c.get_game_object(spin_name) {
+                if !sp.visible { continue; }
+                let scx = sp.position.0 + sp.size.0 * 0.5;
+                let scy = sp.position.1 + sp.size.1 * 0.5;
+                let dx = bcx - scx;
+                let dy = bcy - scy;
+                if dx * dx + dy * dy < spinner_r * spinner_r {
+                    kill_ids.push(id.clone());
+                    break;
+                }
+            }
+        }
+        if kill_ids.last().map(|n| n == id).unwrap_or(false) { continue; }
+
+        // ── Asteroid-mode hooks (circle) ─────────────────────────────────────
+        if asteroid_mode {
+            for hook_name in &hooks {
+                if let Some(hobj) = c.get_game_object(hook_name) {
+                    if !hobj.visible { continue; }
+                    let hcx = hobj.position.0 + hobj.size.0 * 0.5;
+                    let hcy = hobj.position.1 + hobj.size.1 * 0.5;
+                    let hr = hobj.size.0 * 0.45;
+                    let dx = bcx - hcx;
+                    let dy = bcy - hcy;
+                    if dx * dx + dy * dy < hr * hr {
+                        kill_ids.push(id.clone());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if kill_ids.is_empty() { return; }
+
+    {
+        let mut s = st.lock().unwrap();
+        for id in &kill_ids {
+            s.bullet_live.retain(|(n, _, _, _)| n != id);
+            s.bullet_free.push(id.clone());
+        }
+    }
+    for id in &kill_ids {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = false;
+            obj.position = (-5000.0, -5000.0);
         }
     }
 }

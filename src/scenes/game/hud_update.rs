@@ -122,6 +122,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Score counter (top-right)
     if let Some(obj) = c.get_game_object_mut("score_counter") {
+        obj.visible = true;
         obj.position = (VW - 450.0, 40.0);
         if dirty_score {
             obj.set_image(Image {
@@ -142,6 +143,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Y meter
     if let Some(obj) = c.get_game_object_mut("y_meter") {
+        obj.visible = true;
         obj.position = (30.0, 344.0);
         if dirty_py {
             obj.set_image(Image {
@@ -154,6 +156,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // X meter
     if let Some(obj) = c.get_game_object_mut("x_meter") {
+        obj.visible = true;
         obj.position = (30.0, 442.0);
         if dirty_px {
             obj.set_image(Image {

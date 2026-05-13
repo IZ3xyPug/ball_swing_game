@@ -77,13 +77,15 @@
                             color: None,
                         });
                         obj.set_glow(GlowConfig { color: Color(220, 80, 30, 200), width: 8.0 });
-                        // Transfer player momentum to asteroid on grab; smaller asteroids react more.
+                        // Transfer player momentum to hook/asteroid on grab; smaller objects react more.
+                        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
                         if hook_id.starts_with("space_asteroid_") {
                             let factor = ASTEROID_HOOK_IMPULSE_FACTOR
                                 * (SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(1.0));
                             obj.momentum.0 += pvx * factor;
                             obj.momentum.1 += pvy * factor;
                         }
+                        // asteroid_mode hooks are completely stationary — no impulse transfer.
                     }
                     // Track glow flash for hook
                     {

@@ -24,6 +24,7 @@ pub fn tick_visuals(
     tick_pad_impact_animation(c, st, tech_bounce_img, tech_bounce_anim_frames, tech_bounce_img_flipped, tech_bounce_anim_frames_flipped);
     tick_glow_flashes(c, st, tech_bounce_img);
     tick_nearest_hook_highlight(c, st, prev_nearest_hook);
+    tick_hook_artifact_anim(c, st);
     tick_zone_palette(c, st, prev_zone_idx, tech_bounce_img, tech_bounce_img_flipped);
     tick_dark_mode(c, st, dark_mode_prev);
     tick_spinner_movers(c, st, frame_counter);
@@ -100,7 +101,32 @@ fn tick_pad_impact_animation(
     s.pad_bounce_anim = keep;
 }
 
-// ── Glow flash decay ────────────────────────────────────────────────────────
+// ── Artifact hook one-shot animation ─────────────────────────────────────────────────────
+
+fn tick_hook_artifact_anim(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    if !asteroid_mode { return; }
+
+    let mut ticks = c.get_i32("hook_artifact_play_ticks");
+    if ticks <= 0 { return; } // not playing
+
+    ticks -= 1;
+    c.set_var("hook_artifact_play_ticks", ticks);
+
+    if ticks == 0 {
+        // Animation is done — freeze the active hook sprite at the last frame.
+        let active_hook = st.lock().unwrap().active_hook.clone();
+        if !active_hook.is_empty() {
+            if let Some(obj) = c.get_game_object_mut(&active_hook) {
+                if let Some(sprite) = &mut obj.animated_sprite {
+                    sprite.set_fps(0.001);
+                }
+            }
+        }
+    }
+}
+
+// ── Glow flash decay ─────────────────────────────────────────────────────────────────────
 
 fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>, _tech_bounce_img: &Image) {
     let mut s = st.lock().unwrap();
@@ -120,7 +146,11 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>, _tech_bounce_img: &
         if let Some(obj) = c.get_game_object_mut(name) {
             if obj.tags.iter().any(|t| t == "hook") {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img_for_id(name, AsteroidHookState::Base));
+                    // Freeze artifact animation back to frame 0 on glow-flash expiry.
+                    if let Some(sprite) = &mut obj.animated_sprite {
+                        sprite.reset();
+                        sprite.set_fps(0.001);
+                    }
                 } else {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
@@ -148,8 +178,8 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
     let max_dist2 = ROPE_LEN_MAX * ROPE_LEN_MAX;
     for hid in &hooks {
         if let Some(obj) = c.get_game_object(hid) {
-            let hcx = obj.position.0 + HOOK_R;
-            let hcy = obj.position.1 + HOOK_R;
+            let hcx = obj.position.0 + obj.size.0 * 0.5;
+            let hcy = obj.position.1 + obj.size.1 * 0.5;
             let dx = px - hcx;
             let dy = py - hcy;
             let d2 = dx * dx + dy * dy;
@@ -163,25 +193,20 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
     let nearest = best_id.unwrap_or_default();
     if nearest != *prev_nearest {
         let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
-        // Remove glow from old nearest.
+        // Remove highlight from old nearest.
         if !prev_nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(prev_nearest) {
-                if asteroid_mode {
-                    obj.set_image(hook_asteroid_img_for_id(prev_nearest, AsteroidHookState::Base));
-                } else {
+                if !asteroid_mode {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
+                    obj.clear_glow();
                 }
-                obj.clear_glow();
             }
         }
-        // Glow new nearest.
+        // Highlight new nearest.
         if !nearest.is_empty() {
             if let Some(obj) = c.get_game_object_mut(&nearest) {
-                if asteroid_mode {
-                    obj.set_image(hook_asteroid_img_for_id(&nearest, AsteroidHookState::Near));
-                    obj.clear_glow();
-                } else {
+                if !asteroid_mode {
                     let (r, g, b) = hook_near_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
                     obj.set_glow(GlowConfig { color: Color(255, 230, 140, 190), width: 13.0 });
@@ -211,8 +236,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     for hid in &hooks {
         if let Some(obj) = c.get_game_object_mut(hid) {
             if asteroid_mode {
-                obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Base));
-                obj.clear_glow();
+                // Artifact hooks don't need zone-palette recoloring — skip image ops.
             } else {
                 let (r, g, b) = hook_base_for_zone(zone_idx);
                 obj.set_image(hook_img(r, g, b));

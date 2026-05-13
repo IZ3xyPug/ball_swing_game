@@ -24,6 +24,8 @@ pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
 // ── Object sizes ──────────────────────────────────────────────────────────────
 pub const PLAYER_R:       f32 = 40.0;
 pub const HOOK_R:         f32 = 38.0;
+/// Display/collision radius for artifact-mode grab hooks (1.5× regular hook).
+pub const HOOK_ARTIFACT_R: f32 = HOOK_R * 1.5;
 pub const ROPE_THICKNESS: f32 = 60.0;
 pub const AIRSHIELD_W:    f32 = 220.0;
 pub const AIRSHIELD_H:    f32 = 160.0;
@@ -135,7 +137,7 @@ pub const PAD_BELOW_HOOK_Y_GAP: f32 = 400.0;
 pub const PAD_Y_MIN: f32 = HOOK_Y_MAX + 150.0; // ≈ 1200.0
 
 /// Fixed upward velocity applied when the player hits a bounce pad.
-pub const PAD_BOUNCE_VY: f32 = -52.0;
+pub const PAD_BOUNCE_VY: f32 = -104.0;
 
 /// Restitution (bounciness) applied when a space asteroid hits a bounce pad.
 pub const PAD_ASTEROID_RESTITUTION: f32 = 0.75;
@@ -386,6 +388,8 @@ pub const ASSET_ARCADE_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/a
 pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wobbly_meow.mp3");
 pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
+pub const ASSET_HOOK_ARTIFACT_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact.gif");
+pub const HOOK_ARTIFACT_FPS: f32 = 12.0;
 pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
 pub const ASSET_CALICOBALL_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/calicoball.gif");
 pub const ASSET_BLACKHOLE1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/blackhole1.gif");
@@ -535,7 +539,7 @@ pub const SPACE_PLANET_POOL_SIZE:    usize = 24;
 pub const SPACE_HOOK_POOL_SIZE:      usize = 160;
 pub const SPACE_COIN_POOL_SIZE:      usize = 80;
 pub const SPACE_BLACKHOLE_POOL_SIZE: usize = 8;
-pub const SPACE_ASTEROID_POOL_SIZE:  usize = 40;
+pub const SPACE_ASTEROID_POOL_SIZE:  usize = 80;
 
 // Space object spawn budgets per tick
 pub const SPACE_PLANET_SPAWN_BUDGET:    usize = 2;
@@ -637,12 +641,12 @@ pub const SPACE_ASTEROID_GAP_MIN:        f32 = 1300.0;
 pub const SPACE_ASTEROID_GAP_MAX:        f32 = 2800.0;
 // Small asteroids float near the hook zone; large ones drift higher.
 // Y is interpolated between these two bands based on normalised size.
-pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -450.0;  // small, closest to action
-pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -80.0;
+pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -700.0;  // small, closest to action
+pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -400.0;
 pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -2200.0; // large, highest (visible zoomed-out)
-pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -700.0;
+pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -900.0;
 pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
-pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 420.0;
+pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 480.0;
 /// Crystalline collision layer bits.
 pub const ASTEROID_COLLISION_LAYER: u32 = 1 << 8;
 pub const PLAYER_COLLISION_LAYER:   u32 = 1 << 1; // matches collision_layers::PLAYER

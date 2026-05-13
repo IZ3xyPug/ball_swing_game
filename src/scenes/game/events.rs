@@ -40,7 +40,11 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&prev) {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img_for_id(&prev, AsteroidHookState::Base));
+                    // Freeze artifact animation back to frame 0 on release.
+                    if let Some(sprite) = &mut obj.animated_sprite {
+                        sprite.reset();
+                        sprite.set_fps(0.001);
+                    }
                 } else {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
@@ -128,22 +132,25 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             }
 
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+            let mut total_artifact_ticks: Option<i32> = None;
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
                 if asteroid_mode {
-                    obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::On));
+                    // Start the one-shot artifact animation.
+                    if let Some(sprite) = &mut obj.animated_sprite {
+                        let total_ticks = (sprite.frame_count() as f32 * (60.0 / HOOK_ARTIFACT_FPS)).round() as i32;
+                        sprite.reset();
+                        sprite.set_fps(HOOK_ARTIFACT_FPS);
+                        total_artifact_ticks = Some(total_ticks);
+                    }
                     obj.clear_glow();
                 } else {
                     let (r, g, b) = hook_on_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
                     obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
                 }
-                // Transfer player momentum to asteroid on grab; smaller asteroids react more.
-                if hook_id.starts_with("space_asteroid_") {
-                    let factor = ASTEROID_HOOK_IMPULSE_FACTOR
-                        * (SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(1.0));
-                    obj.momentum.0 += pvx * factor;
-                    obj.momentum.1 += pvy * factor;
-                }
+            }
+            if let Some(ticks) = total_artifact_ticks {
+                c.set_var("hook_artifact_play_ticks", ticks);
             }
 
             c.run(Action::Show { target: Target::name("rope") });

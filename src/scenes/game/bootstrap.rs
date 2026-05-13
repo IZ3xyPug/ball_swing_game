@@ -401,6 +401,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     score_counter.ignore_zoom = true;
     score_counter.layer = 100;
+    score_counter.visible = false;
 
     let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
@@ -414,6 +415,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     momentum_counter.ignore_zoom = true;
     momentum_counter.layer = 100;
+    momentum_counter.visible = false;
 
     let mut gravity_indicator = GameObject::new_rect(
         ctx, "gravity_indicator".into(),
@@ -427,6 +429,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     gravity_indicator.ignore_zoom = true;
     gravity_indicator.layer = 100;
+    gravity_indicator.visible = false;
 
     let mut y_meter = GameObject::new_rect(
         ctx, "y_meter".into(),
@@ -440,6 +443,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     y_meter.ignore_zoom = true;
     y_meter.layer = 100;
+    y_meter.visible = false;
 
     let mut x_meter = GameObject::new_rect(
         ctx, "x_meter".into(),
@@ -453,6 +457,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     x_meter.ignore_zoom = true;
     x_meter.layer = 100;
+    x_meter.visible = false;
 
     let mut combo_flash = {
         let (w, h) = (420u32, 80u32);
@@ -1211,31 +1216,6 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("slider_music_thumb",  slider_music_thumb)
         .with_object("slider_sound_track",  slider_sound_track)
         .with_object("slider_sound_thumb",  slider_sound_thumb);
-
-    // ── Zone divider lines ────────────────────────────────────────────────
-    // Thin vertical white lines at each zone boundary, drawn in world space.
-    // Height is intentionally enormous so the top is never visible even when
-    // zoomed out to the maximum camera level.
-    const ZONE_LINE_W: f32 = 8.0;
-    const ZONE_LINE_H: f32 = 400_000.0;
-    const ZONE_LINE_Y: f32 = -200_000.0;
-    for zone_num in 1..=2usize {
-        let world_x = SPAWN_X + zone_num as f32 * ZONE_DISTANCE_STEP - ZONE_LINE_W / 2.0;
-        let id = format!("zone_line_{zone_num}");
-        let mut line = GameObject::new_rect(
-            ctx, id.clone(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (ZONE_LINE_W, ZONE_LINE_H), 0.0),
-                image: solid(255, 255, 255, 150).into(),
-                color: None,
-            }),
-            (ZONE_LINE_W, ZONE_LINE_H),
-            (world_x, ZONE_LINE_Y),
-            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
-        line.layer = 1; // in front of background, behind everything else
-        scene = scene.with_object(id, line);
-    }
 
     let pools = PoolSets {
         starter_names,

@@ -279,14 +279,7 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        let sfx_path = match c.get_i32("coin_sfx_index") {
-            1 => ASSET_COIN_SFX_1,
-            2 => ASSET_COIN_SFX_2,
-            3 => ASSET_COIN_SFX_4,
-            _ => ASSET_COIN_SFX_3,
-        };
-        c.play_sound_with(sfx_path, SoundOptions::new().volume(sfx_vol(c, 0.2)));
-        c.set_var("coin_sfx_index", (c.get_i32("coin_sfx_index") + 1) % 4);
+        c.play_sound_with(ASSET_COIN_SFX_3, SoundOptions::new().volume(sfx_vol(c, 0.2)));
     }
 }
 

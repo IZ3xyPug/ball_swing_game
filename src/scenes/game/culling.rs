@@ -39,6 +39,9 @@ fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.visible = false;
             obj.position = (-2000.0, -2000.0);
+            // Reset physics state so the object is clean when re-used.
+            obj.momentum = (0.0, 0.0);
+            obj.rotation_momentum = 0.0;
         }
     }
     let rm_set: HashSet<&str> = if to_remove.is_empty() { return; } else {
@@ -47,7 +50,9 @@ fn cull_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let active_hook_removed = s.hooked && rm_set.contains(s.active_hook.as_str());
     s.live_hooks.retain(|n| !rm_set.contains(n.as_str()));
     s.spawn_animations.retain(|a| !rm_set.contains(a.id.as_str()));
-    for name in to_remove { s.pool_free.push(name); }
+    for name in to_remove {
+        s.pool_free.push(name);
+    }
 
     if active_hook_removed {
         let _zone_idx = zone_index_for_distance(s.distance);

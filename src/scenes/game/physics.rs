@@ -337,11 +337,18 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
 
     if !s.space_launch_active {
-        let cap = if s.in_space_mode { SPACE_MOMENTUM_CAP } else { MOMENTUM_CAP };
-        let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
-        if speed > cap {
-            s.vx = s.vx / speed * cap;
-            s.vy = s.vy / speed * cap;
+        // Skip speed cap on the frame immediately after a pad bounce so the full
+        // bounce velocity is preserved. The flag is set by tick_pad_bounce and cleared here.
+        let post_bounce = matches!(c.get_var("post_bounce"), Some(Value::Bool(true)));
+        if post_bounce {
+            c.set_var("post_bounce", false);
+        } else {
+            let cap = if s.in_space_mode { SPACE_MOMENTUM_CAP } else { MOMENTUM_CAP };
+            let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
+            if speed > cap {
+                s.vx = s.vx / speed * cap;
+                s.vy = s.vy / speed * cap;
+            }
         }
     }
 

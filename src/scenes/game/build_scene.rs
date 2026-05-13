@@ -944,10 +944,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // Reset starter hooks to their canonical positions — they may have
             // been culled (hidden + moved off-screen) during a previous run.
+            let asteroid_mode_reset = matches!(canvas.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+            let hook_half_reset = if asteroid_mode_reset { HOOK_ARTIFACT_R } else { HOOK_R };
             for (i, &(hx, hy)) in starter_hooks.iter().enumerate() {
                 let id = format!("hook_{i}");
                 if let Some(obj) = canvas.get_game_object_mut(&id) {
-                    obj.position = (hx - HOOK_R, hy - HOOK_R);
+                    obj.position = (hx - hook_half_reset, hy - hook_half_reset);
                     obj.visible = true;
                     obj.momentum = (0.0, 0.0);
                 }
@@ -1029,17 +1031,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 pad_thruster_anim_template_flipped.as_ref(),
             );
 
-            // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
-            // and spawning has populated the full set of hooks visible at start.
+            // Set up all live hooks for asteroid mode.
             {
                 let hooks = state.lock().unwrap().live_hooks.clone();
                 for hid in &hooks {
                     if let Some(obj) = canvas.get_game_object_mut(hid) {
-                        if hid.as_str() == "hook_0" {
-                            obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Near));
-                        } else {
-                            obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Base));
-                        }
+                        obj.set_animation(hook_artifact_anim());
+                        obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                        obj.collision_mode = CollisionMode::solid_circle(HOOK_ARTIFACT_R);
+                        obj.gravity = 0.0;
+                        obj.momentum = (0.0, 0.0);
+                        obj.rotation_momentum = 0.0;
                     }
                 }
             }
@@ -1071,11 +1073,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             super::space_zone::prewarm_solar_decode(&state);
             // Pre-warm catcoin GIF decode so first space coin spawn does not hitch.
             super::space_zone::prewarm_space_coin_decode();
-
-            // ── Pre-warm asteroid hook image cache (background thread) ───
-            // Builds all 9 variants (3 buckets × 3 states) off the main thread
-            // so the first frame of gameplay doesn't stall on disk I/O + resize.
-            std::thread::spawn(|| { hook_asteroid_img_for_id("hook_0", AsteroidHookState::Base); });
+            // Pre-warm artifact hook GIF decode (background thread) to avoid
+            // per-spawn disk read and decode stalls during gameplay.
+            std::thread::spawn(|| { super::helpers::prewarm_hook_artifact(); });
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -1625,6 +1625,19 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 }
                             }
                             c.set_var("start_orbit_ticks", ticks as i32 + 1);
+
+                            // Keep asteroid-mode hooks frozen on the start screen.
+                            // The physics engine still runs (soft pause only), so we
+                            // zero every live hook's momentum each frame to prevent drift.
+                            {
+                                let hooks = st.lock().unwrap().live_hooks.clone();
+                                for hid in &hooks {
+                                    if let Some(obj) = c.get_game_object_mut(hid) {
+                                        obj.momentum = (0.0, 0.0);
+                                        obj.rotation_momentum = 0.0;
+                                    }
+                                }
+                            }
                         }
                         if let Some(obj) =
                             c.get_game_object_mut("pause_overlay")
@@ -1771,6 +1784,22 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Collision ────────────────────────────────────────
                     collision::tick_collision(c, &st);
+
+                    // ── Asteroid-hook Y clamp ─────────────────────────────
+                    // Prevent asteroid-mode hooks from drifting above y = -600.
+                    if matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true))) {
+                        let live = st.lock().unwrap().live_hooks.clone();
+                        for hid in &live {
+                            if let Some(obj) = c.get_game_object_mut(hid) {
+                                if obj.position.1 < -600.0 {
+                                    obj.position.1 = -600.0;
+                                    if obj.momentum.1 < 0.0 {
+                                        obj.momentum.1 = 0.0;
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // ── Pickups ──────────────────────────────────────────
                     pickups::tick_pickups(c, &st, &tech_bounce_img, &tech_bounce_img_flipped, pad_thruster_anim_template.as_ref(), pad_thruster_anim_template_flipped.as_ref());
@@ -2060,9 +2089,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // Positions are rounded to whole pixels to prevent sub-pixel
                         // jitter / blur that is most visible during lag spikes.
                         let px = (bg_x - offset).round();
-                        // Slight Y offset avoids exact alignment with static stars,
-                        // reducing shimmer/blur artifacts during horizontal scroll.
-                        let py = (bg_y + 35.0).round();
+                        // Y offset pushes moving star panels lower on screen.
+                        let py = (bg_y + 200.0).round();
                         if let Some(obj) = c.get_game_object_mut("bg_space") {
                             obj.size = (bg_w, bg_h);
                             obj.position = (px, py);

@@ -282,6 +282,7 @@ pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
 
 pub static GAME_MODES: &[(&str, &str)] = &[
     ("FREE ROAM", "SWING FREELY   \u{2022}   SANDBOX MODE"),
+    ("BOSS MODE", "DEFEAT BOSSES   \u{2022}   CHALLENGE MODE"),
 ];
 
 fn menu_mode_selector_img() -> image::RgbaImage {
@@ -605,12 +606,15 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .on_enter(|canvas| {
             // Returning to main menu is the only transition that stops in-game music.
             audio_state::stop_game_bgm();
-            // Menu track is randomized whenever entering menu.
-            let random_idx = (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() as usize)
-                .unwrap_or(0)) % MENU_TRACKS.len();
-            play_menu_track(canvas, random_idx);
+            // Only start a new menu track if none is currently playing.
+            // This prevents music from restarting when backing out of Settings/Shop/etc.
+            if !audio_state::has_menu_bgm() || audio_state::menu_bgm_finished() {
+                let random_idx = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos() as usize)
+                    .unwrap_or(0)) % MENU_TRACKS.len();
+                play_menu_track(canvas, random_idx);
+            }
             // World is 2×VH tall: shop at y=0..VH, menu at y=VH..2VH.
             // Camera starts pointing at menu (y=MENU_Y). goto_shop lerps y to 0.
             let mut cam = Camera::new((VW, VH * 2.0), (VW, VH));
@@ -620,6 +624,8 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("menu_in_shop", false);
 
             canvas.set_var("menu_text_dirty", true);
+            // Reset mode selection to FREE ROAM whenever the menu is entered.
+            canvas.set_var("game_mode_idx", 0i32);
 
             let selected = Arc::new(Mutex::new(0usize));
 
@@ -632,6 +638,13 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                         // In shop: route all keystrokes to the carousel handler.
                         if matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) {
                             shop::handle_shop_key(c, key);
+                            return;
+                        }
+                        // L key: skip to the next menu track.
+                        if *key == Key::Character("l".into()) {
+                            let cur = c.get_i32("menu_bgm_track_index").max(0) as usize;
+                            let next = (cur + 1) % MENU_TRACKS.len();
+                            play_menu_track(c, next);
                             return;
                         }
                         let n = GAME_MODES.len();
@@ -661,6 +674,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                                     obj.set_drawable(Box::new(ui_text_spec(mode_desc, &font, 18.0 * s, Color(140, 190, 240, 200), 800.0 * s)));
                                 }
                             }
+                            c.set_var("game_mode_idx", idx as i32);
                         }
                     }
                 });
@@ -819,7 +833,11 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 canvas.set_var("menu_anim_registered", true);
             }
 
-            canvas.register_custom_event("goto_game".into(), |c| c.load_scene("game"));
+            canvas.register_custom_event("goto_game".into(), |c| {
+                let idx = c.get_i32("game_mode_idx").max(0) as usize;
+                c.set_var("boss_mode_active", idx == 1);
+                c.load_scene("game");
+            });
             // Pan camera upward into the shop region (no scene switch).
             canvas.register_custom_event("goto_shop".into(), |c| {
                 c.set_var("menu_cam_target_y", 0.0f32);
@@ -1050,6 +1068,11 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
             }
 
             canvas.set_var("ms_dragging", -1i32);
+
+            // The with_event on ms_back_btn fires Action::Custom { name: "ms_back" }.
+            // register_custom_event maps that name to the actual load_scene call.
+            // Re-registered every visit so the handler is always live.
+            canvas.register_custom_event("ms_back".into(), |c| c.load_scene("menu"));
 
             // Position thumbs immediately (virtual coords, no scale dependency).
             ms_position_slider_thumbs(canvas);

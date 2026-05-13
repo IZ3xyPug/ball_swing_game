@@ -238,6 +238,8 @@ fn find_safe_hook_position(c: &Canvas, s: &State, base_x: f32, base_y: f32) -> O
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
 fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Read asteroid mode once from canvas before locking State.
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     let mut s = st.lock().unwrap();
     let mut hooks_spawned = 0usize;
     while hooks_spawned < HOOKS_SPAWN_BUDGET_PER_TICK
@@ -355,16 +357,23 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         hooks_spawned += 1;
         s.world_sampler.add(hx, hy);
 
+        let hook_half = if asteroid_mode { HOOK_ARTIFACT_R } else { HOOK_R };
+
         // Enqueue drop-in animation, gravity-aware entry direction.
         let start_rot   = lcg_range(&mut s.seed, -80.0, 80.0);
-        let target_x    = hx - HOOK_R;
+        let target_x    = hx - hook_half;
         let gravity_dir = s.gravity_dir;
         // target_y: where the hook rests.  hook_start_y: where it begins off-screen.
         let (target_y, hook_start_y) = if gravity_dir < 0.0 {
-            let ty = VH - hy - HOOK_R;      // mirrored position for flipped gravity
+            let ty = VH - hy - hook_half;   // mirrored position for flipped gravity
             (ty, ty + SPAWN_ANIM_DROP)      // enter from below screen
         } else {
-            let ty = hy - HOOK_R;
+            // For asteroid hooks clamp so the top edge never goes above y = -600.
+            let ty = if asteroid_mode {
+                (hy - hook_half).max(-600.0)
+            } else {
+                hy - hook_half
+            };
             (ty, ty - SPAWN_ANIM_DROP)      // enter from above screen
         };
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
@@ -382,15 +391,21 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let zone_idx = zone_index_for_distance(s.distance);
         drop(s);
 
-        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+        let asteroid_mode = asteroid_mode; // shadowed for clarity inside drop scope
         if let Some(obj) = c.get_game_object_mut(&id) {
             // Start off-screen on the gravity-entry side; tick_spawn_animations moves it.
-            obj.position = (hx - HOOK_R, hook_start_y);
-            obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+            obj.position = (hx - hook_half, hook_start_y);
             obj.visible = false; // hidden until animation starts
             if asteroid_mode {
-                obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
+                // Artifact GIF hook — stationary, animation frozen until grabbed.
+                obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                obj.set_animation(hook_artifact_anim());
+                obj.gravity = 0.0;
+                obj.momentum = (0.0, 0.0);
+                obj.rotation_momentum = 0.0;
+                obj.collision_mode = CollisionMode::solid_circle(HOOK_ARTIFACT_R);
             } else {
+                obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
                 let (r, g, b) = hook_base_for_zone(zone_idx);
                 obj.set_image(hook_img(r, g, b));
             }
@@ -902,6 +917,8 @@ fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Gates ─────────────────────────────────────────────────────────────────────
 
 fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Read asteroid mode before locking State (canvas borrow + state lock can't coexist).
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     let mut s = st.lock().unwrap();
     let mut spawned = 0usize;
     while spawned < GATES_SPAWN_BUDGET_PER_TICK
@@ -979,11 +996,22 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
             }
             if let Some((hook_id, hx, hy)) = hook_spawn {
+                let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
                 if let Some(obj) = c.get_game_object_mut(hook_id) {
-                    let (r, g, b) = hook_base_for_zone(zone_idx);
-                    obj.position = (*hx - HOOK_R, *hy - HOOK_R);
+                    obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+                    if asteroid_mode {
+                        obj.position = (*hx - HOOK_R, *hy - HOOK_R);
+                        obj.set_animation(hook_artifact_anim());
+                        obj.gravity = 0.0;
+                        obj.momentum = (0.0, 0.0);
+                        obj.rotation_momentum = 0.0;
+                        obj.collision_mode = CollisionMode::solid_circle(HOOK_R);
+                    } else {
+                        let (r, g, b) = hook_base_for_zone(zone_idx);
+                        obj.position = (*hx - HOOK_R, *hy - HOOK_R);
+                        obj.set_image(hook_img(r, g, b));
+                    }
                     obj.visible = true;
-                    obj.set_image(hook_img(r, g, b));
                 }
             }
         }
