@@ -11,6 +11,7 @@ mod hud_update;
 mod background;
 mod gravity_wells;
 mod turrets;
+mod gravity_cannon;
 pub mod space_zone;
 mod build_scene;
 

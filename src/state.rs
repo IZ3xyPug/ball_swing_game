@@ -5,6 +5,35 @@ use image::RgbaImage;
 use quartz::AnimatedSprite;
 use crate::poisson::PoissonSampler;
 
+// ── Gravity cannon phase tracking ─────────────────────────────────────────────
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CannonState {
+    Idle,
+    /// Pre-capture pulse while player is held: 8→7→6→7→8.
+    Capturing { seq_idx: usize, frame_timer: u32 },
+    /// Player frozen inside barrel; cannon slowly rotates CW.
+    Charging { ticks: u32 },
+    /// Fire windup animation: frames 8→0, launch at frame 0.
+    FiringDown { frame_idx: usize, frame_timer: u32 },
+    /// Post-launch return animation: frames 0→8 before rotation recovery.
+    FiringUp { frame_idx: usize, frame_timer: u32 },
+    /// Returning to default rotation.
+    Recovering { ticks: u32 },
+}
+
+#[derive(Clone, Debug)]
+pub struct CannonPhase {
+    pub id:        String,
+    pub state:     CannonState,
+    /// Base Y before bob offset.
+    pub base_y:    f32,
+    /// Phase offset for sin bob (randomised per cannon).
+    pub bob_phase: f32,
+    /// Current visual rotation in degrees.
+    pub rotation:  f32,
+}
+
 pub fn lcg(s: &mut u64) -> f32 {
     *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
     let hi = (*s >> 32) as u32;
@@ -286,4 +315,16 @@ pub struct State {
     pub player_ball_frame: usize,
     pub player_ball_hit_rewind: bool,
     pub player_ball_frame_timer: u32,
+
+    // ── Gravity cannon obstacle ───────────────────────────────────────────────
+    pub cannon_live:       Vec<String>,
+    pub cannon_free:       Vec<String>,
+    pub cannon_rightmost:  f32,
+    pub cannon_phases:     Vec<CannonPhase>,
+    /// True while a cannon has captured the player.
+    pub cannon_captured:   bool,
+    /// ID of the cannon currently holding the player.
+    pub cannon_capture_id: String,
+    /// Remaining ticks of reduced gravity after cannon launch.
+    pub cannon_damp_timer: u32,
 }

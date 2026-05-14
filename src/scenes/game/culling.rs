@@ -25,6 +25,7 @@ pub fn tick_culling(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     cull_bullets(c, st);
     cull_rocket_pads(c, st);
     cull_main_asteroids(c, st);
+    super::gravity_cannon::cull_cannons(c, st);
     // Space zone culling is handled inside space_zone::tick_space_zone
 }
 

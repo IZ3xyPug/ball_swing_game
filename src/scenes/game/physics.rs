@@ -313,6 +313,8 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// During rocket launch (space_launch_active) and while in space: near-zero gravity.
 pub fn sync_engine_gravity(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let s = st.lock().unwrap();
+    // While the cannon has the player, zero gravity — cannon tick controls position directly.
+    if s.cannon_captured { return; }
     let target_gravity = if s.hooked {
         0.0
     } else if s.in_space_mode || s.space_launch_active {

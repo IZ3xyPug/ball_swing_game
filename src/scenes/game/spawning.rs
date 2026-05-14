@@ -164,6 +164,7 @@ pub fn tick_spawning(
     }
     spawn_rocket_pads(c, st);
     spawn_main_asteroids(c, st);
+    super::gravity_cannon::spawn_cannons(c, st);
     tick_spawn_animations(c, st);
 }
 

@@ -26,6 +26,7 @@ use super::hud_update;
 use super::background;
 use super::gravity_wells;
 use super::turrets;
+use super::gravity_cannon;
 use super::helpers::*;
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
@@ -238,6 +239,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_bh_free,
         space_asteroid_free,
         space_red_coin_free,
+        cannon_free,
     } = pools;
 
     // Starter hook positions (must match bootstrap.rs).
@@ -557,6 +559,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     let is_pause = *key == Key::Character("p".into());
                     let is_space = *key == Key::Named(NamedKey::Space);
+
+                    // ── Debug: G = spawn a gravity cannon ahead of the player ──
+                    if *key == Key::Character("g".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if !game_paused {
+                            let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                            if let Some(state_arc) = state_opt {
+                                gravity_cannon::debug_spawn_cannon(c, &state_arc);
+                            }
+                        }
+                        return;
+                    }
+
                     if !is_pause && !is_space { return; }
 
                     let game_paused = c.is_paused()
@@ -955,6 +971,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 player_ball_frame:       0,
                 player_ball_hit_rewind:  false,
                 player_ball_frame_timer: 0,
+
+                cannon_live:       Vec::new(),
+                cannon_free:       cannon_free.clone(),
+                cannon_rightmost:  SPAWN_X,
+                cannon_phases:     Vec::new(),
+                cannon_captured:   false,
+                cannon_capture_id: String::new(),
+                cannon_damp_timer: 0,
             };
 
             // Reuse persistent Arc across respawns.
@@ -1739,6 +1763,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Turrets ──────────────────────────────────────────
                     turrets::tick_turrets(c, &st);
+
+                    // ── Gravity cannons ───────────────────────────────────
+                    gravity_cannon::tick_cannons(c, &st);
 
                     // ── Space zone ────────────────────────────────────────
                     super::space_zone::tick_space_zone(c, &st, frame_counter);

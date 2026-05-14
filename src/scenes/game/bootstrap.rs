@@ -76,6 +76,8 @@ pub struct PoolSets {
     pub space_bh_free:     Vec<String>,
     pub space_asteroid_free: Vec<String>,
     pub space_red_coin_free: Vec<String>,
+    // ── Gravity cannon pool
+    pub cannon_free:       Vec<String>,
 }
 
 fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
@@ -786,6 +788,16 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object(id, obj);
     }
 
+    // ── Gravity cannon pool ───────────────────────────────────────────────
+    let mut cannon_free: Vec<String> = Vec::new();
+    for i in 0..CANNON_POOL_SIZE {
+        let id = format!("cannon_{i}");
+        let mut obj = make_gravity_cannon(ctx, &id, -6000.0, -6000.0);
+        obj.visible = false;
+        cannon_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
     // ── Space planet pool ─────────────────────────────────────────────────
     let mut space_planet_free: Vec<String> = Vec::new();
     for i in 0..SPACE_PLANET_POOL_SIZE {
@@ -1134,6 +1146,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_bh_free,
         space_asteroid_free,
         space_red_coin_free,
+        cannon_free,
     };
 
     (scene, pools)
