@@ -286,4 +286,19 @@ pub struct State {
     pub player_ball_frame: usize,
     pub player_ball_hit_rewind: bool,
     pub player_ball_frame_timer: u32,
+
+    // ── Boss fight ────────────────────────────────────────────────────────────
+    pub boss_active: bool,
+    pub boss_entry_ticks: u32,      // counts up after crossing threshold
+    pub boss_spawned: bool,         // body object made visible
+    pub boss_cleared: bool,         // arena cleared on entry (one-shot)
+    pub boss_hp: i32,
+    pub boss_phase: f32,            // lissajous phase angle (radians, advances per tick)
+    pub boss_vx: f32,               // kept for bolts; movement now parametric
+    pub boss_vy: f32,
+    pub boss_shoot_timer: u32,      // ticks until next bolt
+    pub boss_bolt_live: Vec<(String, f32, f32, u32)>, // (id, vx, vy, ttl)
+    pub boss_bolt_free: Vec<String>,
+    pub boss_asteroids: Vec<String>, // decorative asteroids in the arena
+    pub hud_last_boss_hp: i32,
 }

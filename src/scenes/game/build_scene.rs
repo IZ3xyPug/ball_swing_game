@@ -25,6 +25,7 @@ use super::hud_update;
 use super::background;
 use super::gravity_wells;
 use super::turrets;
+use super::boss;
 use super::helpers::*;
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
@@ -227,6 +228,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_bh_free,
         space_asteroid_free,
         space_red_coin_free,
+        boss_bolt_free,
+        boss_asteroid_ids,
     } = pools;
 
     // Starter hook positions (must match bootstrap.rs).
@@ -285,6 +288,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("coin_sfx_index", 0);
             canvas.set_var("space_zoom_mode", 3);
             canvas.set_var("asteroid_hooks_on", true);
+            canvas.set_var("boss_mode_cleared", false);
             canvas.set_var("start_orbit_ticks", 0i32);
             canvas.set_var("start_follow_force_ticks", 0i32);
             canvas.set_var("start_zoom_recover_ticks", 0i32);
@@ -917,6 +921,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 player_ball_frame:       0,
                 player_ball_hit_rewind:  false,
                 player_ball_frame_timer: 0,
+
+                boss_active:       false,
+                boss_entry_ticks:  0,
+                boss_spawned:      false,
+                boss_cleared:      false,
+                boss_hp:           crate::constants::BOSS_MAX_HP,
+                boss_phase:        0.0,
+                boss_vx:           0.0,
+                boss_vy:           0.0,
+                boss_shoot_timer:  crate::constants::BOSS_SHOOT_INTERVAL,
+                boss_bolt_live:    Vec::new(),
+                boss_bolt_free:    boss_bolt_free.clone(),
+                boss_asteroids:    boss_asteroid_ids.clone(),
+                hud_last_boss_hp:  -999,
             };
 
             // Reuse persistent Arc across respawns.
@@ -1038,7 +1056,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     if let Some(obj) = canvas.get_game_object_mut(hid) {
                         obj.set_animation(hook_artifact_anim());
                         obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
-                        obj.collision_mode = CollisionMode::solid_circle(HOOK_ARTIFACT_R);
+                        obj.collision_mode = CollisionMode::NonPlatform;
                         obj.gravity = 0.0;
                         obj.momentum = (0.0, 0.0);
                         obj.rotation_momentum = 0.0;
@@ -1830,6 +1848,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Turrets ──────────────────────────────────────────
                     turrets::tick_turrets(c, &st);
+
+                    // ── Boss fight ────────────────────────────────────────
+                    boss::tick_boss(c, &st);
 
                     // ── Space zone ────────────────────────────────────────
                     super::space_zone::tick_space_zone(c, &st, frame_counter);

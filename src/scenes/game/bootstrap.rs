@@ -90,6 +90,9 @@ pub struct PoolSets {
     pub space_bh_free:     Vec<String>,
     pub space_asteroid_free: Vec<String>,
     pub space_red_coin_free: Vec<String>,
+    // ── Boss fight
+    pub boss_bolt_free: Vec<String>,
+    pub boss_asteroid_ids: Vec<String>,
 }
 
 fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
@@ -1217,6 +1220,111 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("slider_sound_track",  slider_sound_track)
         .with_object("slider_sound_thumb",  slider_sound_thumb);
 
+    // ── Boss body ─────────────────────────────────────────────────────────
+    {
+        let s = BOSS_SIZE;
+        let mut boss_obj = GameObject::new_rect(
+            ctx, "boss".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (s, s), 0.0),
+                image: solid(C_BOSS_BODY.0, C_BOSS_BODY.1, C_BOSS_BODY.2, 255).into(),
+                color: None,
+            }),
+            (s, s),
+            (-6000.0, -6000.0),
+            vec!["boss".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        boss_obj.layer = LAYER_SPACE_HOOK;
+        boss_obj.gravity = 0.0;
+        boss_obj.visible = false;
+        scene = scene.with_object("boss", boss_obj);
+    }
+
+    // ── Boss HP bar ───────────────────────────────────────────────────────
+    {
+        let (bw, bh) = (BOSS_HP_BAR_W as u32, BOSS_HP_BAR_H as u32);
+        let mut bar_img = image::RgbaImage::new(bw, bh);
+        for py in 0..bh { for px in 0..bw {
+            bar_img.put_pixel(px, py, image::Rgba([C_BOSS_HP_FILL.0, C_BOSS_HP_FILL.1, C_BOSS_HP_FILL.2, 255]));
+        }}
+        let mut boss_hp_bar = GameObject::new_rect(
+            ctx, "boss_hp_bar".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (BOSS_HP_BAR_W, BOSS_HP_BAR_H), 0.0),
+                image: bar_img.into(),
+                color: None,
+            }),
+            (BOSS_HP_BAR_W, BOSS_HP_BAR_H),
+            (VW * 0.5 - BOSS_HP_BAR_W * 0.5, VH * 0.12),
+            vec!["hud".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        boss_hp_bar.visible = false;
+        boss_hp_bar.ignore_zoom = true;
+        boss_hp_bar.layer = 101;
+        scene = scene.with_object("boss_hp_bar", boss_hp_bar);
+    }
+
+    // ── Boss bolt pool ────────────────────────────────────────────────────
+    let mut boss_bolt_free: Vec<String> = Vec::new();
+    for i in 0..BOSS_BOLT_POOL_SIZE {
+        let id = format!("boss_bolt_{i}");
+        let mut obj = GameObject::new_rect(
+            ctx, id.clone(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (BOSS_BOLT_W, BOSS_BOLT_H), 0.0),
+                image: solid(C_BOSS_BOLT.0, C_BOSS_BOLT.1, C_BOSS_BOLT.2, 255).into(),
+                color: None,
+            }),
+            (BOSS_BOLT_W, BOSS_BOLT_H),
+            (-7000.0, -7000.0),
+            vec!["boss_bolt".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.visible = false;
+        boss_bolt_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Boss arena asteroids ──────────────────────────────────────────────
+    // Decorative floating asteroids shown only during the boss fight.
+    // Animations are set in boss.rs when the boss spawns (same lazy approach
+    // as space_hook pool to avoid ticking invisible GIF sprites every frame).
+    let mut boss_asteroid_ids: Vec<String> = Vec::new();
+    for i in 0..BOSS_ASTEROID_COUNT {
+        let id = format!("boss_asteroid_{i}");
+        let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 83.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (size, size),
+            (-8000.0, -8000.0),
+            vec!["hook".into()],   // makes them grabbable like regular hooks
+            (0.0, 0.0),
+            (0.95, 0.95),          // drag so they resist being knocked far
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.rotation_momentum = ((i as f32 * 1.7 + 0.3) % 1.0 - 0.5) * 0.006;
+        obj.layer = LAYER_SPACE_HOOK;
+        // Full collision so player can bounce into them and they react.
+        obj.collision_mode  = CollisionMode::solid_circle(size * 0.5);
+        obj.collision_layer = ASTEROID_COLLISION_LAYER;
+        obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
+        obj.visible = false;
+        boss_asteroid_ids.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
     let pools = PoolSets {
         starter_names,
         pool_free,
@@ -1248,6 +1356,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_bh_free,
         space_asteroid_free,
         space_red_coin_free,
+        boss_bolt_free,
+        boss_asteroid_ids,
     };
 
     (scene, pools)

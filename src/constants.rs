@@ -389,7 +389,8 @@ pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets
 pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
 pub const ASSET_HOOK_ARTIFACT_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact.gif");
-pub const HOOK_ARTIFACT_FPS: f32 = 12.0;
+pub const HOOK_ARTIFACT_FPS: f32 = 13.0;
+pub const HOOK_ARTIFACT_INTRO_FPS: f32 = 24.0;
 pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
 pub const ASSET_CALICOBALL_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/calicoball.gif");
 pub const ASSET_BLACKHOLE1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/blackhole1.gif");
@@ -473,6 +474,38 @@ pub const TURRET_PHASE_3_X:     f32 = 40_000.0;
 pub const TURRET_DUAL_SHOT_GAP: f32 = 44.0;   // kept for reference, no longer used for parallel
 pub const TURRET_PREDICT_MAX_T: f32 = 60.0;   // max lead-time clamp (ticks); raised for better phase-3 aim
 pub const BULLET_POOL_SIZE:     usize = 64;
+
+// ── Boss fight ────────────────────────────────────────────────────────────────
+pub const BOSS_THRESHOLD_X:      f32   = 20_000.0; // player X that triggers boss zone entry
+pub const BOSS_ZONE_X1:          f32   = 20_000.0; // left wall of boss arena
+pub const BOSS_ZONE_X2:          f32   = 27_000.0; // right wall of boss arena
+pub const BOSS_ENTRY_DELAY_TICKS: u32  = 180;      // 3 seconds before boss appears
+pub const BOSS_SIZE:             f32   = 360.0;    // width and height of boss body
+pub const BOSS_MAX_HP:           i32   = 20;
+pub const BOSS_BOLT_POOL_SIZE:   usize = 24;
+pub const BOSS_BOLT_W:           f32   = 80.0;
+pub const BOSS_BOLT_H:           f32   = 30.0;
+pub const BOSS_BOLT_SPEED:       f32   = 16.0;
+pub const BOSS_BOLT_LIFETIME:    u32   = 360;      // 6 s at 60 fps
+pub const BOSS_SHOOT_INTERVAL:   u32   = 90;       // 1.5 s at 60 fps
+pub const BOSS_FLOAT_SPEED:      f32   = 2.8;      // kept for reference
+pub const BOSS_HP_BAR_W:         f32   = 900.0;
+pub const BOSS_HP_BAR_H:         f32   = 50.0;
+/// Gravity multiplier applied to the player while inside the boss arena.
+pub const BOSS_GRAVITY_SCALE:    f32   = 0.42;
+/// Number of decorative asteroid GIFs placed around the boss arena.
+pub const BOSS_ASTEROID_COUNT:   usize = 16; // 4 cols × 4 rows
+// Movement pattern speeds for lissajous figure-8
+pub const BOSS_PHASE_X_SPEED:    f32   = 0.024;    // radians per tick (horizontal sweep)
+pub const BOSS_PHASE_Y_SPEED:    f32   = 0.048;    // radians per tick (vertical — 2× for figure-8)
+pub const BOSS_ARENA_HALF_W:     f32   = (BOSS_ZONE_X2 - BOSS_ZONE_X1) * 0.52; // amplitude — uses 52% for full traversal
+pub const BOSS_ARENA_CENTER_X:   f32   = (BOSS_ZONE_X1 + BOSS_ZONE_X2) * 0.5;
+pub const BOSS_Y_CENTER:         f32   = -2500.0;  // HUD Y ≈ -2500 (upper sky)
+pub const BOSS_Y_AMPLITUDE:      f32   = 400.0;    // ±400 Y, boss sweeps -2900..−2100
+pub const C_BOSS_BODY:           (u8,u8,u8) = (60, 20, 200);   // deep purple
+pub const C_BOSS_BOLT:           (u8,u8,u8) = (255, 110, 20);  // hot orange
+pub const C_BOSS_HP_FILL:        (u8,u8,u8) = (220, 40,  40);  // red fill
+pub const C_BOSS_HP_BG:          (u8,u8,u8) = (40,  10,  10);  // dark bg
 pub const BULLET_W:             f32 = 36.0;
 pub const BULLET_H:             f32 = 12.0;
 pub const BULLET_SPEED:         f32 = 52.0;  // phase 1 enhancement: significantly faster bullets

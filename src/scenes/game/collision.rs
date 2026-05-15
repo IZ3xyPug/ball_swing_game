@@ -579,44 +579,6 @@ pub fn tick_asteroid_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // Hooks the player is currently grappled to are skipped so rope physics isn't
 // disturbed while swinging.
 
-pub fn tick_hook_player_impact(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
-    if !asteroid_mode { return; }
-
-    let (px, py, hooked, active_hook, live_hooks) = {
-        let s = st.lock().unwrap();
-        (s.px, s.py, s.hooked, s.active_hook.clone(), s.live_hooks.clone())
-    };
-
-    for hook_name in &live_hooks {
-        // Never push the hook the player is hanging from.
-        if hooked && active_hook == *hook_name { continue; }
-
-        let hit_info: Option<(f32, f32)> = {
-            if let Some(obj) = c.get_game_object(hook_name) {
-                if !obj.visible { continue; }
-                let hx = obj.position.0 + obj.size.0 * 0.5;
-                let hy = obj.position.1 + obj.size.1 * 0.5;
-                let hook_r = obj.size.0 * 0.45;
-                let min_dist = PLAYER_R + hook_r;
-                let dx = px - hx;
-                let dy = py - hy;
-                let dist2 = dx * dx + dy * dy;
-                if dist2 < min_dist * min_dist {
-                    let dist = dist2.sqrt().max(0.001);
-                    let pen = min_dist - dist;
-                    Some((dx / dist * pen, dy / dist * pen))
-                } else {
-                    None
-                }
-            } else { None }
-        };
-
-        if let Some((push_x, push_y)) = hit_info {
-            // Push player out of overlap; hooks are stationary, they don't move.
-            let mut s = st.lock().unwrap();
-            s.px += push_x;
-            s.py += push_y;
-        }
-    }
+pub fn tick_hook_player_impact(_c: &mut Canvas, _st: &Arc<Mutex<State>>) {
+    // Grab hooks are non-collidable — player and all objects phase through them.
 }

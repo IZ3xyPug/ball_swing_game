@@ -110,6 +110,11 @@ pub fn tick_spawning(
     if st.lock().unwrap().in_space_mode {
         return;
     }
+    // No normal spawning inside the boss arena.
+    if st.lock().unwrap().boss_active {
+        tick_spawn_animations(c, st);
+        return;
+    }
 
     // Evict Poisson-disk points that have scrolled far behind the player.
     {
@@ -403,11 +408,12 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.gravity = 0.0;
                 obj.momentum = (0.0, 0.0);
                 obj.rotation_momentum = 0.0;
-                obj.collision_mode = CollisionMode::solid_circle(HOOK_ARTIFACT_R);
+                obj.collision_mode = CollisionMode::NonPlatform;
             } else {
                 obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
                 let (r, g, b) = hook_base_for_zone(zone_idx);
                 obj.set_image(hook_img(r, g, b));
+                obj.collision_mode = CollisionMode::NonPlatform;
             }
             obj.clear_highlight();
         }
@@ -1005,7 +1011,7 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         obj.gravity = 0.0;
                         obj.momentum = (0.0, 0.0);
                         obj.rotation_momentum = 0.0;
-                        obj.collision_mode = CollisionMode::solid_circle(HOOK_R);
+                        obj.collision_mode = CollisionMode::NonPlatform;
                     } else {
                         let (r, g, b) = hook_base_for_zone(zone_idx);
                         obj.position = (*hx - HOOK_R, *hy - HOOK_R);

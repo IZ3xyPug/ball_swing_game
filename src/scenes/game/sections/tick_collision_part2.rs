@@ -256,9 +256,10 @@
             // ── Highlight nearest grabbable hook ──────────────────────────────
             {
                 let s = st.lock().unwrap();
+                let reach_mult = if s.boss_active { 1.45 } else { 1.0 };
                 let cur_nearest = if !s.hooked {
                     if let Some(player_obj) = c.get_game_object("player") {
-                        c.objects_in_radius(player_obj, ROPE_LEN_MAX)
+                        c.objects_in_radius(player_obj, ROPE_LEN_MAX * reach_mult)
                             .into_iter()
                             .filter(|o| o.tags.iter().any(|t| t == "hook"))
                             .map(|o| {

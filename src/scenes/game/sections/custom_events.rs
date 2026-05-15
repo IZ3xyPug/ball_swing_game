@@ -31,8 +31,9 @@
             if s.dead || s.hooked { return; }
 
             // ── Find nearest hook via objects_in_radius ────────────
+            let reach_mult = if s.boss_active { 1.45 } else { 1.0 };
             let nearest = if let Some(player_obj) = c.get_game_object("player") {
-                c.objects_in_radius(player_obj, ROPE_LEN_MAX)
+                c.objects_in_radius(player_obj, ROPE_LEN_MAX * reach_mult)
                     .into_iter()
                     .filter(|o| o.tags.iter().any(|t| t == "hook"))
                     .map(|o| {

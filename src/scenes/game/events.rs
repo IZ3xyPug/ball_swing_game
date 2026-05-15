@@ -39,13 +39,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         if !prev.is_empty() {
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&prev) {
-                if asteroid_mode {
-                    // Freeze artifact animation back to frame 0 on release.
-                    if let Some(sprite) = &mut obj.animated_sprite {
-                        sprite.reset();
-                        sprite.set_fps(0.001);
-                    }
-                } else {
+                if !asteroid_mode {
                     let (r, g, b) = hook_base_for_zone(zone_idx);
                     obj.set_image(hook_img(r, g, b));
                 }
@@ -75,7 +69,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         }
 
         let nearest = if let Some(player_obj) = c.get_game_object("player") {
-            c.objects_in_radius(player_obj, ROPE_LEN_MAX)
+            let reach_mult = if s.boss_active { 1.45 } else { 1.0 };
+            c.objects_in_radius(player_obj, ROPE_LEN_MAX * reach_mult)
                 .into_iter()
                 .filter(|o| o.tags.iter().any(|t| t == "hook"))
                 .map(|o| {
@@ -132,15 +127,32 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             }
 
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
-            let mut total_artifact_ticks: Option<i32> = None;
+            let mut artifact_grab_info: Option<(i32, String)> = None;
+            // If a countdown for a different hook is still running, freeze it now
+            // before starting a new one, to prevent it looping indefinitely.
+            if asteroid_mode {
+                let orphan_id = match c.get_var("hook_artifact_anim_id") {
+                    Some(Value::Str(s)) if !s.is_empty() && s != hook_id => Some(s),
+                    _ => None,
+                };
+                if let Some(old_id) = orphan_id {
+                    if let Some(old_obj) = c.get_game_object_mut(&old_id) {
+                        if let Some(sprite) = &mut old_obj.animated_sprite {
+                            sprite.reset();
+                            sprite.set_fps(0.001);
+                        }
+                    }
+                    c.set_var("hook_artifact_play_ticks", 0i32);
+                }
+            }
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
                 if asteroid_mode {
-                    // Start the one-shot artifact animation.
+                    // Proximity intro is done (hook frozen at frame 4); resume at full speed.
                     if let Some(sprite) = &mut obj.animated_sprite {
-                        let total_ticks = (sprite.frame_count() as f32 * (60.0 / HOOK_ARTIFACT_FPS)).round() as i32;
-                        sprite.reset();
                         sprite.set_fps(HOOK_ARTIFACT_FPS);
-                        total_artifact_ticks = Some(total_ticks);
+                        let remaining = sprite.frame_count() - sprite.current_frame_index();
+                        let ticks = (remaining as f32 * (60.0 / HOOK_ARTIFACT_FPS)).round() as i32;
+                        artifact_grab_info = Some((ticks.max(1), hook_id.clone()));
                     }
                     obj.clear_glow();
                 } else {
@@ -149,8 +161,12 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
                 }
             }
-            if let Some(ticks) = total_artifact_ticks {
+            if let Some((ticks, anim_id)) = artifact_grab_info {
                 c.set_var("hook_artifact_play_ticks", ticks);
+                c.set_var("hook_artifact_anim_id", anim_id);
+            }
+            if asteroid_mode {
+                c.set_var("hook_prox_id", String::new());
             }
 
             c.run(Action::Show { target: Target::name("rope") });
