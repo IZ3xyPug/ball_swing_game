@@ -1,6 +1,7 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
 
+use crate::achievements::*;
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
 use crate::hud::*;
@@ -209,6 +210,57 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         } else {
             obj.visible = false;
+        }
+    }
+
+    let toast_active = gold_master_toast_active(c);
+    let toast_ticks = gold_master_toast_ticks(c);
+    if toast_active && toast_ticks < GOLD_MASTER_TOAST_TOTAL_TICKS {
+        let panel_w = GOLD_MASTER_TOAST_WIDTH;
+        let panel_h = GOLD_MASTER_TOAST_HEIGHT;
+        let target_x = VW * 0.5 - panel_w * 0.5;
+        let target_y = 20.0;
+        let start_y = -panel_h - 28.0;
+        let slide_t = (toast_ticks.min(GOLD_MASTER_TOAST_RISE_TICKS) as f32)
+            / (GOLD_MASTER_TOAST_RISE_TICKS as f32);
+        let eased = 1.0 - (1.0 - slide_t).powi(3);
+        let y = if toast_ticks < GOLD_MASTER_TOAST_RISE_TICKS {
+            start_y + (target_y - start_y) * eased
+        } else {
+            target_y
+        };
+
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_PANEL_NAME) {
+            obj.position = (target_x, y);
+            obj.visible = true;
+        }
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
+            obj.position = (target_x + 40.0, y + 22.0);
+            obj.visible = true;
+        }
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
+            obj.position = (target_x + 40.0, y + 74.0);
+            obj.visible = true;
+        }
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_CHECK_NAME) {
+            obj.position = (target_x + panel_w - 150.0, y + 34.0);
+            obj.visible = true;
+        }
+
+        c.set_var(GOLD_MASTER_TOAST_TICKS_VAR, toast_ticks.saturating_add(1) as i32);
+        if toast_ticks + 1 >= GOLD_MASTER_TOAST_TOTAL_TICKS {
+            c.set_var(GOLD_MASTER_TOAST_ACTIVE_VAR, false);
+        }
+    } else {
+        for name in [
+            GOLD_MASTER_TOAST_PANEL_NAME,
+            GOLD_MASTER_TOAST_TITLE_NAME,
+            GOLD_MASTER_TOAST_DESC_NAME,
+            GOLD_MASTER_TOAST_CHECK_NAME,
+        ] {
+            if let Some(obj) = c.get_game_object_mut(name) {
+                obj.visible = false;
+            }
         }
     }
 

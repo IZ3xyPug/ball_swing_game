@@ -5,12 +5,13 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
 
+use crate::achievements::*;
 use crate::audio_state;
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
 use crate::state::gen_hook_batch;
 use crate::images::*;
-use crate::objects::ui_text_spec;
+use crate::objects::{ui_text_left_spec, ui_text_spec};
 use crate::state::*;
 use crate::shop::{SHOP_ROPE_COLORS, SHOP_TRAIL_COLORS, SHOP_BG_COLORS};
 use super::bootstrap;
@@ -424,6 +425,19 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                     obj.visible = true;
                                 }
                             }
+                        }
+                        return;
+                    }
+
+                    // Key 'o': spawn one special green grab hook for testing.
+                    if *key == Key::Character("o".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let _ = spawning::spawn_debug_special_hook(c, &state_arc);
                         }
                         return;
                     }
@@ -1000,11 +1014,44 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     )));
                     obj.visible = true;
                 }
+
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
+                    obj.set_drawable(Box::new(ui_text_left_spec(
+                        GOLD_MASTER_TITLE,
+                        &font,
+                        46.0 * s,
+                        Color(250, 225, 120, 255),
+                        1080.0 * s,
+                    )));
+                    obj.visible = false;
+                }
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
+                    obj.set_drawable(Box::new(ui_text_left_spec(
+                        GOLD_MASTER_DESCRIPTION,
+                        &font,
+                        28.0 * s,
+                        Color(210, 220, 235, 230),
+                        1080.0 * s,
+                    )));
+                    obj.visible = false;
+                }
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_CHECK_NAME) {
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "✓",
+                        &font,
+                        52.0 * s,
+                        Color(130, 255, 165, 255),
+                        120.0 * s,
+                    )));
+                    obj.visible = false;
+                }
             }
             if let Some(obj) = canvas.get_game_object_mut("pause_overlay") {
                 obj.position = (-400.0, 0.0);
                 obj.visible = false;
             }
+
+            clear_gold_master_toast(canvas);
 
             // Set background image AND apply the proper overscan/raise size so
             // the background fills the screen correctly from the first frame.
@@ -2134,6 +2181,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {
                         c.set_var("last_distance", s.distance);
+                        c.set_var("last_score", s.score as i32);
                         c.set_var("last_coins", s.coin_count as i32);
                         s.dead = true;
                         drop(s);

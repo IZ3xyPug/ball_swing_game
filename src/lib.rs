@@ -7,6 +7,7 @@ mod images;
 mod hud;
 mod poisson;
 mod state;
+mod achievements;
 mod level_gen;
 mod gameplay;
 mod objects;

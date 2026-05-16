@@ -64,7 +64,7 @@ fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
             if asteroid_mode {
                 if let Some(sprite) = &mut hobj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
             } else {
-                let (r, g, b) = hook_base_for_zone(ops.zone_idx);
+                let (r, g, b) = hook_base_for_obj(hobj, ops.zone_idx);
                 hobj.set_image(hook_img(r, g, b));
             }
             hobj.clear_glow();

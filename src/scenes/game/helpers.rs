@@ -1,6 +1,6 @@
 use crate::constants::*;
 use crate::images::circle_cached;
-use quartz::{Canvas, Image, ShapeType, SoundOptions, Value};
+use quartz::{Canvas, GameObject, Image, ShapeType, SoundOptions, Value};
 use quartz::AnimatedSprite;
 use std::sync::OnceLock;
 use std::io::Cursor;
@@ -109,6 +109,38 @@ pub fn hook_on_for_zone(zone_idx: usize) -> (u8, u8, u8) {
         1 => C_HOOK_ON_ZONE1,
         2 => C_HOOK_ON_ZONE2,
         _ => C_HOOK_ON,
+    }
+}
+
+#[inline]
+pub fn is_special_hook_obj(obj: &GameObject) -> bool {
+    obj.tags.iter().any(|t| t == SPECIAL_HOOK_TAG)
+}
+
+#[inline]
+pub fn hook_base_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
+    if is_special_hook_obj(obj) {
+        C_HOOK_SPECIAL
+    } else {
+        hook_base_for_zone(zone_idx)
+    }
+}
+
+#[inline]
+pub fn hook_near_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
+    if is_special_hook_obj(obj) {
+        C_HOOK_SPECIAL_NEAR
+    } else {
+        hook_near_for_zone(zone_idx)
+    }
+}
+
+#[inline]
+pub fn hook_on_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
+    if is_special_hook_obj(obj) {
+        C_HOOK_SPECIAL_ON
+    } else {
+        hook_on_for_zone(zone_idx)
     }
 }
 

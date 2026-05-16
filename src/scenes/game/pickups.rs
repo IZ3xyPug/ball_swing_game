@@ -1,6 +1,7 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
 
+use crate::achievements::*;
 use crate::constants::*;
 use crate::state::*;
 use super::helpers::{pad_thruster_id, sfx_vol};
@@ -270,6 +271,17 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.coin_free.push(name.clone());
     }
     drop(s);
+
+    if !collected.is_empty() {
+        let current_total = match c.get_var(TOTAL_COINS_COLLECTED_VAR) {
+            Some(Value::I32(v)) => v.max(0),
+            _ => 0,
+        };
+        let gained = (collected.len() as i32).saturating_mul(coin_mult as i32);
+        let new_total = current_total.saturating_add(gained);
+        c.set_var(TOTAL_COINS_COLLECTED_VAR, new_total);
+        let _ = maybe_unlock_gold_master(c, new_total);
+    }
 
     for name in &collected {
         if let Some(obj) = c.get_game_object_mut(name) {

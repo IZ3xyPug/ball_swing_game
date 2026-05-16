@@ -2,6 +2,8 @@ use quartz::*;
 use image::{AnimationDecoder, ImageDecoder};
 use std::sync::OnceLock;
 
+use crate::achievements::*;
+
 /// Decode a GIF from bytes, tint each frame with a brownish-red colour shift,
 /// and return it as an `AnimatedSprite` using `from_frames`.
 fn tint_asteroid_gif_brownish_red(bytes: &'static [u8], size: (f32, f32), fps: f32) -> Option<AnimatedSprite> {
@@ -540,6 +542,61 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     score_x2_timer_hud.ignore_zoom = true;
     score_x2_timer_hud.layer = 100;
 
+    let toast_w = GOLD_MASTER_TOAST_WIDTH;
+    let toast_h = GOLD_MASTER_TOAST_HEIGHT;
+    let mut achievement_toast_panel = {
+        let (w, h) = (toast_w as u32, toast_h as u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
+            img.put_pixel(px, py, image::Rgba([24, 30, 44, if border { 240 } else { 210 }]));
+        }}
+        GameObject::new_rect(
+            ctx, GOLD_MASTER_TOAST_PANEL_NAME.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (w as f32, h as f32),
+            (VW * 0.5 - w as f32 * 0.5, -(h as f32) - 32.0),
+            vec!["hud".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        )
+    };
+    achievement_toast_panel.visible = false;
+    achievement_toast_panel.ignore_zoom = true;
+    achievement_toast_panel.layer = 150;
+
+    let mut achievement_toast_title = GameObject::build(GOLD_MASTER_TOAST_TITLE_NAME)
+        .size(1080.0, 54.0)
+        .position(VW * 0.5 - 520.0, -toast_h - 10.0)
+        .tag("hud")
+        .build(ctx);
+    achievement_toast_title.visible = false;
+    achievement_toast_title.ignore_zoom = true;
+    achievement_toast_title.layer = 151;
+
+    let mut achievement_toast_desc = GameObject::build(GOLD_MASTER_TOAST_DESC_NAME)
+        .size(1080.0, 42.0)
+        .position(VW * 0.5 - 520.0, -toast_h + 46.0)
+        .tag("hud")
+        .build(ctx);
+    achievement_toast_desc.visible = false;
+    achievement_toast_desc.ignore_zoom = true;
+    achievement_toast_desc.layer = 151;
+
+    let mut achievement_toast_check = GameObject::build(GOLD_MASTER_TOAST_CHECK_NAME)
+        .size(120.0, 88.0)
+        .position(VW * 0.5 + 470.0, -toast_h + 34.0)
+        .tag("hud")
+        .build(ctx);
+    achievement_toast_check.visible = false;
+    achievement_toast_check.ignore_zoom = true;
+    achievement_toast_check.layer = 151;
+
     let mut coin_magnet_radius = {
         let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;
         let mut img = image::RgbaImage::new(d, d);
@@ -600,6 +657,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("flip_timer", flip_timer_hud)
         .with_object("zero_g_timer", zero_g_timer_hud)
         .with_object("score_x2_timer", score_x2_timer_hud)
+        .with_object(GOLD_MASTER_TOAST_PANEL_NAME, achievement_toast_panel)
+        .with_object(GOLD_MASTER_TOAST_TITLE_NAME, achievement_toast_title)
+        .with_object(GOLD_MASTER_TOAST_DESC_NAME, achievement_toast_desc)
+        .with_object(GOLD_MASTER_TOAST_CHECK_NAME, achievement_toast_check)
         .with_object("coin_magnet_radius", coin_magnet_radius);
 
     // ── Asteroid animation template (shared by hook pool and asteroid pool) ───

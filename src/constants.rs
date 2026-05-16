@@ -16,6 +16,11 @@ pub const GRAB_TANGENT_SURGE_MAX:   f32 = 4.0;
 pub const GRAB_SURGE_MULT: f32 = 2.6;
 pub const GRAB_VERTICAL_BOOST: f32 = 1.28;
 pub const GRAB_SPIN_DISABLE_SPEED: f32 = 50.0;
+pub const SPECIAL_HOOK_BOOST_SURGE: f32 = 84.0;
+pub const SPECIAL_HOOK_VERTICAL_BOOST: f32 = 1.18;
+pub const SPECIAL_HOOK_MIN_SPEED: f32 = 118.0;
+pub const SPECIAL_HOOK_MOMENTUM_CAP: f32 = 74.0;
+pub const SPECIAL_HOOK_CAP_WINDOW_TICKS: i32 = 84;
 pub const RELEASE_MIN_SWING_SPEED: f32 = 3.2;
 pub const RELEASE_SURGE_SCALE: f32 = 0.42;
 pub const RELEASE_SURGE_MAX: f32 = 14.0;
@@ -334,6 +339,9 @@ pub const PLAYER_CHAR_NAMES: &[&str] = &["CALICO", "SILVER", "BLUE", "GREEN", "O
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
 pub const C_HOOK_NEAR:(u8,u8,u8) = (255, 120, 50 );
+pub const C_HOOK_SPECIAL:      (u8,u8,u8) = (52, 196, 84);
+pub const C_HOOK_SPECIAL_NEAR: (u8,u8,u8) = (105, 244, 140);
+pub const C_HOOK_SPECIAL_ON:   (u8,u8,u8) = (175, 255, 196);
 pub const C_ROPE:     (u8,u8,u8) = (220, 220, 220);
 pub const C_DANGER:   (u8,u8,u8) = (200, 50,  50 );
 pub const C_PAD:      (u8,u8,u8) = (60,  200, 255);
@@ -424,8 +432,8 @@ pub const GWELL_RADIUS_MAX:    f32 = 1080.0;
 
 /// Pull force range. 0 = no pull, 1 = full gravity override.
 /// Increase GWELL_STRENGTH_MAX to make wells harder to escape.
-pub const GWELL_STRENGTH_MIN:  f32 = 0.75;
-pub const GWELL_STRENGTH_MAX:  f32 = 1.0;
+pub const GWELL_STRENGTH_MIN:  f32 = 0.9;
+pub const GWELL_STRENGTH_MAX:  f32 = 1.2;
 
 /// How long the well is active before going dormant (ticks). 240 = 4 s @ 60 fps.
 pub const GWELL_ON_TICKS:      u32 = 240;
@@ -709,6 +717,9 @@ pub const C_SPACE_COIN:  (u8,u8,u8) = (255, 230, 100);
 pub const C_SPACE_COIN_HIGH: (u8,u8,u8) = (120, 255, 220);
 pub const C_SPACE_HOOK:  (u8,u8,u8) = (155, 115, 255);
 pub const C_SPACE_HOOK_ON: (u8,u8,u8) = (210, 185, 255);
+pub const SPECIAL_HOOK_TAG: &str = "hook_special";
+pub const SPECIAL_HOOK_SPAWN_CHANCE: f32 = 0.30;
+pub const SPECIAL_HOOK_MIN_X_GAP: f32 = 10_000.0;
 pub const C_BLACKHOLE:   (u8,u8,u8) = (18,  8,   26);
 pub const C_GWELL_TELEPORT: (u8,u8,u8) = (90, 170, 255);
 

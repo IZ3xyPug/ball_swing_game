@@ -348,7 +348,7 @@ fn tick_bullet_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 if asteroid_mode {
                     if let Some(sprite) = &mut hobj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
                 } else if !asteroid_mode {
-                    let (r, g, b) = hook_base_for_zone(zone_idx);
+                    let (r, g, b) = hook_base_for_obj(hobj, zone_idx);
                     hobj.set_image(hook_img(r, g, b));
                 }
                 hobj.clear_glow();

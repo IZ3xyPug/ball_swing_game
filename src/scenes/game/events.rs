@@ -39,8 +39,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         if !prev.is_empty() {
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&prev) {
-                if !asteroid_mode {
-                    let (r, g, b) = hook_base_for_zone(zone_idx);
+                if !asteroid_mode || is_special_hook_obj(obj) {
+                    let (r, g, b) = hook_base_for_obj(obj, zone_idx);
                     obj.set_image(hook_img(r, g, b));
                 }
                 obj.clear_glow();
@@ -86,7 +86,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     } else {
                         player_d2
                     };
-                    (o.id.clone(), hcx, hcy, player_d2, cursor_d2)
+                    let is_special = o.tags.iter().any(|t| t == SPECIAL_HOOK_TAG);
+                    (o.id.clone(), hcx, hcy, player_d2, cursor_d2, is_special)
                 })
                 .min_by(|a, b| {
                     if mouse_target.is_some() {
@@ -102,12 +103,15 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             None
         };
 
-        if let Some((hook_id, hx, hy, player_d2, _cursor_d2)) = nearest {
+        if let Some((hook_id, hx, hy, player_d2, _cursor_d2, is_special_hook)) = nearest {
             let rope_len = player_d2.sqrt().clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
 
             // Capture incoming velocity before it's redirected by the grab impulse.
             let (pvx, pvy) = (s.vx, s.vy);
             apply_grab_impulse(&mut s, hx, hy);
+            if is_special_hook {
+                apply_special_hook_boost(&mut s, hx, hy);
+            }
 
             s.hooked = true;
             s.hook_x = hx;
@@ -146,7 +150,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 }
             }
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
-                if asteroid_mode {
+                if asteroid_mode && !is_special_hook_obj(obj) {
                     // Proximity intro is done (hook frozen at frame 4); resume at full speed.
                     if let Some(sprite) = &mut obj.animated_sprite {
                         sprite.set_fps(HOOK_ARTIFACT_FPS);
@@ -156,16 +160,20 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     }
                     obj.clear_glow();
                 } else {
-                    let (r, g, b) = hook_on_for_zone(zone_idx);
+                    let (r, g, b) = hook_on_for_obj(obj, zone_idx);
                     obj.set_image(hook_img(r, g, b));
                     obj.set_glow(GlowConfig { color: Color(255, 215, 100, 255), width: 24.0 });
                 }
+            }
+
+            if is_special_hook {
+                c.set_var("special_hook_boost_ticks", SPECIAL_HOOK_CAP_WINDOW_TICKS);
             }
             if let Some((ticks, anim_id)) = artifact_grab_info {
                 c.set_var("hook_artifact_play_ticks", ticks);
                 c.set_var("hook_artifact_anim_id", anim_id);
             }
-            if asteroid_mode {
+            if asteroid_mode && !is_special_hook {
                 c.set_var("hook_prox_id", String::new());
             }
 

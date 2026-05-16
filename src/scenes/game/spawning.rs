@@ -96,6 +96,46 @@ pub fn tick_spawn_animations(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
+/// Debug helper: spawn one special green grab hook near the player when requested.
+/// Returns true if a hook was spawned, false if no pooled hook was available.
+pub fn spawn_debug_special_hook(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    let mut s = st.lock().unwrap();
+    let Some(id) = s.pool_free.pop() else { return false; };
+
+    let hx = s.px + VW * 0.24;
+    let hy = (s.py - 260.0).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+
+    s.live_hooks.push(id.clone());
+    if hx > s.rightmost_x { s.rightmost_x = hx; }
+    s.last_hook_y = hy;
+    s.world_sampler.add(hx, hy);
+    s.spawn_animations.retain(|a| a.id != id);
+    drop(s);
+
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.visible = true;
+        obj.position = (hx - HOOK_R, hy - HOOK_R);
+        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+        obj.animated_sprite = None;
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.clear_glow();
+        obj.tags.retain(|t| t != SPECIAL_HOOK_TAG);
+        obj.tags.push(SPECIAL_HOOK_TAG.into());
+        obj.set_image(hook_img(C_HOOK_SPECIAL.0, C_HOOK_SPECIAL.1, C_HOOK_SPECIAL.2));
+        c.set_var("special_hook_last_x", Value::F32(hx));
+        true
+    } else {
+        // Return hook id back to pool if object lookup failed unexpectedly.
+        let mut s = st.lock().unwrap();
+        s.live_hooks.retain(|n| n != &id);
+        s.pool_free.push(id);
+        false
+    }
+}
+
 pub fn tick_spawning(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
@@ -245,6 +285,15 @@ fn find_safe_hook_position(c: &Canvas, s: &State, base_x: f32, base_y: f32) -> O
 fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Read asteroid mode once from canvas before locking State.
     let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let mut last_special_x = c.get_var("special_hook_last_x").and_then(|v| {
+        if let Value::F32(x) = v {
+            Some(x)
+        } else if let Value::F64(x) = v {
+            Some(x as f32)
+        } else {
+            None
+        }
+    });
     let mut s = st.lock().unwrap();
     let mut hooks_spawned = 0usize;
     while hooks_spawned < HOOKS_SPAWN_BUDGET_PER_TICK
@@ -362,7 +411,20 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         hooks_spawned += 1;
         s.world_sampler.add(hx, hy);
 
-        let hook_half = if asteroid_mode { HOOK_ARTIFACT_R } else { HOOK_R };
+        let rolled_special = lcg(&mut s.seed) < SPECIAL_HOOK_SPAWN_CHANCE;
+        let has_special_gap = last_special_x
+            .map(|prev_x| (hx - prev_x).abs() >= SPECIAL_HOOK_MIN_X_GAP)
+            .unwrap_or(true);
+        let is_special_hook = rolled_special && has_special_gap;
+        if is_special_hook {
+            last_special_x = Some(hx);
+            c.set_var("special_hook_last_x", Value::F32(hx));
+        }
+        let hook_half = if asteroid_mode && !is_special_hook {
+            HOOK_ARTIFACT_R
+        } else {
+            HOOK_R
+        };
 
         // Enqueue drop-in animation, gravity-aware entry direction.
         let start_rot   = lcg_range(&mut s.seed, -80.0, 80.0);
@@ -401,7 +463,8 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // Start off-screen on the gravity-entry side; tick_spawn_animations moves it.
             obj.position = (hx - hook_half, hook_start_y);
             obj.visible = false; // hidden until animation starts
-            if asteroid_mode {
+            obj.tags.retain(|t| t != SPECIAL_HOOK_TAG);
+            if asteroid_mode && !is_special_hook {
                 // Artifact GIF hook — stationary, animation frozen until grabbed.
                 obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
                 obj.set_animation(hook_artifact_anim());
@@ -411,7 +474,11 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.collision_mode = CollisionMode::NonPlatform;
             } else {
                 obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-                let (r, g, b) = hook_base_for_zone(zone_idx);
+                if is_special_hook {
+                    obj.tags.push(SPECIAL_HOOK_TAG.into());
+                }
+                obj.animated_sprite = None;
+                let (r, g, b) = hook_base_for_obj(obj, zone_idx);
                 obj.set_image(hook_img(r, g, b));
                 obj.collision_mode = CollisionMode::NonPlatform;
             }
@@ -434,6 +501,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.pending.extend(batch);
         }
     }
+    drop(s);
 }
 
 // ── Pads ──────────────────────────────────────────────────────────────────────
@@ -1013,7 +1081,7 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         obj.rotation_momentum = 0.0;
                         obj.collision_mode = CollisionMode::NonPlatform;
                     } else {
-                        let (r, g, b) = hook_base_for_zone(zone_idx);
+                        let (r, g, b) = hook_base_for_obj(obj, zone_idx);
                         obj.position = (*hx - HOOK_R, *hy - HOOK_R);
                         obj.set_image(hook_img(r, g, b));
                     }

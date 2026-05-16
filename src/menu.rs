@@ -1,9 +1,10 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
+use crate::achievements::*;
 use crate::constants::*;
 use crate::audio_state;
 use crate::images::*;
-use crate::objects::ui_text_spec;
+use crate::objects::{ui_text_left_spec, ui_text_spec};
 use crate::shop;
 
 const MENU_TRACKS: [&str; 3] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2, ASSET_MENU_BGM_3];
@@ -44,6 +45,168 @@ fn play_menu_track(c: &mut Canvas, idx: usize) {
     );
     audio_state::replace_menu_bgm(handle);
     c.set_var("menu_bgm_track_index", track_idx as i32);
+}
+
+fn gameover_step_countup(c: &mut Canvas, value_key: &str, velocity_key: &str, target: i32) -> i32 {
+    if target <= 0 {
+        c.set_var(value_key, 0i32);
+        c.set_var(velocity_key, 0i32);
+        return 0;
+    }
+
+    let current = c.get_i32(value_key).max(0);
+    if current >= target {
+        c.set_var(value_key, target);
+        c.set_var(velocity_key, 0i32);
+        return target;
+    }
+
+    if current == 0 {
+        let seed = 1.min(target);
+        c.set_var(value_key, seed);
+        c.set_var(velocity_key, 1i32);
+        return seed;
+    }
+
+    let remaining = target - current;
+    let prev_velocity = c.get_i32(velocity_key).max(0);
+    let boosted_velocity = if prev_velocity <= 0 {
+        2
+    } else {
+        ((prev_velocity as f32) * 1.08).ceil() as i32 + 1
+    };
+    let min_step = if current < 10 {
+        1
+    } else if current < 100 {
+        2
+    } else if current < 1_000 {
+        4
+    } else {
+        8
+    };
+    let catchup_cap = (remaining / 18).max(min_step);
+    let step = boosted_velocity.min(catchup_cap.max(min_step)).max(min_step);
+    let next = (current + step).min(target);
+
+    c.set_var(value_key, next);
+    c.set_var(velocity_key, step);
+    next
+}
+
+fn update_gameover_stats_text(
+    c: &mut Canvas,
+    object_id: &str,
+    width: f32,
+    font: &Font,
+    scale: f32,
+    distance: i32,
+    score: i32,
+    coins: i32,
+) {
+    if let Some(obj) = c.get_game_object_mut(object_id) {
+        let stats_line = format!(
+            "DISTANCE  {}\nSCORE  {}\nCOINS  {}",
+            distance.max(0),
+            score.max(0),
+            coins.max(0),
+        );
+        obj.set_drawable(Box::new(ui_text_spec(
+            &stats_line,
+            font,
+            46.0 * scale,
+            Color(255, 255, 255, 255),
+            width * scale,
+        )));
+    }
+}
+
+fn init_gameover_countup(c: &mut Canvas, stats_object_id: &str, width: f32) {
+    let Some(font) = menu_font() else { return; };
+
+    let scale = c.virtual_scale();
+    
+    // SAFE retrieval: use get_var and match instead of panicking get_i32/get_f32
+    let target_distance = match c.get_var("last_distance") {
+        Some(Value::F32(v)) => v.round() as i32,
+        _ => 0
+    };
+    
+    let target_score = match c.get_var("last_score") {
+        Some(Value::I32(v)) => v.max(0),
+        _ => 0
+    };
+    
+    let target_coins = match c.get_var("last_coins") {
+        Some(Value::I32(v)) => v.max(0),
+        _ => 0
+    };
+
+    c.set_var("go_count_distance", 0i32);
+    c.set_var("go_count_distance_vel", 0i32);
+    c.set_var("go_count_score", 0i32);
+    c.set_var("go_count_score_vel", 0i32);
+    c.set_var("go_count_coins", 0i32);
+    c.set_var("go_count_coins_vel", 0i32);
+
+    update_gameover_stats_text(c, stats_object_id, width, &font, scale, 0, 0, 0);
+
+    // Use a per-scene flag instead of a global one so each scene gets its own callback
+    let flag_key = format!("go_countup_registered_{}", stats_object_id);
+    let registered = matches!(c.get_var(&flag_key), Some(Value::Bool(true)));
+    if registered { return; }
+
+    c.on_update(|canvas| {
+        let active = if canvas.is_scene("gameover") {
+            Some("go_stats_text")
+        } else if canvas.is_scene("gameover_sun") {
+            Some("sun_go_stats_text")
+        } else if canvas.is_scene("gameover_oxygen") {
+            Some("oxy_go_stats_text")
+        } else {
+            None
+        };
+        
+        let Some(stats_object_id) = active else { return; };
+
+        let Some(font) = menu_font() else { return; };
+        
+        // SAFE retrieval: use get_var and match
+        let target_distance = match canvas.get_var("last_distance") {
+            Some(Value::F32(v)) => v.round() as i32,
+            _ => 0
+        };
+        let target_score = match canvas.get_var("last_score") {
+            Some(Value::I32(v)) => v.max(0),
+            _ => 0
+        };
+        let target_coins = match canvas.get_var("last_coins") {
+            Some(Value::I32(v)) => v.max(0),
+            _ => 0
+        };
+        
+        let distance = gameover_step_countup(
+            canvas,
+            "go_count_distance",
+            "go_count_distance_vel",
+            target_distance,
+        );
+        let score = gameover_step_countup(canvas, "go_count_score", "go_count_score_vel", target_score);
+        let coins = gameover_step_countup(canvas, "go_count_coins", "go_count_coins_vel", target_coins);
+        
+        update_gameover_stats_text(
+            canvas,
+            stats_object_id,
+            1000.0,
+            &font,
+            canvas.virtual_scale(),
+            distance,
+            score,
+            coins,
+        );
+    });
+    
+    // Set per-scene flag so this scene won't register the callback again on next entry
+    c.set_var(&flag_key, true);
 }
 
 /// Menu lives at y = MENU_Y..MENU_Y+VH; shop lives at y = 0..VH.
@@ -1279,13 +1442,13 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
         .build(ctx);
 
     let go_stats_text = GameObject::build("go_stats_text")
-        .size(1000.0, 180.0)
+        .size(1000.0, 240.0)
         .position(VW * 0.5 - 500.0, VH * 0.44)
         .tag("ui")
         .build(ctx);
 
     let go_stats_box = {
-        let (w, h) = (1060u32, 200u32);
+        let (w, h) = (1060u32, 260u32);
         let mut img = image::RgbaImage::new(w, h);
         for py in 0..h { for px in 0..w {
             let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
@@ -1346,7 +1509,6 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
             if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
                 let s = canvas.virtual_scale();
                 let last_distance = canvas.get_f32("last_distance");
-                let last_coins = canvas.get_i32("last_coins").max(0);
                 let died_to_oxygen = matches!(canvas.get_var("died_to_oxygen"), Some(Value::Bool(true)));
                 let dist_fill = (last_distance / 40000.0).clamp(0.0, 1.0);
 
@@ -1372,10 +1534,7 @@ pub fn build_gameover_scene(ctx: &mut Context) -> Scene {
                     obj.set_drawable(Box::new(ui_text_spec("MENU", &font, 42.0 * s, Color(255, 255, 255, 255), 520.0 * s)));
                 }
 
-                if let Some(obj) = canvas.get_game_object_mut("go_stats_text") {
-                    let stats_line = format!("DISTANCE  {:05}\nCOINS  {:03}", last_distance as i32, last_coins);
-                    obj.set_drawable(Box::new(ui_text_spec(&stats_line, &font, 50.0 * s, Color(255, 255, 255, 255), 1000.0 * s)));
-                }
+                init_gameover_countup(canvas, "go_stats_text", 1000.0);
 
                 if died_to_oxygen {
                     canvas.set_var("died_to_oxygen", false);
@@ -1467,13 +1626,13 @@ pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
         .build(ctx);
 
     let sun_go_stats_text = GameObject::build("sun_go_stats_text")
-        .size(1000.0, 180.0)
+        .size(1000.0, 240.0)
         .position(VW * 0.5 - 500.0, VH * 0.44)
         .tag("ui")
         .build(ctx);
 
     let sun_go_stats_box = {
-        let (w, h) = (1060u32, 200u32);
+        let (w, h) = (1060u32, 260u32);
         let mut img = image::RgbaImage::new(w, h);
         for py in 0..h { for px in 0..w {
             let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
@@ -1534,7 +1693,6 @@ pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
             if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
                 let s = canvas.virtual_scale();
                 let last_distance = canvas.get_f32("last_distance");
-                let last_coins = canvas.get_i32("last_coins").max(0);
                 let dist_fill = (last_distance / 40000.0).clamp(0.0, 1.0);
 
                 if let Some(obj) = canvas.get_game_object_mut("sun_go_dist_bar") {
@@ -1562,10 +1720,7 @@ pub fn build_gameover_sun_scene(ctx: &mut Context) -> Scene {
                     obj.set_drawable(Box::new(ui_text_spec("MENU", &font, 42.0 * s, Color(255, 255, 255, 255), 520.0 * s)));
                 }
 
-                if let Some(obj) = canvas.get_game_object_mut("sun_go_stats_text") {
-                    let stats_line = format!("DISTANCE  {:05}\nCOINS  {:03}", last_distance as i32, last_coins);
-                    obj.set_drawable(Box::new(ui_text_spec(&stats_line, &font, 50.0 * s, Color(255, 255, 255, 255), 1000.0 * s)));
-                }
+                init_gameover_countup(canvas, "sun_go_stats_text", 1000.0);
             }
 
             canvas.register_custom_event("sun_go_retry".into(), |c| c.load_scene("game"));
@@ -1648,13 +1803,13 @@ pub fn build_gameover_oxygen_scene(ctx: &mut Context) -> Scene {
         .build(ctx);
 
     let oxy_go_stats_text = GameObject::build("oxy_go_stats_text")
-        .size(1000.0, 180.0)
+        .size(1000.0, 240.0)
         .position(VW * 0.5 - 500.0, VH * 0.44)
         .tag("ui")
         .build(ctx);
 
     let oxy_go_stats_box = {
-        let (w, h) = (1060u32, 200u32);
+        let (w, h) = (1060u32, 260u32);
         let mut img = image::RgbaImage::new(w, h);
         for py in 0..h { for px in 0..w {
             let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
@@ -1715,7 +1870,6 @@ pub fn build_gameover_oxygen_scene(ctx: &mut Context) -> Scene {
             if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
                 let s = canvas.virtual_scale();
                 let last_distance = canvas.get_f32("last_distance");
-                let last_coins = canvas.get_i32("last_coins").max(0);
                 let dist_fill = (last_distance / 40000.0).clamp(0.0, 1.0);
 
                 if let Some(obj) = canvas.get_game_object_mut("oxy_go_dist_bar") {
@@ -1743,10 +1897,7 @@ pub fn build_gameover_oxygen_scene(ctx: &mut Context) -> Scene {
                     obj.set_drawable(Box::new(ui_text_spec("MENU", &font, 42.0 * s, Color(255, 255, 255, 255), 520.0 * s)));
                 }
 
-                if let Some(obj) = canvas.get_game_object_mut("oxy_go_stats_text") {
-                    let stats_line = format!("DISTANCE  {:05}\nCOINS  {:03}", last_distance as i32, last_coins);
-                    obj.set_drawable(Box::new(ui_text_spec(&stats_line, &font, 50.0 * s, Color(255, 255, 255, 255), 1000.0 * s)));
-                }
+                init_gameover_countup(canvas, "oxy_go_stats_text", 1000.0);
             }
 
             canvas.register_custom_event("oxy_go_retry".into(), |c| c.load_scene("game"));
@@ -1783,8 +1934,24 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
         )
     };
 
+    let card_bg = {
+        let (w, h) = (GOLD_MASTER_CARD_WIDTH as u32, GOLD_MASTER_CARD_HEIGHT as u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
+            img.put_pixel(px, py, image::Rgba([30, 38, 54, if border { 245 } else { 210 }]));
+        }}
+        GameObject::new_rect(
+            ctx, GOLD_MASTER_CARD_PANEL_NAME.into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW * 0.5 - w as f32 / 2.0, VH * 0.28),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        )
+    };
+    let card_title_obj = GameObject::build(GOLD_MASTER_CARD_TITLE_NAME).size(1260.0, 64.0).position(VW * 0.5 - 690.0, VH * 0.305).tag("ui").build(ctx);
+    let card_desc_obj  = GameObject::build(GOLD_MASTER_CARD_DESC_NAME).size(1260.0, 50.0).position(VW * 0.5 - 690.0, VH * 0.355).tag("ui").build(ctx);
+    let card_check_obj = GameObject::build(GOLD_MASTER_CARD_CHECK_NAME).size(120.0, 96.0).position(VW * 0.5 + 600.0, VH * 0.318).tag("ui").build(ctx);
     let title_obj  = GameObject::build("ach_title_text").size(1400.0, 200.0).position(VW * 0.5 - 700.0, VH * 0.08).tag("ui").build(ctx);
-    let body_obj   = GameObject::build("ach_body_text").size(1600.0, 600.0).position(VW / 2.0 - 800.0, VH * 0.28).tag("ui").build(ctx);
     let back_text  = GameObject::build("ach_back_text").size(420.0, 110.0).position(VW / 2.0 - 210.0, VH * 0.86 + (110.0 - 36.0) / 2.0).tag("ui").build(ctx);
 
     Scene::new("achievements")
@@ -1792,7 +1959,10 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
         .with_object("ach_bg_tint",    bg_tint)
         .with_object("ach_back_btn",   back_btn)
         .with_object("ach_title_text", title_obj)
-        .with_object("ach_body_text",  body_obj)
+        .with_object(GOLD_MASTER_CARD_PANEL_NAME, card_bg)
+        .with_object(GOLD_MASTER_CARD_TITLE_NAME, card_title_obj)
+        .with_object(GOLD_MASTER_CARD_DESC_NAME,  card_desc_obj)
+        .with_object(GOLD_MASTER_CARD_CHECK_NAME, card_check_obj)
         .with_object("ach_back_text",  back_text)
         .with_event(
             GameEvent::MousePress {
@@ -1811,8 +1981,18 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
                 if let Some(obj) = canvas.get_game_object_mut("ach_title_text") {
                     obj.set_drawable(Box::new(ui_text_spec("ACHIEVEMENTS", &font, 72.0 * s, Color(220, 180, 255, 255), 1400.0 * s)));
                 }
-                if let Some(obj) = canvas.get_game_object_mut("ach_body_text") {
-                    obj.set_drawable(Box::new(ui_text_spec("Coming soon!", &font, 48.0 * s, Color(200, 200, 220, 200), 1600.0 * s)));
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_CARD_TITLE_NAME) {
+                    obj.set_drawable(Box::new(ui_text_left_spec(GOLD_MASTER_TITLE, &font, 44.0 * s, Color(248, 224, 120, 255), 1260.0 * s)));
+                }
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_CARD_DESC_NAME) {
+                    obj.set_drawable(Box::new(ui_text_left_spec(GOLD_MASTER_DESCRIPTION, &font, 28.0 * s, Color(210, 220, 235, 235), 1260.0 * s)));
+                }
+                let unlocked = gold_master_unlocked(canvas);
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_CARD_CHECK_NAME) {
+                    obj.visible = unlocked;
+                    if unlocked {
+                        obj.set_drawable(Box::new(ui_text_spec("✓", &font, 56.0 * s, Color(130, 255, 165, 255), 120.0 * s)));
+                    }
                 }
                 if let Some(obj) = canvas.get_game_object_mut("ach_back_text") {
                     obj.set_drawable(Box::new(ui_text_spec("\u{25C4}  BACK", &font, 32.0 * s, Color(220, 235, 255, 255), 420.0 * s)));
