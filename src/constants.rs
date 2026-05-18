@@ -514,6 +514,39 @@ pub const C_BOSS_BODY:           (u8,u8,u8) = (60, 20, 200);   // deep purple
 pub const C_BOSS_BOLT:           (u8,u8,u8) = (255, 110, 20);  // hot orange
 pub const C_BOSS_HP_FILL:        (u8,u8,u8) = (220, 40,  40);  // red fill
 pub const C_BOSS_HP_BG:          (u8,u8,u8) = (40,  10,  10);  // dark bg
+
+// ── Comets ────────────────────────────────────────────────────────────────────
+pub const COMET_POOL_SIZE:        usize = 8;
+pub const COMET_SIZE:             f32   = 840.0;
+pub const COMET_SPEED:            f32   = 42.0;
+pub const COMET_LIFETIME:         u32   = 360;    // 6 s at 60 fps
+/// Collision radius — smaller than the sprite so only the core fire cone hits.
+pub const COMET_HIT_RADIUS:       f32   = 180.0;
+/// Min vertical offset above player when spawning (world units).
+pub const COMET_SPAWN_ABOVE:      f32   = 1000.0;
+/// Max additional above offset so comets can come from varying heights.
+pub const COMET_SPAWN_ABOVE_EXTRA: f32  = 800.0;
+/// Horizontal spread from player centre on spawn.
+pub const COMET_SPAWN_SPREAD:     f32   = 1600.0;
+/// Knockback impulse applied to player on hit.
+pub const COMET_KNOCKBACK:        f32   = 30.0;
+pub const COMET_FPS:              f32   = 16.0;
+
+// ── Comet warning indicator ───────────────────────────────────────────────────
+pub const COMET_WARN_POOL_SIZE:   usize = 8;   // must equal COMET_POOL_SIZE
+pub const COMET_WARN_W:           f32   = 200.0;
+pub const COMET_WARN_H:           f32   = 400.0;
+/// Total warning duration in ticks (2 s).
+pub const COMET_WARN_TOTAL:       u32   = 120;
+/// Tick at which phase 1 ends and phase 2 begins (1 s).
+pub const COMET_WARN_P1_END:      u32   = 60;
+/// Phase 1: ticks per image alternation (fast flash).
+pub const COMET_WARN_ALT:         u32   = 4;
+/// Phase 2 sub-boundaries (within phase 2, offset from P1_END):
+/// 0..20 = light_explode, 20..40 = dark_explode, 40..60 = light_explode.
+pub const COMET_WARN_P2_A:        u32   = 20;
+pub const COMET_WARN_P2_B:        u32   = 40;
+
 pub const BULLET_W:             f32 = 36.0;
 pub const BULLET_H:             f32 = 12.0;
 pub const BULLET_SPEED:         f32 = 52.0;  // phase 1 enhancement: significantly faster bullets
@@ -720,6 +753,15 @@ pub const C_SPACE_HOOK_ON: (u8,u8,u8) = (210, 185, 255);
 pub const SPECIAL_HOOK_TAG: &str = "hook_special";
 pub const SPECIAL_HOOK_SPAWN_CHANCE: f32 = 0.30;
 pub const SPECIAL_HOOK_MIN_X_GAP: f32 = 10_000.0;
+pub const C_HOOK_EXTENDED:      (u8,u8,u8) = (220, 60, 80);
+pub const C_HOOK_EXTENDED_NEAR: (u8,u8,u8) = (255, 120, 140);
+pub const C_HOOK_EXTENDED_ON:   (u8,u8,u8) = (255, 180, 200);
+pub const EXTENDED_HOOK_TAG: &str = "hook_extended";
+pub const EXTENDED_HOOK_REACH_MULT: f32 = 2.0;
+pub const EXTENDED_HOOK_MIN_X_GAP: f32 = 20_000.0;
+pub const EXTENDED_HOOK_SPAWN_CHANCE: f32 = 0.08;
+pub const POWERUP_MAGNET_RADIUS: f32 = 160.0;
+pub const POWERUP_MAGNET_PULL: f32 = 0.35;
 pub const C_BLACKHOLE:   (u8,u8,u8) = (18,  8,   26);
 pub const C_GWELL_TELEPORT: (u8,u8,u8) = (90, 170, 255);
 

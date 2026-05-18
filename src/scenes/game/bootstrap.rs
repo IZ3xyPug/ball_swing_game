@@ -95,6 +95,10 @@ pub struct PoolSets {
     // ── Boss fight
     pub boss_bolt_free: Vec<String>,
     pub boss_asteroid_ids: Vec<String>,
+    // ── Comets
+    pub comet_free: Vec<String>,
+    // ── Comet warnings
+    pub warn_free: Vec<String>,
 }
 
 fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
@@ -1386,6 +1390,52 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object(id, obj);
     }
 
+    // ── Comet pool ────────────────────────────────────────────────────────
+    let mut comet_free: Vec<String> = Vec::new();
+    for i in 0..COMET_POOL_SIZE {
+        let id = format!("comet_{i}");
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (COMET_SIZE, COMET_SIZE),
+            (-9000.0, -9000.0),
+            vec!["comet".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.visible = false;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.layer = 10;
+        comet_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Comet warning pool ─────────────────────────────────────────────────
+    let mut warn_free: Vec<String> = Vec::new();
+    for i in 0..COMET_WARN_POOL_SIZE {
+        let id = format!("comet_warn_{i}");
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (COMET_WARN_W, COMET_WARN_H),
+            (-9500.0, -9500.0),
+            vec!["comet_warn".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.visible = false;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.layer = 11;
+        warn_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
     let pools = PoolSets {
         starter_names,
         pool_free,
@@ -1419,6 +1469,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_red_coin_free,
         boss_bolt_free,
         boss_asteroid_ids,
+        comet_free,
+        warn_free,
     };
 
     (scene, pools)

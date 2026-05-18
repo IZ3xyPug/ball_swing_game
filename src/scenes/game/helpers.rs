@@ -118,8 +118,15 @@ pub fn is_special_hook_obj(obj: &GameObject) -> bool {
 }
 
 #[inline]
+pub fn is_extended_hook_obj(obj: &GameObject) -> bool {
+    obj.tags.iter().any(|t| t == EXTENDED_HOOK_TAG)
+}
+
+#[inline]
 pub fn hook_base_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
-    if is_special_hook_obj(obj) {
+    if is_extended_hook_obj(obj) {
+        C_HOOK_EXTENDED
+    } else if is_special_hook_obj(obj) {
         C_HOOK_SPECIAL
     } else {
         hook_base_for_zone(zone_idx)
@@ -128,7 +135,9 @@ pub fn hook_base_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
 
 #[inline]
 pub fn hook_near_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
-    if is_special_hook_obj(obj) {
+    if is_extended_hook_obj(obj) {
+        C_HOOK_EXTENDED_NEAR
+    } else if is_special_hook_obj(obj) {
         C_HOOK_SPECIAL_NEAR
     } else {
         hook_near_for_zone(zone_idx)
@@ -137,7 +146,9 @@ pub fn hook_near_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
 
 #[inline]
 pub fn hook_on_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
-    if is_special_hook_obj(obj) {
+    if is_extended_hook_obj(obj) {
+        C_HOOK_EXTENDED_ON
+    } else if is_special_hook_obj(obj) {
         C_HOOK_SPECIAL_ON
     } else {
         hook_on_for_zone(zone_idx)
@@ -202,3 +213,56 @@ pub fn spinner_for_zone(zone_idx: usize) -> (u8, u8, u8) {
 pub fn pad_thruster_id(pad_id: &str) -> String {
     format!("{pad_id}_thruster")
 }
+
+// ── Comet warning images ──────────────────────────────────────────────────────
+// Each image is decoded once (OnceLock) and cloned cheaply on each use.
+
+fn load_warn_rgba(bytes: &[u8]) -> std::sync::Arc<image::RgbaImage> {
+    let src = image::load_from_memory(bytes)
+        .expect("warn image decode failed")
+        .to_rgba8();
+    let resized = image::imageops::resize(
+        &src,
+        COMET_WARN_W as u32,
+        COMET_WARN_H as u32,
+        image::imageops::FilterType::Lanczos3,
+    );
+    std::sync::Arc::new(resized)
+}
+
+macro_rules! warn_img_accessor {
+    ($fn_name:ident, $lock_name:ident, $bytes:expr) => {
+        static $lock_name: OnceLock<Image> = OnceLock::new();
+        pub fn $fn_name() -> Image {
+            $lock_name.get_or_init(|| {
+                let rgba = load_warn_rgba($bytes);
+                Image {
+                    shape: ShapeType::Rectangle(0.0, (COMET_WARN_W, COMET_WARN_H), 0.0),
+                    image: rgba,
+                    color: None,
+                }
+            }).clone()
+        }
+    };
+}
+
+warn_img_accessor!(
+    warn_img_dark,
+    WARN_IMG_DARK,
+    include_bytes!("../../../assets/exclamation_dark.webp")
+);
+warn_img_accessor!(
+    warn_img_light,
+    WARN_IMG_LIGHT,
+    include_bytes!("../../../assets/exclamation_light.webp")
+);
+warn_img_accessor!(
+    warn_img_dark_explode,
+    WARN_IMG_DARK_EXPLODE,
+    include_bytes!("../../../assets/exclamation_dark_explode.webp")
+);
+warn_img_accessor!(
+    warn_img_light_explode,
+    WARN_IMG_LIGHT_EXPLODE,
+    include_bytes!("../../../assets/exclamation_light_explode.webp")
+);

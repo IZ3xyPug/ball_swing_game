@@ -70,7 +70,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
 
         let nearest = if let Some(player_obj) = c.get_game_object("player") {
             let reach_mult = if s.boss_active { 1.45 } else { 1.0 };
-            c.objects_in_radius(player_obj, ROPE_LEN_MAX * reach_mult)
+            c.objects_in_radius(player_obj, ROPE_LEN_MAX * reach_mult * EXTENDED_HOOK_REACH_MULT)
                 .into_iter()
                 .filter(|o| o.tags.iter().any(|t| t == "hook"))
                 .map(|o| {
@@ -87,7 +87,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                         player_d2
                     };
                     let is_special = o.tags.iter().any(|t| t == SPECIAL_HOOK_TAG);
-                    (o.id.clone(), hcx, hcy, player_d2, cursor_d2, is_special)
+                    let is_extended = o.tags.iter().any(|t| t == EXTENDED_HOOK_TAG);
+                    (o.id.clone(), hcx, hcy, player_d2, cursor_d2, is_special, is_extended)
                 })
                 .min_by(|a, b| {
                     if mouse_target.is_some() {
@@ -103,7 +104,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             None
         };
 
-        if let Some((hook_id, hx, hy, player_d2, _cursor_d2, is_special_hook)) = nearest {
+        if let Some((hook_id, hx, hy, player_d2, _cursor_d2, is_special_hook, is_extended_hook)) = nearest {
             let rope_len = player_d2.sqrt().clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
 
             // Capture incoming velocity before it's redirected by the grab impulse.

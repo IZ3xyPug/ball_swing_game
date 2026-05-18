@@ -231,6 +231,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_red_coin_free,
         boss_bolt_free,
         boss_asteroid_ids,
+        comet_free,
+        warn_free,
     } = pools;
 
     // Starter hook positions (must match bootstrap.rs).
@@ -252,6 +254,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // stale solver state or leftover particles from a previous run.
             canvas.enable_crystalline();
             canvas.set_var("crystalline_ready", true);
+
+            // Pre-warm comet GIF + warning image OnceLocks in a background
+            // thread so the first J-press has zero decode lag.
+            std::thread::spawn(spawning::preload_comet_assets);
 
             // ── Player particle trail ────────────────────────────────────
             // Determine selected trail colour first so it can be used here and on resume.
@@ -438,6 +444,34 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
                         if let Some(state_arc) = state_opt {
                             let _ = spawning::spawn_debug_special_hook(c, &state_arc);
+                        }
+                        return;
+                    }
+
+                    // Key 'k': spawn one extended red grab hook for testing.
+                    if *key == Key::Character("k".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let _ = spawning::spawn_debug_extended_hook(c, &state_arc);
+                        }
+                        return;
+                    }
+
+                    // Key 'j': spawn a comet targeting the player from above.
+                    // Note: 'j' is also used for music volume when settings panel is open,
+                    // but that block returns early so we only reach here when settings are closed.
+                    if *key == Key::Character("j".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let _ = spawning::spawn_debug_comet(c, &state_arc);
                         }
                         return;
                     }
@@ -826,14 +860,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 flip_free: flip_free.clone(),
                 flip_rightmost: SPAWN_X + VW * 1.1,
                 flip_timer: 0,
+                flip_magnet_locked: Vec::new(),
                 score_x2_live: Vec::new(),
                 score_x2_free: score_x2_free.clone(),
                 score_x2_rightmost: SPAWN_X + VW * 1.35,
                 score_x2_timer: 0,
+                score_x2_magnet_locked: Vec::new(),
                 zero_g_live: Vec::new(),
                 zero_g_free: zero_g_free.clone(),
                 zero_g_rightmost: SPAWN_X + VW * 1.6,
                 zero_g_timer: 0,
+                zero_g_magnet_locked: Vec::new(),
                 gate_live: Vec::new(),
                 gate_free: gate_free.clone(),
                 gate_rightmost: SPAWN_X + VW * 1.0,
@@ -949,6 +986,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_bolt_free:    boss_bolt_free.clone(),
                 boss_asteroids:    boss_asteroid_ids.clone(),
                 hud_last_boss_hp:  -999,
+
+                comet_live:        Vec::new(),
+                comet_free:        comet_free.clone(),
+
+                comet_warn_live:   Vec::new(),
+                warn_free:         warn_free.clone(),
             };
 
             // Reuse persistent Arc across respawns.
