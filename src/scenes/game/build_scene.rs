@@ -70,7 +70,6 @@ fn position_slider_thumbs(c: &mut Canvas) {
         }
     }
     // Engine may be hard-paused — sync offsets so the renderer sees new positions.
-    c.sync_ignore_zoom_offsets();
 }
 
 fn update_bgm_volume(c: &Canvas) {
@@ -992,6 +991,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                 comet_warn_live:   Vec::new(),
                 warn_free:         warn_free.clone(),
+                comet_spawn_timer: COMET_SPAWN_INTERVAL,
             };
 
             // Reuse persistent Arc across respawns.
@@ -1184,6 +1184,39 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // Pre-warm artifact hook GIF decode (background thread) to avoid
             // per-spawn disk read and decode stalls during gameplay.
             std::thread::spawn(|| { super::helpers::prewarm_hook_artifact(); });
+            std::thread::spawn(|| { super::helpers::prewarm_hook_artifact_green(); });
+            std::thread::spawn(|| { super::helpers::prewarm_zero_g_overlay(); });
+
+            // Assign overlay animations once so they're ready to play on demand.
+            if let Some(obj) = canvas.get_game_object_mut("zero_g_overlay") {
+                obj.set_animation(super::helpers::zero_g_overlay_anim());
+            }
+            if let Some(obj) = canvas.get_game_object_mut("space_rip_overlay") {
+                obj.set_animation(super::helpers::space_rip_overlay_anim());
+            }
+            // Animated catcoingold icon in the coin counter slot.
+            if let Ok(anim) = AnimatedSprite::new(
+                include_bytes!("../../../assets/catcoingold.gif"),
+                (112.0, 112.0),
+                12.0,
+            ) {
+                if let Some(obj) = canvas.get_game_object_mut("coin_icon_anim") {
+                    obj.set_animation(anim);
+                }
+            }
+            // Ability icon animations (ZeroG.gif and 2x.gif shown in HUD near scoreboard).
+            if let Some(obj) = canvas.get_game_object_mut("zero_g_icon") {
+                obj.set_animation(super::helpers::zero_g_overlay_anim());
+            }
+            if let Ok(anim) = AnimatedSprite::new(
+                include_bytes!("../../../assets/2x.gif"),
+                (120.0, 120.0),
+                12.0,
+            ) {
+                if let Some(obj) = canvas.get_game_object_mut("score_x2_icon") {
+                    obj.set_animation(anim);
+                }
+            }
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -1377,7 +1410,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                     }
                                     // Sync so the renderer sees the new thumb position
                                     // while the engine is hard-paused.
-                                    c.sync_ignore_zoom_offsets();
                                     update_settings_text(c);
                                     update_bgm_volume(c);
                                 }
@@ -1459,7 +1491,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                         if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
                                             obj.position = (thumb_x, thumb_y);
                                         }
-                                        c.sync_ignore_zoom_offsets();
                                         update_settings_text(c);
                                         update_bgm_volume(c);
                                         c.set_var("settings_dragging", idx as i32);

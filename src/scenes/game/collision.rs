@@ -319,7 +319,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     for name in live {
         // Circle-circle overlap: treat each asteroid as a circle of radius = half its size.
-        let hit_info: Option<(f32, f32)> = {
+        let hit_info: Option<(f32, f32, f32, f32)> = {
             if let Some(obj) = c.get_game_object(&name) {
                 let ax = obj.position.0 + obj.size.0 * 0.5;
                 let ay = obj.position.1 + obj.size.1 * 0.5;
@@ -331,7 +331,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 if dist2 < min_dist * min_dist {
                     let dist = dist2.sqrt().max(0.001);
                     let push = min_dist - dist;
-                    Some((dx / dist * push, dy / dist * push))
+                    Some((dx / dist * push, dy / dist * push, obj.momentum.0, obj.momentum.1))
                 } else {
                     None
                 }
@@ -340,7 +340,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         };
 
-        if let Some((push_x, push_y)) = hit_info {
+        if let Some((push_x, push_y, ast_vx, ast_vy)) = hit_info {
             // Push player out of overlap.
             s.px += push_x;
             s.py += push_y;
@@ -349,12 +349,20 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let nx = push_x / push_len;
             let ny = push_y / push_len;
 
-            // Strip inward velocity component (elastic deflect).
-            let inward = -(s.vx * nx + s.vy * ny);
-            if inward > 0.0 {
-                s.vx += nx * inward;
-                s.vy += ny * inward;
-            }
+            // Strong impact knockback based on relative normal speed and asteroid momentum.
+            // n points from asteroid center toward player, so negative relative normal means
+            // the asteroid is closing into the player.
+            let rel_n = (s.vx - ast_vx) * nx + (s.vy - ast_vy) * ny;
+            let closing_speed = (-rel_n).max(0.0);
+            let knock_mag = (ASTEROID_PLAYER_KNOCKBACK_BASE
+                + closing_speed * ASTEROID_PLAYER_KNOCKBACK_IMPACT)
+                .min(ASTEROID_PLAYER_KNOCKBACK_MAX);
+
+            // Ensure a minimum outward normal speed, then carry part of asteroid velocity.
+            let player_out_n = s.vx * nx + s.vy * ny;
+            let need_outward = (knock_mag - player_out_n).max(0.0);
+            s.vx += nx * need_outward + ast_vx * ASTEROID_PLAYER_KNOCKBACK_CARRY;
+            s.vy += ny * need_outward + ast_vy * ASTEROID_PLAYER_KNOCKBACK_CARRY;
 
             // Tangential component of player velocity drives asteroid spin.
             let tx = -ny;
@@ -593,8 +601,11 @@ fn tick_comet_warnings(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     if s.comet_warn_live.is_empty() { return; }
 
-    let player_px = s.px;
-    let player_py = s.py;
+    let player_px  = s.px;
+    let player_py  = s.py;
+    let player_vx  = s.vx;
+    let player_vy  = s.vy;
+    let gravity_dir = s.gravity_dir; // 1.0 = normal, -1.0 = flipped
 
     // Advance timers.
     for w in &mut s.comet_warn_live {
@@ -622,82 +633,112 @@ fn tick_comet_warnings(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     };
     let view_w = VW / cam_zoom;
     let view_h = VH / cam_zoom;
-    // Margin from the camera edge where the warning can be placed (world units).
     let margin = 80.0;
 
-    // Update in-progress warnings: follow player, scale during phase-2 intro.
-    // Position is clamped to the visible viewport so the indicator is always visible.
-    // The indicator is placed near the screen edge in the direction the comet comes from.
-    for w in &active {
-        let img = warn_image_for_timer(w.timer);
-        let scale = warn_size_scale(w.timer);
-        let w_scaled = COMET_WARN_W * scale;
-        let h_scaled = COMET_WARN_H * scale;
-
-        // Direction from player toward comet spawn (comet comes FROM that direction).
-        // h_offset is lateral, v_offset is how far above the player.
-        let dir_dx = w.h_offset;
-        let dir_dy = -w.v_offset; // negative = upward in world space
+    /// Compute the (ndx, ndy) incoming direction and clamp the warning center
+    /// to the visible viewport. Returns (ndx, ndy, cx, cy).
+    fn warn_dir_and_center(
+        h_offset: f32, v_offset: f32, gravity_dir: f32,
+        player_px: f32, player_py: f32,
+        cam_left: f32, cam_top: f32, view_w: f32, view_h: f32,
+        w_scaled: f32, h_scaled: f32, margin: f32,
+    ) -> (f32, f32, f32, f32) {
+        // Comet always comes from "away from the play floor" — flip dir_dy with gravity.
+        let dir_dx = h_offset;
+        let dir_dy = -v_offset * gravity_dir; // negative = above in normal gravity
         let dir_len = (dir_dx * dir_dx + dir_dy * dir_dy).sqrt().max(1.0);
         let ndx = dir_dx / dir_len;
         let ndy = dir_dy / dir_len;
 
-        // Desired center: project from player along direction, clamped to viewport.
         let cam_right  = cam_left + view_w;
         let cam_bottom = cam_top  + view_h;
-
-        // The farthest we can move inside the viewport from its center toward the comet.
-        // We want the indicator near the edge in that direction.
-        let max_x = if ndx > 0.0 { cam_right  - margin - w_scaled * 0.5 }
-                    else          { cam_left   + margin + w_scaled * 0.5 };
-        let max_y = if ndy > 0.0 { cam_bottom - margin - h_scaled * 0.5 }
-                    else          { cam_top    + margin + h_scaled * 0.5 };
-
-        // Center of the warning indicator in world space, clamped to viewport.
         let cx = (player_px + ndx * view_w * 0.45)
             .clamp(cam_left   + margin + w_scaled * 0.5, cam_right  - margin - w_scaled * 0.5);
         let cy = (player_py + ndy * view_h * 0.45)
             .clamp(cam_top    + margin + h_scaled * 0.5, cam_bottom - margin - h_scaled * 0.5);
-        let _ = (max_x, max_y); // suppress unused warning
+        (ndx, ndy, cx, cy)
+    }
 
-        let x = cx - w_scaled * 0.5;
-        let y = cy - h_scaled * 0.5;
+    // Update in-progress warnings: follow player, scale during phase-2 intro.
+    for w in &active {
+        let img   = warn_image_for_timer(w.timer);
+        let scale = warn_size_scale(w.timer);
+        let w_scaled = COMET_WARN_W * scale;
+        let h_scaled = COMET_WARN_H * scale;
+        let (_, _, cx, cy) = warn_dir_and_center(
+            w.h_offset, w.v_offset, gravity_dir,
+            player_px, player_py,
+            cam_left, cam_top, view_w, view_h,
+            w_scaled, h_scaled, margin,
+        );
         if let Some(obj) = c.get_game_object_mut(&w.warn_obj_id) {
             obj.set_image(img);
-            obj.size = (w_scaled, h_scaled);
-            obj.position = (x, y);
+            obj.size     = (w_scaled, h_scaled);
+            obj.position = (cx - w_scaled * 0.5, cy - h_scaled * 0.5);
+            // Always keep warning upright regardless of gravity flip.
+            obj.rotation = 0.0;
         }
     }
 
     // Spawn comets whose warning has finished.
-    // Comet spawn position is recalculated from the player's CURRENT position + stored offsets.
+    // Derive spawn position from the ACTUAL warning center (same projection + clamp the
+    // warning display uses), then step further past it so the comet is off-screen.
+    // This guarantees the comet enters from exactly where the exclamation mark was.
     for w in &to_spawn {
-        // Hide and recycle the warning object.
         if let Some(obj) = c.get_game_object_mut(&w.warn_obj_id) {
-            obj.visible = false;
+            obj.visible  = false;
             obj.position = (-9500.0, -9500.0);
         }
-        // Calculate final spawn from current player position.
-        let spawn_x = player_px + w.h_offset;
-        let spawn_y = player_py - w.v_offset;
-        let dx = player_px - spawn_x;
-        let dy = player_py - spawn_y;
+
+        // Get the warning center the same way the display loop does (scale=1.0 at expiry).
+        let (ndx, ndy, warn_cx, warn_cy) = warn_dir_and_center(
+            w.h_offset, w.v_offset, gravity_dir,
+            player_px, player_py,
+            cam_left, cam_top, view_w, view_h,
+            COMET_WARN_W, COMET_WARN_H, margin,
+        );
+
+        // Direction from player to the ACTUAL (clamped) warning center.
+        // Using this instead of raw (ndx,ndy) ensures the comet lines up with the indicator
+        // even after viewport clamping changes the displayed position.
+        let adx = warn_cx - player_px;
+        let ady = warn_cy - player_py;
+        let alen = (adx * adx + ady * ady).sqrt().max(1.0);
+        let andx = adx / alen;
+        let andy = ady / alen;
+
+        // Step back from the warning center further in the same direction so the comet
+        // starts off-screen. The comet will visually pass over where the indicator was.
+        let backstep = view_w.max(view_h) * 0.4 + COMET_SIZE;
+        let spawn_x = warn_cx + andx * backstep;
+        let spawn_y = warn_cy + andy * backstep;
+        let _ = (ndx, ndy); // direction was only needed for warn_dir_and_center
+
+        // Velocity: aim at a predicted player position to lead the target.
+        // Estimate travel time from spawn to current player, then offset the aim
+        // point by 50% of that time using the player's current velocity.
+        let dx0 = player_px - spawn_x;
+        let dy0 = player_py - spawn_y;
+        let travel_ticks = (dx0 * dx0 + dy0 * dy0).sqrt().max(1.0) / COMET_SPEED;
+        let lead_x = player_px + player_vx * travel_ticks * 0.5;
+        let lead_y = player_py + player_vy * travel_ticks * 0.5;
+        let dx  = lead_x - spawn_x;
+        let dy  = lead_y - spawn_y;
         let len = (dx * dx + dy * dy).sqrt().max(1.0);
-        let vx = dx / len * COMET_SPEED;
-        let vy = dy / len * COMET_SPEED;
+        let vx  = dx / len * COMET_SPEED;
+        let vy  = dy / len * COMET_SPEED;
         let rotation = vy.atan2(vx).to_degrees() + 180.0;
 
-        // Activate the comet.
         if let Some(obj) = c.get_game_object_mut(&w.comet_id) {
             obj.set_animation(super::spawning::comet_template());
-            obj.position = (spawn_x - COMET_SIZE * 0.5, spawn_y - COMET_SIZE * 0.5);
-            obj.size = (COMET_SIZE, COMET_SIZE);
-            obj.rotation = rotation;
-            obj.gravity = 0.0;
-            obj.momentum = (0.0, 0.0);
+            obj.position          = (spawn_x - COMET_SIZE * 0.5, spawn_y - COMET_SIZE * 0.5);
+            obj.size              = (COMET_SIZE, COMET_SIZE);
+            obj.rotation          = rotation;
+            obj.gravity           = 0.0;
+            obj.momentum          = (0.0, 0.0);
             obj.rotation_momentum = 0.0;
-            obj.collision_mode = CollisionMode::NonPlatform;
-            obj.visible = true;
+            obj.collision_mode    = CollisionMode::NonPlatform;
+            obj.visible           = true;
         }
         let mut s = st.lock().unwrap();
         s.warn_free.push(w.warn_obj_id.clone());

@@ -27,7 +27,7 @@ pub const RELEASE_SURGE_MAX: f32 = 14.0;
 pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
 
 // ── Object sizes ──────────────────────────────────────────────────────────────
-pub const PLAYER_R:       f32 = 40.0;
+pub const PLAYER_R:       f32 = 58.0;
 pub const HOOK_R:         f32 = 38.0;
 /// Display/collision radius for artifact-mode grab hooks (1.5× regular hook).
 pub const HOOK_ARTIFACT_R: f32 = HOOK_R * 1.5;
@@ -397,6 +397,9 @@ pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets
 pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
 pub const ASSET_HOOK_ARTIFACT_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact.gif");
+pub const ASSET_HOOK_ARTIFACT_GREEN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact_green.gif");
+/// Average ticks between automatic comet spawn attempts (at 60 fps ≈ 5 seconds).
+pub const COMET_SPAWN_INTERVAL: u32 = 300;
 pub const HOOK_ARTIFACT_FPS: f32 = 13.0;
 pub const HOOK_ARTIFACT_INTRO_FPS: f32 = 24.0;
 pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
@@ -405,6 +408,8 @@ pub const ASSET_BLACKHOLE1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ass
 pub const ASSET_WORMHOLE2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wormhole2.gif");
 pub const ASSET_GWELLON_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwellon.gif");
 pub const ASSET_GWELLOFF_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwelloff.gif");
+pub const ASSET_ZERO_G_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ZeroG.gif");
+pub const ASSET_SPACE_RIP_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/space_rip.gif");
 pub const CALICO_FPS: f32 = 12.0;
 pub const GWELL_FPS: f32 = 10.0;
 pub const BLACKHOLE_FPS: f32 = 12.0;
@@ -518,7 +523,7 @@ pub const C_BOSS_HP_BG:          (u8,u8,u8) = (40,  10,  10);  // dark bg
 // ── Comets ────────────────────────────────────────────────────────────────────
 pub const COMET_POOL_SIZE:        usize = 8;
 pub const COMET_SIZE:             f32   = 840.0;
-pub const COMET_SPEED:            f32   = 42.0;
+pub const COMET_SPEED:            f32   = 84.0;
 pub const COMET_LIFETIME:         u32   = 360;    // 6 s at 60 fps
 /// Collision radius — smaller than the sprite so only the core fire cone hits.
 pub const COMET_HIT_RADIUS:       f32   = 180.0;
@@ -721,6 +726,14 @@ pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -2200.0; // large, highest (visib
 pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -900.0;
 pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
 pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 480.0;
+/// Base outward knockback speed applied to player when hit by a space asteroid.
+pub const ASTEROID_PLAYER_KNOCKBACK_BASE: f32 = 26.0;
+/// Extra knockback from relative closing speed along the collision normal.
+pub const ASTEROID_PLAYER_KNOCKBACK_IMPACT: f32 = 1.10;
+/// Clamp for total asteroid hit knockback to avoid absurd launch speeds.
+pub const ASTEROID_PLAYER_KNOCKBACK_MAX: f32 = 130.0;
+/// How much asteroid velocity is carried into player velocity on hit.
+pub const ASTEROID_PLAYER_KNOCKBACK_CARRY: f32 = 0.60;
 /// Crystalline collision layer bits.
 pub const ASTEROID_COLLISION_LAYER: u32 = 1 << 8;
 pub const PLAYER_COLLISION_LAYER:   u32 = 1 << 1; // matches collision_layers::PLAYER
@@ -853,7 +866,7 @@ pub const SPACE_ASTEROID_VY_MIN: f32 = -2.0;
 pub const SPACE_ASTEROID_VY_MAX: f32 =  2.0;
 // Fraction of the player's incoming velocity transferred to an asteroid on hook.
 // Scaled by (SIZE_MIN / actual_size) so smaller asteroids receive more impulse.
-pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.08;
+pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.28;
 
 // Stasis orbit (shared between entry/exit stasis and game-start stasis)
 pub const STASIS_ORBIT_R:     f32 = 240.0;

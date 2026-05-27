@@ -467,6 +467,7 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     };
 
     let px = s.px;
+    let py = s.py;
     drop(s);
 
     if pending_space_exit_reset {
@@ -491,6 +492,13 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         cam.zoom_lerp_speed = if target_zoom < cam.zoom { ZOOM_OUT_LERP } else { ZOOM_IN_LERP };
         cam.zoom_anchor = Some((px, anchor_y));
         cam.smooth_zoom(target_zoom);
+
+        // Vertically track the player so they stay near screen center.
+        // The zoom anchor suppresses lerp_toward's Y update, so we drive it here.
+        // 0.35 places player ~35% from top (between the original top and centered).
+        let visible_h = VH / cam.zoom.max(0.01);
+        let target_cam_y = py - visible_h * 0.35;
+        cam.position.1 += (target_cam_y - cam.position.1) * 0.08;
     }
 }
 

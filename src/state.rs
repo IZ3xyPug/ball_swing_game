@@ -327,4 +327,6 @@ pub struct State {
     /// Pending warnings before comet spawn: see CometWarn.
     pub comet_warn_live: Vec<CometWarn>,
     pub warn_free: Vec<String>,
+    /// Countdown to next auto-comet spawn attempt (ticks).
+    pub comet_spawn_timer: u32,
 }

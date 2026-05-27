@@ -88,6 +88,108 @@ pub fn hook_artifact_anim() -> AnimatedSprite {
     anim
 }
 
+// ── Green artifact hook (special hook gif) ──────────────────────────────────
+
+// ── Zero-G overlay ─────────────────────────────────────────────────────────
+static ZERO_G_OVERLAY_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
+fn decode_zero_g_overlay_frames() -> Vec<image::RgbaImage> {
+    let bytes = std::fs::read(ASSET_ZERO_G_GIF).expect("ZeroG.gif missing");
+    let d = 256u32; // ZeroG.gif is natively 256×256
+    let cursor = Cursor::new(bytes);
+    if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
+        let frames: Vec<image::RgbaImage> = decoder.into_frames()
+            .filter_map(|f| f.ok())
+            .map(|f| {
+                let buf = f.into_buffer();
+                let (w, h) = (buf.width(), buf.height());
+                if w == d && h == d { return buf; }
+                let scale = (d as f32 / w as f32).min(d as f32 / h as f32);
+                let rw = (w as f32 * scale).round().max(1.0) as u32;
+                let rh = (h as f32 * scale).round().max(1.0) as u32;
+                let resized = image::imageops::resize(&buf, rw, rh, image::imageops::FilterType::Nearest);
+                let ox = ((d.saturating_sub(rw)) / 2) as i64;
+                let oy = ((d.saturating_sub(rh)) / 2) as i64;
+                let mut canvas = image::RgbaImage::from_pixel(d, d, image::Rgba([0, 0, 0, 0]));
+                image::imageops::overlay(&mut canvas, &resized, ox, oy);
+                canvas
+            })
+            .collect();
+        if !frames.is_empty() { return frames; }
+    }
+    vec![image::RgbaImage::from_pixel(d, d, image::Rgba([135, 220, 255, 180]))]
+}
+pub fn prewarm_zero_g_overlay() {
+    ZERO_G_OVERLAY_FRAMES.get_or_init(decode_zero_g_overlay_frames);
+}
+pub fn zero_g_overlay_anim() -> AnimatedSprite {
+    let size = (256.0, 256.0); // matches native 256×256 GIF
+    let frames = ZERO_G_OVERLAY_FRAMES.get_or_init(decode_zero_g_overlay_frames).clone();
+    let mut anim = AnimatedSprite::from_frames(frames, size, 16.0);
+    anim.set_fps(0.001); // frozen until activated
+    anim
+}
+
+// ── Space rip overlay ──────────────────────────────────────────────────────
+// Display size: 512×1024 virtual px (portrait, matches space_rip.gif 1:2 ratio).
+// AnimatedSprite::new resizes each frame with fit-contain so the image fills
+// correctly — no distortion / no full-screen stretch.
+pub const SPACE_RIP_W: f32 = 512.0;
+pub const SPACE_RIP_H: f32 = 1024.0;
+
+pub fn space_rip_overlay_anim() -> AnimatedSprite {
+    let bytes = include_bytes!("../../../assets/space_rip.gif");
+    let mut anim = AnimatedSprite::new(bytes, (SPACE_RIP_W, SPACE_RIP_H), 16.0)
+        .unwrap_or_else(|_| {
+            let fallback = vec![image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 0]))];
+            AnimatedSprite::from_frames(fallback, (SPACE_RIP_W, SPACE_RIP_H), 16.0)
+        });
+    anim.set_fps(0.001); // frozen until activated by hud_update
+    anim
+}
+
+static HOOK_ARTIFACT_GREEN_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
+
+fn decode_hook_artifact_green_frames() -> Vec<image::RgbaImage> {
+    let bytes = std::fs::read(ASSET_HOOK_ARTIFACT_GREEN_GIF).expect("hook_artifact_green.gif missing");
+    let d = (HOOK_ARTIFACT_R * 2.0).round() as u32;
+    let cursor = Cursor::new(bytes);
+    if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
+        let frames: Vec<image::RgbaImage> = decoder.into_frames()
+            .filter_map(|f| f.ok())
+            .map(|f| {
+                let buf = f.into_buffer();
+                let (w, h) = (buf.width(), buf.height());
+                if w == d && h == d { return buf; }
+                let scale = (d as f32 / w as f32).min(d as f32 / h as f32);
+                let rw = (w as f32 * scale).round().max(1.0) as u32;
+                let rh = (h as f32 * scale).round().max(1.0) as u32;
+                let resized = image::imageops::resize(&buf, rw, rh, image::imageops::FilterType::Nearest);
+                let ox = ((d.saturating_sub(rw)) / 2) as i64;
+                let oy = ((d.saturating_sub(rh)) / 2) as i64;
+                let mut canvas = image::RgbaImage::from_pixel(d, d, image::Rgba([0, 0, 0, 0]));
+                image::imageops::overlay(&mut canvas, &resized, ox, oy);
+                canvas
+            })
+            .collect();
+        if !frames.is_empty() { return frames; }
+    }
+    vec![image::RgbaImage::from_pixel(d, d, image::Rgba([52, 196, 84, 255]))]
+}
+
+pub fn prewarm_hook_artifact_green() {
+    HOOK_ARTIFACT_GREEN_FRAMES.get_or_init(decode_hook_artifact_green_frames);
+}
+
+/// Returns an AnimatedSprite for the green hook artifact GIF, frozen at frame 0.
+pub fn hook_artifact_green_anim() -> AnimatedSprite {
+    let d = HOOK_ARTIFACT_R * 2.0;
+    let size = (d, d);
+    let frames = HOOK_ARTIFACT_GREEN_FRAMES.get_or_init(decode_hook_artifact_green_frames).clone();
+    let mut anim = AnimatedSprite::from_frames(frames, size, HOOK_ARTIFACT_FPS);
+    anim.set_fps(0.001);
+    anim
+}
+
 pub fn hook_base_for_zone(zone_idx: usize) -> (u8, u8, u8) {
     match zone_idx {
         1 => C_HOOK_ZONE1,

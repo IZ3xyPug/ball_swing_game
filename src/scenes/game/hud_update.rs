@@ -42,6 +42,9 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dirty_flip      = flip_timer     != s.hud_last_flip_timer;
     let dirty_zero_g    = zero_g_timer   != s.hud_last_zero_g_timer;
     let dirty_score_x2  = score_x2_timer != s.hud_last_score_x2_timer;
+    let prev_flip_timer    = s.hud_last_flip_timer;
+    let prev_zero_g_timer  = s.hud_last_zero_g_timer;
+    let prev_score_x2_timer = s.hud_last_score_x2_timer;
     s.hud_last_flip_timer      = flip_timer;
     s.hud_last_zero_g_timer    = zero_g_timer;
     s.hud_last_score_x2_timer  = score_x2_timer;
@@ -120,6 +123,10 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             });
         }
     }
+    // Animated catcoingold icon — show when coin counter is visible, no tint (avoids white box).
+    if let Some(obj) = c.get_game_object_mut("coin_icon_anim") {
+        obj.visible = coin_alpha > 0;
+    }
 
     // Score counter (top-right)
     if let Some(obj) = c.get_game_object_mut("score_counter") {
@@ -168,48 +175,45 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    if let Some(obj) = c.get_game_object_mut("flip_timer") {
-        if flip_timer > 0 {
-            obj.visible = true;
-            if dirty_flip {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: flip_timer_img(flip_timer, FLIP_DURATION).into(),
-                    color: None,
-                });
+    // Timer HUD bars removed — abilities are indicated by the icons near the scoreboard.
+    if let Some(obj) = c.get_game_object_mut("flip_timer")     { obj.visible = false; }
+    if let Some(obj) = c.get_game_object_mut("zero_g_timer")   { obj.visible = false; }
+    if let Some(obj) = c.get_game_object_mut("score_x2_timer") { obj.visible = false; }
+
+    // Ability icons to the left of the scoreboard.
+    if let Some(obj) = c.get_game_object_mut("flip_icon") {
+        obj.visible = flip_timer > 0;
+    }
+    if dirty_zero_g {
+        if let Some(obj) = c.get_game_object_mut("zero_g_icon") {
+            if zero_g_timer > 0 {
+                obj.visible = true;
+                if prev_zero_g_timer == 0 {
+                    if let Some(anim) = &mut obj.animated_sprite {
+                        anim.reset();
+                        anim.set_fps(8.0);
+                    }
+                }
+            } else {
+                obj.visible = false;
+                if let Some(anim) = &mut obj.animated_sprite { anim.set_fps(0.001); }
             }
-        } else {
-            obj.visible = false;
         }
     }
-
-    if let Some(obj) = c.get_game_object_mut("zero_g_timer") {
-        if zero_g_timer > 0 {
-            obj.visible = true;
-            if dirty_zero_g {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: flip_timer_img(zero_g_timer, ZERO_G_DURATION).into(),
-                    color: None,
-                });
+    if dirty_score_x2 {
+        if let Some(obj) = c.get_game_object_mut("score_x2_icon") {
+            if score_x2_timer > 0 {
+                obj.visible = true;
+                if prev_score_x2_timer == 0 {
+                    if let Some(anim) = &mut obj.animated_sprite {
+                        anim.reset();
+                        anim.set_fps(12.0);
+                    }
+                }
+            } else {
+                obj.visible = false;
+                if let Some(anim) = &mut obj.animated_sprite { anim.set_fps(0.001); }
             }
-        } else {
-            obj.visible = false;
-        }
-    }
-
-    if let Some(obj) = c.get_game_object_mut("score_x2_timer") {
-        if score_x2_timer > 0 {
-            obj.visible = true;
-            if dirty_score_x2 {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: score_x2_timer_img(score_x2_timer, SCORE_X2_DURATION).into(),
-                    color: None,
-                });
-            }
-        } else {
-            obj.visible = false;
         }
     }
 
@@ -267,5 +271,32 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Hide combo flash periodically
     if ticks % 40 == 0 {
         c.run(Action::Hide { target: Target::name("combo_flash") });
+    }
+
+    // Zero-G overlay: kept invisible (ZeroG effect shown via ability icon only).
+    if let Some(obj) = c.get_game_object_mut("zero_g_overlay") {
+        obj.visible = false;
+    }
+
+    // Space rip overlay: looping background effect for the full flip duration.
+    // Layer 3 keeps it behind all gameplay objects.
+    if dirty_flip {
+        if let Some(obj) = c.get_game_object_mut("space_rip_overlay") {
+            if flip_timer > 0 {
+                obj.visible = true;
+                if prev_flip_timer == 0 {
+                    // Rising edge: start the loop from frame 0.
+                    if let Some(anim) = &mut obj.animated_sprite {
+                        anim.reset();
+                        anim.set_fps(16.0);
+                    }
+                }
+            } else {
+                obj.visible = false;
+                if let Some(anim) = &mut obj.animated_sprite {
+                    anim.set_fps(0.001);
+                }
+            }
+        }
     }
 }

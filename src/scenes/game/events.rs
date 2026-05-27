@@ -39,7 +39,13 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         if !prev.is_empty() {
             let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
             if let Some(obj) = c.get_game_object_mut(&prev) {
-                if !asteroid_mode || is_special_hook_obj(obj) {
+                if is_special_hook_obj(obj) {
+                    // Pause the green artifact gif at frame 0.
+                    if let Some(sprite) = &mut obj.animated_sprite {
+                        sprite.reset();
+                        sprite.set_fps(0.001);
+                    }
+                } else if !asteroid_mode {
                     let (r, g, b) = hook_base_for_obj(obj, zone_idx);
                     obj.set_image(hook_img(r, g, b));
                 }
@@ -70,7 +76,9 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
 
         let nearest = if let Some(player_obj) = c.get_game_object("player") {
             let reach_mult = if s.boss_active { 1.45 } else { 1.0 };
-            c.objects_in_radius(player_obj, ROPE_LEN_MAX * reach_mult * EXTENDED_HOOK_REACH_MULT)
+            let normal_reach  = ROPE_LEN_MAX * reach_mult;
+            let extended_reach = normal_reach * EXTENDED_HOOK_REACH_MULT;
+            c.objects_in_radius(player_obj, extended_reach)
                 .into_iter()
                 .filter(|o| o.tags.iter().any(|t| t == "hook"))
                 .map(|o| {
@@ -86,9 +94,13 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     } else {
                         player_d2
                     };
-                    let is_special = o.tags.iter().any(|t| t == SPECIAL_HOOK_TAG);
+                    let is_special  = o.tags.iter().any(|t| t == SPECIAL_HOOK_TAG);
                     let is_extended = o.tags.iter().any(|t| t == EXTENDED_HOOK_TAG);
                     (o.id.clone(), hcx, hcy, player_d2, cursor_d2, is_special, is_extended)
+                })
+                // Filter: non-extended hooks are only grabbable within normal reach.
+                .filter(|(_, _, _, player_d2, _, _, is_extended)| {
+                    *is_extended || *player_d2 <= normal_reach * normal_reach
                 })
                 .min_by(|a, b| {
                     if mouse_target.is_some() {
@@ -151,7 +163,14 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 }
             }
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
-                if asteroid_mode && !is_special_hook_obj(obj) {
+                if is_special_hook_obj(obj) {
+                    // Resume the green artifact gif from frame 0 at full fps, no glow.
+                    if let Some(sprite) = &mut obj.animated_sprite {
+                        sprite.reset();
+                        sprite.set_fps(HOOK_ARTIFACT_FPS);
+                    }
+                    obj.clear_glow();
+                } else if asteroid_mode {
                     // Proximity intro is done (hook frozen at frame 4); resume at full speed.
                     if let Some(sprite) = &mut obj.animated_sprite {
                         sprite.set_fps(HOOK_ARTIFACT_FPS);

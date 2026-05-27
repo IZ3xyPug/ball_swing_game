@@ -75,7 +75,7 @@ fn cached_space_coin_static(kind: u8, radius: f32) -> Image {
         }
     }
 
-    let built = load_image_sized(catcoin_image_path(kind), d as f32, d as f32);
+    let built = load_image_sized_path(catcoin_image_path(kind), d as f32, d as f32);
     cache.lock().unwrap().insert(key, built.clone());
     built
 }
@@ -314,7 +314,6 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     {
         let (hooked, gdir) = { let s = st.lock().unwrap(); (s.hooked, s.gravity_dir) };
         if hooked {
-            if let Some(g) = c.get_grapple_mut("player") { g.damping = 0.0; }
             if let Some(obj) = c.get_game_object_mut("player") {
                 obj.gravity = 0.0;                    // no pendulum: constant-rate swing
                 obj.gravity_target = None;            // no planet pull while on rope
@@ -693,7 +692,6 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
     c.set_var("space_exit_zoom_reset", true);
 
     // Restore normal swing damping
-    if let Some(g) = c.get_grapple_mut("player") { g.damping = 0.001; }
 
     // Restore normal gravity; clear space-planet attraction, snap X to entry position
     {

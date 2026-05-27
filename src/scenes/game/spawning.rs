@@ -173,9 +173,8 @@ pub fn spawn_debug_special_hook(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool 
 
     if let Some(obj) = c.get_game_object_mut(&id) {
         obj.visible = true;
-        obj.position = (hx - HOOK_R, hy - HOOK_R);
-        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-        obj.animated_sprite = None;
+        obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
+        obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
         obj.gravity = 0.0;
         obj.momentum = (0.0, 0.0);
         obj.rotation_momentum = 0.0;
@@ -183,7 +182,7 @@ pub fn spawn_debug_special_hook(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool 
         obj.clear_glow();
         obj.tags.retain(|t| t != SPECIAL_HOOK_TAG);
         obj.tags.push(SPECIAL_HOOK_TAG.into());
-        obj.set_image(hook_img(C_HOOK_SPECIAL.0, C_HOOK_SPECIAL.1, C_HOOK_SPECIAL.2));
+        obj.set_animation(hook_artifact_green_anim());
         c.set_var("special_hook_last_x", Value::F32(hx));
         true
     } else {
@@ -289,7 +288,26 @@ pub fn tick_spawning(
     }
     spawn_rocket_pads(c, st);
     spawn_main_asteroids(c, st);
+    // Auto-comet: counts down and fires with 50% chance.
+    spawn_auto_comet(c, st);
     tick_spawn_animations(c, st);
+}
+
+/// Automatically attempt to spawn a comet on a timer. 50% chance each interval.
+fn spawn_auto_comet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    {
+        let mut s = st.lock().unwrap();
+        if s.comet_spawn_timer > 0 {
+            s.comet_spawn_timer -= 1;
+            return;
+        }
+        // Reset timer for next interval (add some jitter via lcg).
+        let jitter = lcg_range(&mut s.seed, 0.0, COMET_SPAWN_INTERVAL as f32 * 0.5) as u32;
+        s.comet_spawn_timer = COMET_SPAWN_INTERVAL + jitter;
+        // 50% chance to actually fire.
+        if lcg(&mut s.seed) >= 0.5 { return; }
+    }
+    spawn_debug_comet(c, st);
 }
 
 fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -538,7 +556,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             c.set_var("extended_hook_last_x", Value::F32(hx));
         }
 
-        let hook_half = if asteroid_mode && !is_special_hook {
+        let hook_half = if asteroid_mode || is_special_hook {
             HOOK_ARTIFACT_R
         } else {
             HOOK_R
@@ -590,11 +608,17 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.momentum = (0.0, 0.0);
                 obj.rotation_momentum = 0.0;
                 obj.collision_mode = CollisionMode::NonPlatform;
+            } else if is_special_hook {
+                // Green special hook — uses the green artifact gif.
+                obj.tags.push(SPECIAL_HOOK_TAG.into());
+                obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                obj.set_animation(hook_artifact_green_anim());
+                obj.gravity = 0.0;
+                obj.momentum = (0.0, 0.0);
+                obj.rotation_momentum = 0.0;
+                obj.collision_mode = CollisionMode::NonPlatform;
             } else {
                 obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-                if is_special_hook {
-                    obj.tags.push(SPECIAL_HOOK_TAG.into());
-                }
                 if is_extended_hook {
                     obj.tags.push(EXTENDED_HOOK_TAG.into());
                 }
@@ -1310,12 +1334,8 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let gap = lcg_range(&mut s.seed, TURRET_GAP_MIN, TURRET_GAP_MAX);
         let x = s.turret_rightmost + gap;
-        // Dual Y-band: 100–250 (top) or 1400–1850 (bottom).
-        let y = if lcg(&mut s.seed) < 0.5 {
-            lcg_range(&mut s.seed, 100.0, 250.0)
-        } else {
-            lcg_range(&mut s.seed, 1400.0, 1850.0)
-        };
+        // Spawn 200y above the last hook position (clamped to screen bounds).
+        let y = (s.last_hook_y - 200.0).clamp(50.0, VH - 50.0);
         let Some(id) = s.turret_free.pop() else { break; };
         s.turret_live.push(id.clone());
         s.turret_rightmost = x;

@@ -105,13 +105,13 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
     let bytes = include_bytes!("../../../assets/techbouncernew.gif");
     let cursor = std::io::Cursor::new(bytes.as_slice());
     let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) else {
-        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+        return vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
     };
 
     let (gif_w, gif_h) = decoder.dimensions();
     let mut composed = image::RgbaImage::from_pixel(gif_w.max(1), gif_h.max(1), image::Rgba([0, 0, 0, 0]));
     let Ok(frames) = decoder.into_frames().collect_frames() else {
-        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+        return vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
     };
 
     let out_w = PAD_W.max(1.0).round() as u32;
@@ -202,7 +202,7 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
     }
 
     if out.is_empty() {
-        vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
+        vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
     } else {
         out
     }
@@ -632,6 +632,90 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     };
     coin_magnet_radius.visible = false;
 
+    // ── Fullscreen effect overlays (shown/hidden by tick_hud) ────────────
+    // zero_g_overlay: kept invisible — its gif is shown via the ability icon HUD.
+    let mut zero_g_overlay = GameObject::new_rect(
+        ctx, "zero_g_overlay".into(),
+        None::<Image>,
+        (256.0, 256.0),
+        (VW * 0.5 - 128.0, VH * 0.5 - 128.0),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    zero_g_overlay.ignore_zoom = true;
+    zero_g_overlay.visible = false;
+    zero_g_overlay.layer = 50;
+
+    // space_rip overlay: 512×1024 virtual px, centred on screen.
+    // AnimatedSprite::new resizes frames correctly — no full-screen stretch.
+    // Layer 3 keeps it behind all gameplay objects.
+    let mut space_rip_overlay = GameObject::new_rect(
+        ctx, "space_rip_overlay".into(),
+        None::<Image>,
+        (super::helpers::SPACE_RIP_W, super::helpers::SPACE_RIP_H),
+        (VW * 0.5 - super::helpers::SPACE_RIP_W * 0.5, VH * 0.5 - super::helpers::SPACE_RIP_H * 0.5),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    space_rip_overlay.ignore_zoom = true;
+    space_rip_overlay.visible = false;
+    space_rip_overlay.layer = 3; // Behind all gameplay (player=42), above plain bg (0)
+
+    // Animated catcoingold icon overlaid on the coin counter slot.
+    // coin_counter is at (26, 24), icon slot is at (12, 28) within it → abs (38, 52).
+    let mut coin_icon_anim = GameObject::new_rect(
+        ctx, "coin_icon_anim".into(),
+        None::<Image>,
+        (112.0, 112.0), (38.0, 52.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    coin_icon_anim.ignore_zoom = true;
+    coin_icon_anim.layer = 101;
+    coin_icon_anim.visible = false;
+
+    // ── Ability icons (shown to the left of the scoreboard) ──────────────
+    // All ignore_zoom=true so they sit in screen-space like the rest of the HUD.
+    const ICON_W: f32 = 120.0;
+    const ICON_H: f32 = 120.0;
+    const ICON_Y: f32 = 30.0;
+    // Stack icons rightmost-first, each 130px apart, 20px left of the score_counter.
+    // score_counter is at (VW - 450.0, 40.0), so first icon right edge ≈ VW - 470.
+    const ICON_X0: f32 = VW - 450.0 - ICON_W - 30.0; // flip (outermost)
+    const ICON_X1: f32 = ICON_X0 - ICON_W - 10.0;    // zero_g
+    const ICON_X2: f32 = ICON_X1 - ICON_W - 10.0;    // score_x2
+
+    let mut flip_icon = GameObject::new_rect(
+        ctx, "flip_icon".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (ICON_W, ICON_H), 0.0),
+            image: flip_image_cached(),
+            color: None,
+        }),
+        (ICON_W, ICON_H), (ICON_X0, ICON_Y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    flip_icon.ignore_zoom = true;
+    flip_icon.visible = false;
+    flip_icon.layer = 100;
+
+    let mut zero_g_icon = GameObject::new_rect(
+        ctx, "zero_g_icon".into(),
+        None::<Image>,
+        (ICON_W, ICON_H), (ICON_X1, ICON_Y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    zero_g_icon.ignore_zoom = true;
+    zero_g_icon.visible = false;
+    zero_g_icon.layer = 100;
+
+    let mut score_x2_icon = GameObject::new_rect(
+        ctx, "score_x2_icon".into(),
+        None::<Image>,
+        (ICON_W, ICON_H), (ICON_X2, ICON_Y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    score_x2_icon.ignore_zoom = true;
+    score_x2_icon.visible = false;
+    score_x2_icon.layer = 100;
+
     // ── Starter hooks ────────────────────────────────────────────────────
     let starter_hooks: &[(f32, f32)] = &[
         (START_HOOK_X,                              START_HOOK_Y),
@@ -665,7 +749,13 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object(GOLD_MASTER_TOAST_TITLE_NAME, achievement_toast_title)
         .with_object(GOLD_MASTER_TOAST_DESC_NAME, achievement_toast_desc)
         .with_object(GOLD_MASTER_TOAST_CHECK_NAME, achievement_toast_check)
-        .with_object("coin_magnet_radius", coin_magnet_radius);
+        .with_object("coin_magnet_radius", coin_magnet_radius)
+        .with_object("zero_g_overlay",    zero_g_overlay)
+        .with_object("space_rip_overlay", space_rip_overlay)
+        .with_object("coin_icon_anim",    coin_icon_anim)
+        .with_object("flip_icon",         flip_icon)
+        .with_object("zero_g_icon",       zero_g_icon)
+        .with_object("score_x2_icon",     score_x2_icon);
 
     // ── Asteroid animation template (shared by hook pool and asteroid pool) ───
     // Decode once here; hook pool and space_asteroid pool both clone from this.
@@ -729,7 +819,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let tech_bounce_static_img = tech_bounce_anim_frames
         .first()
         .cloned()
-        .unwrap_or_else(|| load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
+        .unwrap_or_else(|| load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
     let tech_bounce_anim_frames_flipped: Vec<Image> = tech_bounce_anim_frames.iter()
         .map(|img| flip_vertical(img.clone()))
         .collect();
@@ -748,7 +838,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let pad_thruster_static_img = pad_thruster_anim_template
         .as_ref()
         .map(|a| a.get_current_image())
-        .unwrap_or_else(|| load_image_sized(ASSET_THRUSTER1_GIF, PAD_THRUSTER_W, PAD_THRUSTER_H));
+        .unwrap_or_else(|| load_image_sized_path(ASSET_THRUSTER1_GIF, PAD_THRUSTER_W, PAD_THRUSTER_H));
     let mut pad_free: Vec<String> = Vec::new();
     for i in 0..PAD_POOL_SIZE {
         let id = format!("pad_{i}");
@@ -791,7 +881,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Coin pool ────────────────────────────────────────────────────────
-    let coin_static_sprite = load_image_sized(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
+    let coin_static_sprite = load_image_sized_path(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
     let coin_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/catcoingold.gif"),
         (COIN_R * 2.0, COIN_R * 2.0),
@@ -824,7 +914,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Score x2 pool ────────────────────────────────────────────────────
-    let score_x2_sprite = load_image_sized(ASSET_SCORE_X2_GIF, SCORE_X2_W, SCORE_X2_H);
+    let score_x2_sprite = load_image_sized_path(ASSET_SCORE_X2_GIF, SCORE_X2_W, SCORE_X2_H);
     let mut score_x2_free: Vec<String> = Vec::new();
     for i in 0..SCORE_X2_POOL_SIZE {
         let id = format!("score_x2_{i}");
@@ -839,10 +929,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Zero-g pool ──────────────────────────────────────────────────────
+    let zero_g_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/ZeroG.gif"),
+        (ZERO_G_W, ZERO_G_H),
+        8.0,
+    ).ok();
     let mut zero_g_free: Vec<String> = Vec::new();
     for i in 0..ZERO_G_POOL_SIZE {
         let id = format!("zero_g_{i}");
         let mut obj = make_zero_g(ctx, &id, -3875.0, -3875.0);
+        if let Some(anim) = &zero_g_anim_template {
+            obj.set_animation(anim.clone());
+        }
         obj.visible = false;
         zero_g_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -947,7 +1045,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space coin pool ───────────────────────────────────────────────────
-    let space_cat_static = load_image_sized(
+    let space_cat_static = load_image_sized_path(
         concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
         SPACE_COIN_R * 2.0,
         SPACE_COIN_R * 2.0,
@@ -978,7 +1076,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space blue-coin pool ─────────────────────────────────────────────
-    let space_cat_blue_static = load_image_sized(
+    let space_cat_blue_static = load_image_sized_path(
         concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
@@ -1061,7 +1159,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space red-coin pool ───────────────────────────────────────────────
-    let space_cat_red_static = load_image_sized(
+    let space_cat_red_static = load_image_sized_path(
         concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
