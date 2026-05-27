@@ -31,8 +31,9 @@
             if s.dead || s.hooked { return; }
 
             // ── Find nearest hook via objects_in_radius ────────────
+            let reach_mult = if s.boss_active { 1.45 } else { 1.0 };
             let nearest = if let Some(player_obj) = c.get_game_object("player") {
-                c.objects_in_radius(player_obj, ROPE_LEN_MAX)
+                c.objects_in_radius(player_obj, ROPE_LEN_MAX * reach_mult)
                     .into_iter()
                     .filter(|o| o.tags.iter().any(|t| t == "hook"))
                     .map(|o| {
@@ -67,7 +68,7 @@
                     drop(s);
 
                     // Swing sound
-                    c.play_sound_with(ASSET_SWOOSH_SFX, SoundOptions::new().volume(3.0));
+                    c.play_sound_with(ASSET_SWOOSH_SFX, SoundOptions::new().volume(sfx_vol(c, 3.0)));
 
                     // Highlight active hook
                     if let Some(obj) = c.get_game_object_mut(&hook_id) {
@@ -77,13 +78,13 @@
                             color: None,
                         });
                         obj.set_glow(GlowConfig { color: Color(220, 80, 30, 200), width: 8.0 });
-                        // Transfer player momentum to asteroid on grab; smaller asteroids react more.
-                        if hook_id.starts_with("space_asteroid_") {
-                            let factor = ASTEROID_HOOK_IMPULSE_FACTOR
-                                * (SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(1.0));
-                            obj.momentum.0 += pvx * factor;
-                            obj.momentum.1 += pvy * factor;
-                        }
+                        // Transfer player momentum to any grabbed hook/asteroid.
+                        // Normalise by object size so smaller objects react more visibly:
+                        // size at SPACE_ASTEROID_SIZE_MIN → factor = 1.0; larger → smaller factor.
+                        let size_norm = SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(SPACE_ASTEROID_SIZE_MIN);
+                        let factor = ASTEROID_HOOK_IMPULSE_FACTOR * size_norm;
+                        obj.momentum.0 += pvx * factor;
+                        obj.momentum.1 += pvy * factor;
                     }
                     // Track glow flash for hook
                     {

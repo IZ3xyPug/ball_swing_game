@@ -17,6 +17,24 @@ pub fn tick_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_asteroid_asteroid_collision(c, st);
     tick_asteroid_pad_bounce(c, st);
     tick_asteroid_spinner_collision(c, st);
+    tick_hook_player_impact(c, st);
+    tick_freeze_hooks(c, st);
+    tick_comet_warnings(c, st);
+    tick_move_comets(c, st);
+    tick_comet_player_collision(c, st);
+}
+
+/// Zero out momentum on all live hooks every tick so they are completely immovable.
+fn tick_freeze_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    if !asteroid_mode { return; }
+    let live_hooks = st.lock().unwrap().live_hooks.clone();
+    for name in &live_hooks {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.momentum = (0.0, 0.0);
+            obj.rotation_momentum = 0.0;
+        }
+    }
 }
 
 /// Sets state fields for unhook + queues canvas ops (rope hide, gravity restore).
@@ -48,9 +66,9 @@ fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
         let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
         if let Some(hobj) = c.get_game_object_mut(&ops.prev_hook) {
             if asteroid_mode {
-                hobj.set_image(hook_asteroid_img_for_id(&ops.prev_hook, AsteroidHookState::Base));
+                if let Some(sprite) = &mut hobj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
             } else {
-                let (r, g, b) = hook_base_for_zone(ops.zone_idx);
+                let (r, g, b) = hook_base_for_obj(hobj, ops.zone_idx);
                 hobj.set_image(hook_img(r, g, b));
             }
             hobj.clear_glow();
@@ -229,6 +247,10 @@ fn tick_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.pad_bounce_anim.push((pad_name.clone(), 1, 0));
         drop(s);
 
+        // Signal cap_momentum_and_write_back to skip capping this frame so the
+        // full PAD_BOUNCE_VY is preserved regardless of current speed.
+        c.set_var("post_bounce", true);
+
         if let Some(ref ops) = unhook_ops {
             apply_unhook(c, ops);
         }
@@ -310,7 +332,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     for name in live {
         // Circle-circle overlap: treat each asteroid as a circle of radius = half its size.
-        let hit_info: Option<(f32, f32)> = {
+        let hit_info: Option<(f32, f32, f32, f32)> = {
             if let Some(obj) = c.get_game_object(&name) {
                 let ax = obj.position.0 + obj.size.0 * 0.5;
                 let ay = obj.position.1 + obj.size.1 * 0.5;
@@ -322,7 +344,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 if dist2 < min_dist * min_dist {
                     let dist = dist2.sqrt().max(0.001);
                     let push = min_dist - dist;
-                    Some((dx / dist * push, dy / dist * push))
+                    Some((dx / dist * push, dy / dist * push, obj.momentum.0, obj.momentum.1))
                 } else {
                     None
                 }
@@ -331,7 +353,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         };
 
-        if let Some((push_x, push_y)) = hit_info {
+        if let Some((push_x, push_y, ast_vx, ast_vy)) = hit_info {
             // Push player out of overlap.
             s.px += push_x;
             s.py += push_y;
@@ -340,12 +362,20 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let nx = push_x / push_len;
             let ny = push_y / push_len;
 
-            // Strip inward velocity component (elastic deflect).
-            let inward = -(s.vx * nx + s.vy * ny);
-            if inward > 0.0 {
-                s.vx += nx * inward;
-                s.vy += ny * inward;
-            }
+            // Strong impact knockback based on relative normal speed and asteroid momentum.
+            // n points from asteroid center toward player, so negative relative normal means
+            // the asteroid is closing into the player.
+            let rel_n = (s.vx - ast_vx) * nx + (s.vy - ast_vy) * ny;
+            let closing_speed = (-rel_n).max(0.0);
+            let knock_mag = (ASTEROID_PLAYER_KNOCKBACK_BASE
+                + closing_speed * ASTEROID_PLAYER_KNOCKBACK_IMPACT)
+                .min(ASTEROID_PLAYER_KNOCKBACK_MAX);
+
+            // Ensure a minimum outward normal speed, then carry part of asteroid velocity.
+            let player_out_n = s.vx * nx + s.vy * ny;
+            let need_outward = (knock_mag - player_out_n).max(0.0);
+            s.vx += nx * need_outward + ast_vx * ASTEROID_PLAYER_KNOCKBACK_CARRY;
+            s.vy += ny * need_outward + ast_vy * ASTEROID_PLAYER_KNOCKBACK_CARRY;
 
             // Tangential component of player velocity drives asteroid spin.
             let tx = -ny;
@@ -374,10 +404,11 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // so collisions are detected and resolved the moment any two circles overlap.
 
 fn tick_asteroid_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let live = {
+    let ast_live = {
         let s = st.lock().unwrap();
         s.space_asteroid_live.clone()
     };
+    let live = ast_live;
     if live.len() < 2 { return; }
 
     // Snapshot: all values needed for contact math, read before any mutation.
@@ -465,10 +496,11 @@ fn tick_asteroid_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // Each live space asteroid is treated as a circle; bounce it off any pad top/bottom.
 
 pub fn tick_asteroid_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let s = st.lock().unwrap();
-    let pads    = s.pad_live.clone();
-    let asteroids = s.space_asteroid_live.clone();
-    drop(s);
+    let (pads, ast_live) = {
+        let s = st.lock().unwrap();
+        (s.pad_live.clone(), s.space_asteroid_live.clone())
+    };
+    let asteroids = ast_live;
 
     for ast_name in &asteroids {
         let snap = {
@@ -516,11 +548,12 @@ pub fn tick_asteroid_pad_bounce(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // Each live asteroid treated as a circle; deflect off rotating spinner OBBs.
 
 pub fn tick_asteroid_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let s = st.lock().unwrap();
-    if !s.spinners_enabled { return; }
-    let spinners  = s.spinner_live.clone();
-    let asteroids = s.space_asteroid_live.clone();
-    drop(s);
+    let (spinners_enabled, spinners, ast_live) = {
+        let s = st.lock().unwrap();
+        (s.spinners_enabled, s.spinner_live.clone(), s.space_asteroid_live.clone())
+    };
+    if !spinners_enabled { return; }
+    let asteroids = ast_live;
 
     for ast_name in &asteroids {
         let snap = {
@@ -559,6 +592,316 @@ pub fn tick_asteroid_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
                 break; // one spinner collision per asteroid per tick
             }
+        }
+    }
+}
+
+// ── Asteroid-hook / player collision ─────────────────────────────────────────
+// In asteroid-hook mode the hooks are solid obstacles.  When the player body
+// overlaps a hook circle we push the player out and nudge the hook away —
+// identical treatment to the floating asteroid gifs.
+// Hooks the player is currently grappled to are skipped so rope physics isn't
+// disturbed while swinging.
+
+pub fn tick_hook_player_impact(_c: &mut Canvas, _st: &Arc<Mutex<State>>) {
+    // Grab hooks are non-collidable — player and all objects phase through them.
+}
+
+// ── Comet warning tick ──────────────────────────────────────────────────
+// Advances warning animations; when a warning expires it activates its comet.
+
+fn tick_comet_warnings(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if s.comet_warn_live.is_empty() { return; }
+
+    let player_px  = s.px;
+    let player_py  = s.py;
+    let player_vx  = s.vx;
+    let player_vy  = s.vy;
+    let gravity_dir = s.gravity_dir; // 1.0 = normal, -1.0 = flipped
+
+    // Advance timers.
+    for w in &mut s.comet_warn_live {
+        w.timer += 1;
+    }
+
+    // Separate finished warnings from in-progress.
+    let mut to_spawn: Vec<CometWarn> = Vec::new();
+    for w in &s.comet_warn_live {
+        if w.timer >= COMET_WARN_TOTAL {
+            to_spawn.push(w.clone());
+        }
+    }
+    s.comet_warn_live.retain(|w| w.timer < COMET_WARN_TOTAL);
+
+    // Snapshot still-active warnings for visual updates.
+    let active: Vec<CometWarn> = s.comet_warn_live.clone();
+    drop(s);
+
+    // Camera bounds in world space — used to keep warnings visible on screen.
+    let (cam_left, cam_top, cam_zoom) = if let Some(cam) = c.camera() {
+        (cam.position.0, cam.position.1, cam.zoom.max(0.1))
+    } else {
+        (0.0, 0.0, 1.0)
+    };
+    let view_w = VW / cam_zoom;
+    let view_h = VH / cam_zoom;
+    let margin = 80.0;
+
+    /// Compute the (ndx, ndy) incoming direction and clamp the warning center
+    /// to the visible viewport. Returns (ndx, ndy, cx, cy).
+    fn warn_dir_and_center(
+        h_offset: f32, v_offset: f32, gravity_dir: f32,
+        player_px: f32, player_py: f32,
+        cam_left: f32, cam_top: f32, view_w: f32, view_h: f32,
+        w_scaled: f32, h_scaled: f32, margin: f32,
+    ) -> (f32, f32, f32, f32) {
+        // Comet always comes from "away from the play floor" — flip dir_dy with gravity.
+        let dir_dx = h_offset;
+        let dir_dy = -v_offset * gravity_dir; // negative = above in normal gravity
+        let dir_len = (dir_dx * dir_dx + dir_dy * dir_dy).sqrt().max(1.0);
+        let ndx = dir_dx / dir_len;
+        let ndy = dir_dy / dir_len;
+
+        let cam_right  = cam_left + view_w;
+        let cam_bottom = cam_top  + view_h;
+        let cx = (player_px + ndx * view_w * 0.45)
+            .clamp(cam_left   + margin + w_scaled * 0.5, cam_right  - margin - w_scaled * 0.5);
+        let cy = (player_py + ndy * view_h * 0.45)
+            .clamp(cam_top    + margin + h_scaled * 0.5, cam_bottom - margin - h_scaled * 0.5);
+        (ndx, ndy, cx, cy)
+    }
+
+    // Update in-progress warnings: follow player, scale during phase-2 intro.
+    for w in &active {
+        let img   = warn_image_for_timer(w.timer);
+        let scale = warn_size_scale(w.timer);
+        let w_scaled = COMET_WARN_W * scale;
+        let h_scaled = COMET_WARN_H * scale;
+        let (_, _, cx, cy) = warn_dir_and_center(
+            w.h_offset, w.v_offset, gravity_dir,
+            player_px, player_py,
+            cam_left, cam_top, view_w, view_h,
+            w_scaled, h_scaled, margin,
+        );
+        if let Some(obj) = c.get_game_object_mut(&w.warn_obj_id) {
+            obj.set_image(img);
+            obj.size     = (w_scaled, h_scaled);
+            obj.position = (cx - w_scaled * 0.5, cy - h_scaled * 0.5);
+            // Always keep warning upright regardless of gravity flip.
+            obj.rotation = 0.0;
+        }
+    }
+
+    // Spawn comets whose warning has finished.
+    // Derive spawn position from the ACTUAL warning center (same projection + clamp the
+    // warning display uses), then step further past it so the comet is off-screen.
+    // This guarantees the comet enters from exactly where the exclamation mark was.
+    for w in &to_spawn {
+        if let Some(obj) = c.get_game_object_mut(&w.warn_obj_id) {
+            obj.visible  = false;
+            obj.position = (-9500.0, -9500.0);
+        }
+
+        // Get the warning center the same way the display loop does (scale=1.0 at expiry).
+        let (ndx, ndy, warn_cx, warn_cy) = warn_dir_and_center(
+            w.h_offset, w.v_offset, gravity_dir,
+            player_px, player_py,
+            cam_left, cam_top, view_w, view_h,
+            COMET_WARN_W, COMET_WARN_H, margin,
+        );
+
+        // Direction from player to the ACTUAL (clamped) warning center.
+        // Using this instead of raw (ndx,ndy) ensures the comet lines up with the indicator
+        // even after viewport clamping changes the displayed position.
+        let adx = warn_cx - player_px;
+        let ady = warn_cy - player_py;
+        let alen = (adx * adx + ady * ady).sqrt().max(1.0);
+        let andx = adx / alen;
+        let andy = ady / alen;
+
+        // Step back from the warning center further in the same direction so the comet
+        // starts off-screen. The comet will visually pass over where the indicator was.
+        let backstep = view_w.max(view_h) * 0.4 + COMET_SIZE;
+        let spawn_x = warn_cx + andx * backstep;
+        let spawn_y = warn_cy + andy * backstep;
+        let _ = (ndx, ndy); // direction was only needed for warn_dir_and_center
+
+        // Velocity: aim at a predicted player position to lead the target.
+        // Estimate travel time from spawn to current player, then offset the aim
+        // point by 50% of that time using the player's current velocity.
+        let dx0 = player_px - spawn_x;
+        let dy0 = player_py - spawn_y;
+        let travel_ticks = (dx0 * dx0 + dy0 * dy0).sqrt().max(1.0) / COMET_SPEED;
+        let lead_x = player_px + player_vx * travel_ticks * 0.5;
+        let lead_y = player_py + player_vy * travel_ticks * 0.5;
+        let dx  = lead_x - spawn_x;
+        let dy  = lead_y - spawn_y;
+        let len = (dx * dx + dy * dy).sqrt().max(1.0);
+        let vx  = dx / len * COMET_SPEED;
+        let vy  = dy / len * COMET_SPEED;
+        let rotation = vy.atan2(vx).to_degrees() + 180.0;
+
+        if let Some(obj) = c.get_game_object_mut(&w.comet_id) {
+            obj.set_animation(super::spawning::comet_template());
+            obj.position          = (spawn_x - COMET_SIZE * 0.5, spawn_y - COMET_SIZE * 0.5);
+            obj.size              = (COMET_SIZE, COMET_SIZE);
+            obj.rotation          = rotation;
+            obj.gravity           = 0.0;
+            obj.momentum          = (0.0, 0.0);
+            obj.rotation_momentum = 0.0;
+            obj.collision_mode    = CollisionMode::NonPlatform;
+            obj.visible           = true;
+        }
+        let mut s = st.lock().unwrap();
+        s.warn_free.push(w.warn_obj_id.clone());
+        s.comet_live.push((w.comet_id.clone(), vx, vy, COMET_LIFETIME));
+    }
+}
+
+/// Returns the correct warning image based on elapsed ticks.
+fn warn_image_for_timer(timer: u32) -> Image {
+    if timer < COMET_WARN_P1_END {
+        // Phase 1: fast alternation between dark and light.
+        if (timer / COMET_WARN_ALT) % 2 == 0 { warn_img_dark() } else { warn_img_light() }
+    } else {
+        // Phase 2: light_explode (scaled) → dark_explode → light_explode.
+        let sub = timer - COMET_WARN_P1_END;
+        if sub < COMET_WARN_P2_A {
+            warn_img_light_explode()
+        } else if sub < COMET_WARN_P2_B {
+            warn_img_dark_explode()
+        } else {
+            warn_img_light_explode()
+        }
+    }
+}
+
+/// Returns size scale for the warning indicator.
+/// Only phase-2 intro (first third of P2_A) gets scaled up.
+fn warn_size_scale(timer: u32) -> f32 {
+    if timer < COMET_WARN_P1_END { return 1.0; }
+    let sub = timer - COMET_WARN_P1_END;
+    if sub < COMET_WARN_P2_A {
+        let third = COMET_WARN_P2_A / 3; // ~6 ticks each step
+        if sub < third { 2.0 }
+        else if sub < third * 2 { 1.5 }
+        else { 1.0 }
+    } else {
+        1.0
+    }
+}
+
+// ── Comets movement ───────────────────────────────────────────────────────────
+
+fn tick_move_comets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let move_list: Vec<(String, f32, f32)>;
+    let recycle: Vec<String>;
+    {
+        let mut s = st.lock().unwrap();
+        if s.comet_live.is_empty() { return; }
+
+        let mut mv: Vec<(String, f32, f32)> = Vec::new();
+        let mut rc: Vec<String> = Vec::new();
+        for (name, vx, vy, ttl) in &mut s.comet_live {
+            mv.push((name.clone(), *vx, *vy));
+            if *ttl > 0 { *ttl -= 1; }
+            if *ttl == 0 { rc.push(name.clone()); }
+        }
+        for id in &rc {
+            s.comet_live.retain(|(n, _, _, _)| n != id);
+            s.comet_free.push(id.clone());
+        }
+        move_list = mv;
+        recycle = rc;
+    }
+
+    for (name, vx, vy) in &move_list {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position.0 += vx;
+            obj.position.1 += vy;
+        }
+    }
+
+    for id in &recycle {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = false;
+            obj.position = (-9000.0, -9000.0);
+        }
+    }
+}
+
+// ── Comet → player collision ──────────────────────────────────────────────────
+
+fn tick_comet_player_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if s.comet_live.is_empty() || s.dead { return; }
+
+    let px = s.px;
+    let py = s.py;
+    let hit_r = PLAYER_R + COMET_HIT_RADIUS;
+
+    let live_snapshot: Vec<(String, f32, f32)> = s.comet_live
+        .iter()
+        .map(|(n, vx, vy, _)| (n.clone(), *vx, *vy))
+        .collect();
+
+    let mut hit_ids: Vec<(String, f32, f32)> = Vec::new(); // (id, vx, vy)
+    for (name, vx, vy) in &live_snapshot {
+        if let Some(obj) = c.get_game_object(name) {
+            let cx = obj.position.0 + COMET_SIZE * 0.5;
+            let cy = obj.position.1 + COMET_SIZE * 0.5;
+            let dx = px - cx;
+            let dy = py - cy;
+            if dx * dx + dy * dy < hit_r * hit_r {
+                hit_ids.push((name.clone(), *vx, *vy));
+            }
+        }
+    }
+
+    if hit_ids.is_empty() { return; }
+
+    // Recycle hit comets.
+    for (id, _, _) in &hit_ids {
+        s.comet_live.retain(|(n, _, _, _)| n != id);
+        s.comet_free.push(id.clone());
+    }
+
+    // Use the first hit comet's velocity direction for knockback.
+    let (_, kvx, kvy) = &hit_ids[0];
+    let klen = (kvx * kvx + kvy * kvy).sqrt().max(1.0);
+    let nx = kvx / klen;
+    let ny = kvy / klen;
+    let kbx = nx * COMET_KNOCKBACK;
+    let kby = ny * COMET_KNOCKBACK;
+
+    s.vx = kbx;
+    s.vy = kby;
+
+    let was_hooked = s.hooked;
+    let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+    let gdir = s.gravity_dir;
+    if was_hooked {
+        s.hooked = false;
+        s.active_hook = String::new();
+    }
+    drop(s);
+
+    if was_hooked {
+        c.run(Action::Hide { target: Target::name("rope") });
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.gravity = GRAVITY * gravity_scale * gdir;
+        }
+    }
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.momentum = (kbx, kby);
+    }
+
+    // Hide recycled comets.
+    for (id, _, _) in &hit_ids {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = false;
+            obj.position = (-9000.0, -9000.0);
         }
     }
 }

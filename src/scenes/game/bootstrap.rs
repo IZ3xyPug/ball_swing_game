@@ -1,5 +1,8 @@
 use quartz::*;
 use image::{AnimationDecoder, ImageDecoder};
+use std::sync::OnceLock;
+
+use crate::achievements::*;
 
 /// Decode a GIF from bytes, tint each frame with a brownish-red colour shift,
 /// and return it as an `AnimatedSprite` using `from_frames`.
@@ -13,9 +16,9 @@ fn tint_asteroid_gif_brownish_red(bytes: &'static [u8], size: (f32, f32), fps: f
             let mut img = f.into_buffer();
             for px in img.pixels_mut() {
                 if px[3] == 0 { continue; }
-                let r = (px[0] as f32 * 0.82 + 18.0).min(255.0) as u8;
-                let g = (px[1] as f32 * 0.42).max(0.0) as u8;
-                let b = (px[2] as f32 * 0.34).max(0.0) as u8;
+                let r = (px[0] as f32 * 0.85 + 28.0).min(255.0) as u8;
+                let g = (px[1] as f32 * 0.35).max(0.0) as u8;
+                let b = (px[2] as f32 * 0.12).max(0.0) as u8;
                 px[0] = r; px[1] = g; px[2] = b;
             }
             img
@@ -23,6 +26,19 @@ fn tint_asteroid_gif_brownish_red(bytes: &'static [u8], size: (f32, f32), fps: f
         .collect();
     if frames.is_empty() { return None; }
     Some(AnimatedSprite::from_frames(frames, size, fps))
+}
+
+/// Returns the brownish-red asteroid animation template.
+/// The GIF is decoded and tinted once on first call; subsequent calls clone the cached result.
+pub fn hook_asteroid_anim_for_spawn() -> Option<AnimatedSprite> {
+    static CACHED: OnceLock<Option<AnimatedSprite>> = OnceLock::new();
+    CACHED.get_or_init(|| {
+        tint_asteroid_gif_brownish_red(
+            include_bytes!("../../../assets/asteroid.gif"),
+            (crate::constants::SPACE_ASTEROID_SIZE_MIN, crate::constants::SPACE_ASTEROID_SIZE_MIN),
+            8.0,
+        )
+    }).clone()
 }
 
 use crate::constants::*;
@@ -78,19 +94,26 @@ pub struct PoolSets {
     pub space_red_coin_free: Vec<String>,
     // ── Gravity cannon pool
     pub cannon_free:       Vec<String>,
+    // ── Boss fight
+    pub boss_bolt_free: Vec<String>,
+    pub boss_asteroid_ids: Vec<String>,
+    // ── Comets
+    pub comet_free: Vec<String>,
+    // ── Comet warnings
+    pub warn_free: Vec<String>,
 }
 
 fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
     let bytes = include_bytes!("../../../assets/techbouncernew.gif");
     let cursor = std::io::Cursor::new(bytes.as_slice());
     let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) else {
-        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+        return vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
     };
 
     let (gif_w, gif_h) = decoder.dimensions();
     let mut composed = image::RgbaImage::from_pixel(gif_w.max(1), gif_h.max(1), image::Rgba([0, 0, 0, 0]));
     let Ok(frames) = decoder.into_frames().collect_frames() else {
-        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+        return vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
     };
 
     let out_w = PAD_W.max(1.0).round() as u32;
@@ -181,7 +204,7 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
     }
 
     if out.is_empty() {
-        vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
+        vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
     } else {
         out
     }
@@ -389,6 +412,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     score_counter.ignore_zoom = true;
     score_counter.layer = 100;
+    score_counter.visible = false;
 
     let mut momentum_counter = GameObject::new_rect(
         ctx, "momentum_counter".into(),
@@ -402,6 +426,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     momentum_counter.ignore_zoom = true;
     momentum_counter.layer = 100;
+    momentum_counter.visible = false;
 
     let mut gravity_indicator = GameObject::new_rect(
         ctx, "gravity_indicator".into(),
@@ -415,6 +440,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     gravity_indicator.ignore_zoom = true;
     gravity_indicator.layer = 100;
+    gravity_indicator.visible = false;
 
     let mut y_meter = GameObject::new_rect(
         ctx, "y_meter".into(),
@@ -428,6 +454,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     y_meter.ignore_zoom = true;
     y_meter.layer = 100;
+    y_meter.visible = false;
 
     let mut x_meter = GameObject::new_rect(
         ctx, "x_meter".into(),
@@ -441,6 +468,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     x_meter.ignore_zoom = true;
     x_meter.layer = 100;
+    x_meter.visible = false;
 
     let mut combo_flash = {
         let (w, h) = (420u32, 80u32);
@@ -520,6 +548,61 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     score_x2_timer_hud.ignore_zoom = true;
     score_x2_timer_hud.layer = 100;
 
+    let toast_w = GOLD_MASTER_TOAST_WIDTH;
+    let toast_h = GOLD_MASTER_TOAST_HEIGHT;
+    let mut achievement_toast_panel = {
+        let (w, h) = (toast_w as u32, toast_h as u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
+            img.put_pixel(px, py, image::Rgba([24, 30, 44, if border { 240 } else { 210 }]));
+        }}
+        GameObject::new_rect(
+            ctx, GOLD_MASTER_TOAST_PANEL_NAME.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0),
+                image: img.into(),
+                color: None,
+            }),
+            (w as f32, h as f32),
+            (VW * 0.5 - w as f32 * 0.5, -(h as f32) - 32.0),
+            vec!["hud".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        )
+    };
+    achievement_toast_panel.visible = false;
+    achievement_toast_panel.ignore_zoom = true;
+    achievement_toast_panel.layer = 150;
+
+    let mut achievement_toast_title = GameObject::build(GOLD_MASTER_TOAST_TITLE_NAME)
+        .size(1080.0, 54.0)
+        .position(VW * 0.5 - 520.0, -toast_h - 10.0)
+        .tag("hud")
+        .build(ctx);
+    achievement_toast_title.visible = false;
+    achievement_toast_title.ignore_zoom = true;
+    achievement_toast_title.layer = 151;
+
+    let mut achievement_toast_desc = GameObject::build(GOLD_MASTER_TOAST_DESC_NAME)
+        .size(1080.0, 42.0)
+        .position(VW * 0.5 - 520.0, -toast_h + 46.0)
+        .tag("hud")
+        .build(ctx);
+    achievement_toast_desc.visible = false;
+    achievement_toast_desc.ignore_zoom = true;
+    achievement_toast_desc.layer = 151;
+
+    let mut achievement_toast_check = GameObject::build(GOLD_MASTER_TOAST_CHECK_NAME)
+        .size(120.0, 88.0)
+        .position(VW * 0.5 + 470.0, -toast_h + 34.0)
+        .tag("hud")
+        .build(ctx);
+    achievement_toast_check.visible = false;
+    achievement_toast_check.ignore_zoom = true;
+    achievement_toast_check.layer = 151;
+
     let mut coin_magnet_radius = {
         let d = (COIN_MAGNET_RADIUS * 2.0).round().max(2.0) as u32;
         let mut img = image::RgbaImage::new(d, d);
@@ -551,6 +634,90 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     };
     coin_magnet_radius.visible = false;
 
+    // ── Fullscreen effect overlays (shown/hidden by tick_hud) ────────────
+    // zero_g_overlay: kept invisible — its gif is shown via the ability icon HUD.
+    let mut zero_g_overlay = GameObject::new_rect(
+        ctx, "zero_g_overlay".into(),
+        None::<Image>,
+        (256.0, 256.0),
+        (VW * 0.5 - 128.0, VH * 0.5 - 128.0),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    zero_g_overlay.ignore_zoom = true;
+    zero_g_overlay.visible = false;
+    zero_g_overlay.layer = 50;
+
+    // space_rip overlay: 512×1024 virtual px, centred on screen.
+    // AnimatedSprite::new resizes frames correctly — no full-screen stretch.
+    // Layer 3 keeps it behind all gameplay objects.
+    let mut space_rip_overlay = GameObject::new_rect(
+        ctx, "space_rip_overlay".into(),
+        None::<Image>,
+        (super::helpers::SPACE_RIP_W, super::helpers::SPACE_RIP_H),
+        (VW * 0.5 - super::helpers::SPACE_RIP_W * 0.5, VH * 0.5 - super::helpers::SPACE_RIP_H * 0.5),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    space_rip_overlay.ignore_zoom = true;
+    space_rip_overlay.visible = false;
+    space_rip_overlay.layer = 3; // Behind all gameplay (player=42), above plain bg (0)
+
+    // Animated catcoingold icon overlaid on the coin counter slot.
+    // coin_counter is at (26, 24), icon slot is at (12, 28) within it → abs (38, 52).
+    let mut coin_icon_anim = GameObject::new_rect(
+        ctx, "coin_icon_anim".into(),
+        None::<Image>,
+        (112.0, 112.0), (38.0, 52.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    coin_icon_anim.ignore_zoom = true;
+    coin_icon_anim.layer = 101;
+    coin_icon_anim.visible = false;
+
+    // ── Ability icons (shown to the left of the scoreboard) ──────────────
+    // All ignore_zoom=true so they sit in screen-space like the rest of the HUD.
+    const ICON_W: f32 = 120.0;
+    const ICON_H: f32 = 120.0;
+    const ICON_Y: f32 = 30.0;
+    // Stack icons rightmost-first, each 130px apart, 20px left of the score_counter.
+    // score_counter is at (VW - 450.0, 40.0), so first icon right edge ≈ VW - 470.
+    const ICON_X0: f32 = VW - 450.0 - ICON_W - 30.0; // flip (outermost)
+    const ICON_X1: f32 = ICON_X0 - ICON_W - 10.0;    // zero_g
+    const ICON_X2: f32 = ICON_X1 - ICON_W - 10.0;    // score_x2
+
+    let mut flip_icon = GameObject::new_rect(
+        ctx, "flip_icon".into(),
+        Some(Image {
+            shape: ShapeType::Rectangle(0.0, (ICON_W, ICON_H), 0.0),
+            image: flip_image_cached(),
+            color: None,
+        }),
+        (ICON_W, ICON_H), (ICON_X0, ICON_Y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    flip_icon.ignore_zoom = true;
+    flip_icon.visible = false;
+    flip_icon.layer = 100;
+
+    let mut zero_g_icon = GameObject::new_rect(
+        ctx, "zero_g_icon".into(),
+        None::<Image>,
+        (ICON_W, ICON_H), (ICON_X1, ICON_Y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    zero_g_icon.ignore_zoom = true;
+    zero_g_icon.visible = false;
+    zero_g_icon.layer = 100;
+
+    let mut score_x2_icon = GameObject::new_rect(
+        ctx, "score_x2_icon".into(),
+        None::<Image>,
+        (ICON_W, ICON_H), (ICON_X2, ICON_Y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+    );
+    score_x2_icon.ignore_zoom = true;
+    score_x2_icon.visible = false;
+    score_x2_icon.layer = 100;
+
     // ── Starter hooks ────────────────────────────────────────────────────
     let starter_hooks: &[(f32, f32)] = &[
         (START_HOOK_X,                              START_HOOK_Y),
@@ -580,19 +747,63 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("flip_timer", flip_timer_hud)
         .with_object("zero_g_timer", zero_g_timer_hud)
         .with_object("score_x2_timer", score_x2_timer_hud)
-        .with_object("coin_magnet_radius", coin_magnet_radius);
+        .with_object(GOLD_MASTER_TOAST_PANEL_NAME, achievement_toast_panel)
+        .with_object(GOLD_MASTER_TOAST_TITLE_NAME, achievement_toast_title)
+        .with_object(GOLD_MASTER_TOAST_DESC_NAME, achievement_toast_desc)
+        .with_object(GOLD_MASTER_TOAST_CHECK_NAME, achievement_toast_check)
+        .with_object("coin_magnet_radius", coin_magnet_radius)
+        .with_object("zero_g_overlay",    zero_g_overlay)
+        .with_object("space_rip_overlay", space_rip_overlay)
+        .with_object("coin_icon_anim",    coin_icon_anim)
+        .with_object("flip_icon",         flip_icon)
+        .with_object("zero_g_icon",       zero_g_icon)
+        .with_object("score_x2_icon",     score_x2_icon);
+
+    // ── Asteroid animation template (shared by hook pool and asteroid pool) ───
+    // Decode once here; hook pool and space_asteroid pool both clone from this.
+    let hook_asteroid_anim = tint_asteroid_gif_brownish_red(
+        include_bytes!("../../../assets/asteroid.gif"),
+        (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
+        8.0,
+    );
 
     // ── Hook pool ────────────────────────────────────────────────────────
     let mut starter_names: Vec<String> = Vec::new();
     let mut pool_free: Vec<String> = Vec::new();
     for i in 0..HOOK_POOL_SIZE {
         let id = format!("hook_{i}");
-        let mut obj = if i < starter_hooks.len() {
+        // Vary size across the asteroid range so hooks have different scales.
+        let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 73.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        // Gentle deterministic drift — small enough not to leave the play area fast.
+        let dv_x = ((i as f32 * 0.7 + 0.3) % 1.0 - 0.5) * 0.35;
+        let dv_y = ((i as f32 * 1.3 + 0.2) % 1.0 - 0.5) * 0.18;
+        let (init_x, init_y) = if i < starter_hooks.len() {
             let (hx, hy) = starter_hooks[i];
-            make_hook(ctx, &id, hx, hy)
+            (hx - size * 0.5, hy - size * 0.5)
         } else {
-            make_hook(ctx, &id, -2000.0, -2000.0)
+            (-2000.0, -2000.0)
         };
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (size, size),
+            (init_x, init_y),
+            vec!["hook".into()],
+            (dv_x, dv_y),
+            (1.0, 1.0),
+            0.0,
+        );
+        // Only set animation on starter hooks (initially visible).
+        // Pool hooks are invisible; enabling their animation would tick
+        // all 60+ GIF sprites every frame even off-screen, causing lag.
+        if i < starter_hooks.len() {
+            if let Some(anim) = &hook_asteroid_anim {
+                obj.set_animation(anim.clone());
+            }
+        }
+        obj.gravity = 0.0;
+        obj.rotation_momentum = ((i as f32 * 0.9 + 0.1) % 1.0 - 0.5) * 0.008;
         obj.layer = LAYER_SPACE_HOOK;
         if i < starter_hooks.len() {
             starter_names.push(id.clone());
@@ -610,7 +821,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let tech_bounce_static_img = tech_bounce_anim_frames
         .first()
         .cloned()
-        .unwrap_or_else(|| load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
+        .unwrap_or_else(|| load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
     let tech_bounce_anim_frames_flipped: Vec<Image> = tech_bounce_anim_frames.iter()
         .map(|img| flip_vertical(img.clone()))
         .collect();
@@ -629,7 +840,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let pad_thruster_static_img = pad_thruster_anim_template
         .as_ref()
         .map(|a| a.get_current_image())
-        .unwrap_or_else(|| load_image_sized(ASSET_THRUSTER1_GIF, PAD_THRUSTER_W, PAD_THRUSTER_H));
+        .unwrap_or_else(|| load_image_sized_path(ASSET_THRUSTER1_GIF, PAD_THRUSTER_W, PAD_THRUSTER_H));
     let mut pad_free: Vec<String> = Vec::new();
     for i in 0..PAD_POOL_SIZE {
         let id = format!("pad_{i}");
@@ -672,7 +883,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Coin pool ────────────────────────────────────────────────────────
-    let coin_static_sprite = load_image_sized(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
+    let coin_static_sprite = load_image_sized_path(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
     let coin_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/catcoingold.gif"),
         (COIN_R * 2.0, COIN_R * 2.0),
@@ -705,7 +916,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Score x2 pool ────────────────────────────────────────────────────
-    let score_x2_sprite = load_image_sized(ASSET_SCORE_X2_GIF, SCORE_X2_W, SCORE_X2_H);
+    let score_x2_sprite = load_image_sized_path(ASSET_SCORE_X2_GIF, SCORE_X2_W, SCORE_X2_H);
     let mut score_x2_free: Vec<String> = Vec::new();
     for i in 0..SCORE_X2_POOL_SIZE {
         let id = format!("score_x2_{i}");
@@ -720,10 +931,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Zero-g pool ──────────────────────────────────────────────────────
+    let zero_g_anim_template = AnimatedSprite::new(
+        include_bytes!("../../../assets/ZeroG.gif"),
+        (ZERO_G_W, ZERO_G_H),
+        8.0,
+    ).ok();
     let mut zero_g_free: Vec<String> = Vec::new();
     for i in 0..ZERO_G_POOL_SIZE {
         let id = format!("zero_g_{i}");
         let mut obj = make_zero_g(ctx, &id, -3875.0, -3875.0);
+        if let Some(anim) = &zero_g_anim_template {
+            obj.set_animation(anim.clone());
+        }
         obj.visible = false;
         zero_g_free.push(id.clone());
         scene = scene.with_object(id, obj);
@@ -812,10 +1031,25 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space hook pool ───────────────────────────────────────────────────
+    // Animations are NOT set here to avoid ticking 160 invisible GIF sprites every frame.
+    // call `hook_asteroid_anim_for_spawn()` in space_zone.rs when a hook becomes visible.
     let mut space_hook_free: Vec<String> = Vec::new();
     for i in 0..SPACE_HOOK_POOL_SIZE {
         let id = format!("space_hook_{i}");
-        let mut obj = make_hook(ctx, &id, -5700.0, -5700.0);
+        let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 59.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (size, size),
+            (-5700.0, -5700.0),
+            vec!["hook".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.rotation_momentum = ((i as f32 * 1.1 + 0.4) % 1.0 - 0.5) * 0.008;
         obj.visible = false;
         obj.layer = LAYER_SPACE_HOOK;
         space_hook_free.push(id.clone());
@@ -823,8 +1057,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space coin pool ───────────────────────────────────────────────────
-    let space_cat_static = load_image_sized(
-        include_bytes!("../../../assets/catcoin.gif"),
+    let space_cat_static = load_image_sized_path(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
         SPACE_COIN_R * 2.0,
         SPACE_COIN_R * 2.0,
     );
@@ -854,8 +1088,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space blue-coin pool ─────────────────────────────────────────────
-    let space_cat_blue_static = load_image_sized(
-        include_bytes!("../../../assets/catcoinblue.gif"),
+    let space_cat_blue_static = load_image_sized_path(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
     );
@@ -937,8 +1171,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space red-coin pool ───────────────────────────────────────────────
-    let space_cat_red_static = load_image_sized(
-        include_bytes!("../../../assets/catcoinred.gif"),
+    let space_cat_red_static = load_image_sized_path(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
     );
@@ -1069,16 +1303,79 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     start_prompt_text.layer = 10_002;
     start_prompt_text.ignore_zoom = true;
 
-    let mut settings_text = GameObject::build("settings_text")
-        .size(1400.0, 800.0)
-        .position((VW - 1400.0) * 0.5, VH * 0.15)
-        .tag("hud")
-        .build(ctx);
-    settings_text.visible = false;
-    settings_text.layer = 10_002;
-    settings_text.ignore_zoom = true;
+    // Three independent label objects — one above each slider track — so
+    // vertical positioning is exact rather than relying on \n spacing.
+    // Positioned at SLIDER_Y[i] - 100 so the label sits just above its track.
+    let make_settings_label = |ctx: &mut Context, id: &str, y: f32| {
+        let mut obj = GameObject::build(id)
+            .size(1400.0, 80.0)
+            .position((VW - 1400.0) * 0.5, y)
+            .tag("hud")
+            .build(ctx);
+        obj.visible = false;
+        obj.layer = 10_004;
+        obj.ignore_zoom = true;
+        obj
+    };
+    let settings_label_0 = make_settings_label(ctx, "settings_label_0", 720.0);
+    let settings_label_1 = make_settings_label(ctx, "settings_label_1", 1020.0);
+    let settings_label_2 = make_settings_label(ctx, "settings_label_2", 1320.0);
 
     let settings_back_btn = make_pause_btn(ctx, "settings_back_btn", 80, 80, 100, "BACK", 1660.0);
+
+    // ── Settings volume sliders ───────────────────────────────────────────
+    // Tracks are thin solid-color rectangles; thumbs are small rounded rects.
+    // Both are ignore_zoom so they sit in virtual-screen space like the pause buttons.
+    const SLIDER_TRACK_W: f32 = 1400.0;
+    const SLIDER_TRACK_H: f32 = 24.0;
+    const SLIDER_THUMB_W: f32 = 60.0;
+    const SLIDER_THUMB_H: f32 = 80.0;
+    const SLIDER_TRACK_X: f32 = (VW - SLIDER_TRACK_W) / 2.0;
+    // Track Y positions (one per volume: master, music, sound)
+    const SLIDER_Y: [f32; 3] = [820.0, 1120.0, 1420.0];
+
+    let make_slider_track = |ctx: &mut Context, id: &str, y: f32| {
+        let mut obj = GameObject::new_rect(
+            ctx, id.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (SLIDER_TRACK_W, SLIDER_TRACK_H), 0.0),
+                image: solid(60, 62, 88, 220).into(),
+                color: None,
+            }),
+            (SLIDER_TRACK_W, SLIDER_TRACK_H),
+            (SLIDER_TRACK_X, y),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        obj.visible = false;
+        obj.layer = 10_003;
+        obj.ignore_zoom = true;
+        obj
+    };
+
+    let make_slider_thumb = |ctx: &mut Context, id: &str, y: f32| {
+        let mut obj = GameObject::new_rect(
+            ctx, id.into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (SLIDER_THUMB_W, SLIDER_THUMB_H), 0.0),
+                image: solid(210, 220, 255, 255).into(),
+                color: None,
+            }),
+            (SLIDER_THUMB_W, SLIDER_THUMB_H),
+            (SLIDER_TRACK_X, y - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        obj.visible = false;
+        obj.layer = 10_005;
+        obj.ignore_zoom = true;
+        obj
+    };
+
+    let slider_master_track = make_slider_track(ctx, "slider_master_track", SLIDER_Y[0]);
+    let slider_master_thumb = make_slider_thumb(ctx, "slider_master_thumb", SLIDER_Y[0]);
+    let slider_music_track  = make_slider_track(ctx, "slider_music_track",  SLIDER_Y[1]);
+    let slider_music_thumb  = make_slider_thumb(ctx, "slider_music_thumb",  SLIDER_Y[1]);
+    let slider_sound_track  = make_slider_track(ctx, "slider_sound_track",  SLIDER_Y[2]);
+    let slider_sound_thumb  = make_slider_thumb(ctx, "slider_sound_thumb",  SLIDER_Y[2]);
 
     scene = scene
         .with_object("pause_title", pause_title)
@@ -1087,32 +1384,166 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("pause_settings_btn", pause_settings_btn)
         .with_object("pause_menu_btn", pause_menu_btn)
         .with_object("start_prompt_text", start_prompt_text)
-        .with_object("settings_text", settings_text)
-        .with_object("settings_back_btn", settings_back_btn);
+        .with_object("settings_label_0", settings_label_0)
+        .with_object("settings_label_1", settings_label_1)
+        .with_object("settings_label_2", settings_label_2)
+        .with_object("settings_back_btn", settings_back_btn)
+        .with_object("slider_master_track", slider_master_track)
+        .with_object("slider_master_thumb", slider_master_thumb)
+        .with_object("slider_music_track",  slider_music_track)
+        .with_object("slider_music_thumb",  slider_music_thumb)
+        .with_object("slider_sound_track",  slider_sound_track)
+        .with_object("slider_sound_thumb",  slider_sound_thumb);
 
-    // ── Zone divider lines ────────────────────────────────────────────────
-    // Thin vertical white lines at each zone boundary, drawn in world space.
-    // Height is intentionally enormous so the top is never visible even when
-    // zoomed out to the maximum camera level.
-    const ZONE_LINE_W: f32 = 8.0;
-    const ZONE_LINE_H: f32 = 400_000.0;
-    const ZONE_LINE_Y: f32 = -200_000.0;
-    for zone_num in 1..=2usize {
-        let world_x = SPAWN_X + zone_num as f32 * ZONE_DISTANCE_STEP - ZONE_LINE_W / 2.0;
-        let id = format!("zone_line_{zone_num}");
-        let mut line = GameObject::new_rect(
-            ctx, id.clone(),
+    // ── Boss body ─────────────────────────────────────────────────────────
+    {
+        let s = BOSS_SIZE;
+        let mut boss_obj = GameObject::new_rect(
+            ctx, "boss".into(),
             Some(Image {
-                shape: ShapeType::Rectangle(0.0, (ZONE_LINE_W, ZONE_LINE_H), 0.0),
-                image: solid(255, 255, 255, 150).into(),
+                shape: ShapeType::Rectangle(0.0, (s, s), 0.0),
+                image: solid(C_BOSS_BODY.0, C_BOSS_BODY.1, C_BOSS_BODY.2, 255).into(),
                 color: None,
             }),
-            (ZONE_LINE_W, ZONE_LINE_H),
-            (world_x, ZONE_LINE_Y),
-            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
+            (s, s),
+            (-6000.0, -6000.0),
+            vec!["boss".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
         );
-        line.layer = 1; // in front of background, behind everything else
-        scene = scene.with_object(id, line);
+        boss_obj.layer = LAYER_SPACE_HOOK;
+        boss_obj.gravity = 0.0;
+        boss_obj.visible = false;
+        scene = scene.with_object("boss", boss_obj);
+    }
+
+    // ── Boss HP bar ───────────────────────────────────────────────────────
+    {
+        let (bw, bh) = (BOSS_HP_BAR_W as u32, BOSS_HP_BAR_H as u32);
+        let mut bar_img = image::RgbaImage::new(bw, bh);
+        for py in 0..bh { for px in 0..bw {
+            bar_img.put_pixel(px, py, image::Rgba([C_BOSS_HP_FILL.0, C_BOSS_HP_FILL.1, C_BOSS_HP_FILL.2, 255]));
+        }}
+        let mut boss_hp_bar = GameObject::new_rect(
+            ctx, "boss_hp_bar".into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (BOSS_HP_BAR_W, BOSS_HP_BAR_H), 0.0),
+                image: bar_img.into(),
+                color: None,
+            }),
+            (BOSS_HP_BAR_W, BOSS_HP_BAR_H),
+            (VW * 0.5 - BOSS_HP_BAR_W * 0.5, VH * 0.12),
+            vec!["hud".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        boss_hp_bar.visible = false;
+        boss_hp_bar.ignore_zoom = true;
+        boss_hp_bar.layer = 101;
+        scene = scene.with_object("boss_hp_bar", boss_hp_bar);
+    }
+
+    // ── Boss bolt pool ────────────────────────────────────────────────────
+    let mut boss_bolt_free: Vec<String> = Vec::new();
+    for i in 0..BOSS_BOLT_POOL_SIZE {
+        let id = format!("boss_bolt_{i}");
+        let mut obj = GameObject::new_rect(
+            ctx, id.clone(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (BOSS_BOLT_W, BOSS_BOLT_H), 0.0),
+                image: solid(C_BOSS_BOLT.0, C_BOSS_BOLT.1, C_BOSS_BOLT.2, 255).into(),
+                color: None,
+            }),
+            (BOSS_BOLT_W, BOSS_BOLT_H),
+            (-7000.0, -7000.0),
+            vec!["boss_bolt".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.visible = false;
+        boss_bolt_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Boss arena asteroids ──────────────────────────────────────────────
+    // Decorative floating asteroids shown only during the boss fight.
+    // Animations are set in boss.rs when the boss spawns (same lazy approach
+    // as space_hook pool to avoid ticking invisible GIF sprites every frame).
+    let mut boss_asteroid_ids: Vec<String> = Vec::new();
+    for i in 0..BOSS_ASTEROID_COUNT {
+        let id = format!("boss_asteroid_{i}");
+        let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 83.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (size, size),
+            (-8000.0, -8000.0),
+            vec!["hook".into()],   // makes them grabbable like regular hooks
+            (0.0, 0.0),
+            (0.95, 0.95),          // drag so they resist being knocked far
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.rotation_momentum = ((i as f32 * 1.7 + 0.3) % 1.0 - 0.5) * 0.006;
+        obj.layer = LAYER_SPACE_HOOK;
+        // Full collision so player can bounce into them and they react.
+        obj.collision_mode  = CollisionMode::solid_circle(size * 0.5);
+        obj.collision_layer = ASTEROID_COLLISION_LAYER;
+        obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
+        obj.visible = false;
+        boss_asteroid_ids.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Comet pool ────────────────────────────────────────────────────────
+    let mut comet_free: Vec<String> = Vec::new();
+    for i in 0..COMET_POOL_SIZE {
+        let id = format!("comet_{i}");
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (COMET_SIZE, COMET_SIZE),
+            (-9000.0, -9000.0),
+            vec!["comet".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.visible = false;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.layer = 10;
+        comet_free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+
+    // ── Comet warning pool ─────────────────────────────────────────────────
+    let mut warn_free: Vec<String> = Vec::new();
+    for i in 0..COMET_WARN_POOL_SIZE {
+        let id = format!("comet_warn_{i}");
+        let mut obj = GameObject::new_rect(
+            ctx,
+            id.clone(),
+            None::<Image>,
+            (COMET_WARN_W, COMET_WARN_H),
+            (-9500.0, -9500.0),
+            vec!["comet_warn".into()],
+            (0.0, 0.0),
+            (1.0, 1.0),
+            0.0,
+        );
+        obj.gravity = 0.0;
+        obj.visible = false;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.layer = 11;
+        warn_free.push(id.clone());
+        scene = scene.with_object(id, obj);
     }
 
     let pools = PoolSets {
@@ -1147,6 +1578,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_asteroid_free,
         space_red_coin_free,
         cannon_free,
+        boss_bolt_free,
+        boss_asteroid_ids,
+        comet_free,
+        warn_free,
     };
 
     (scene, pools)

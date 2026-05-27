@@ -16,14 +16,21 @@ pub const GRAB_TANGENT_SURGE_MAX:   f32 = 4.0;
 pub const GRAB_SURGE_MULT: f32 = 2.6;
 pub const GRAB_VERTICAL_BOOST: f32 = 1.28;
 pub const GRAB_SPIN_DISABLE_SPEED: f32 = 50.0;
+pub const SPECIAL_HOOK_BOOST_SURGE: f32 = 84.0;
+pub const SPECIAL_HOOK_VERTICAL_BOOST: f32 = 1.18;
+pub const SPECIAL_HOOK_MIN_SPEED: f32 = 118.0;
+pub const SPECIAL_HOOK_MOMENTUM_CAP: f32 = 74.0;
+pub const SPECIAL_HOOK_CAP_WINDOW_TICKS: i32 = 84;
 pub const RELEASE_MIN_SWING_SPEED: f32 = 3.2;
 pub const RELEASE_SURGE_SCALE: f32 = 0.42;
 pub const RELEASE_SURGE_MAX: f32 = 14.0;
 pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
 
 // ── Object sizes ──────────────────────────────────────────────────────────────
-pub const PLAYER_R:       f32 = 40.0;
+pub const PLAYER_R:       f32 = 58.0;
 pub const HOOK_R:         f32 = 38.0;
+/// Display/collision radius for artifact-mode grab hooks (1.5× regular hook).
+pub const HOOK_ARTIFACT_R: f32 = HOOK_R * 1.5;
 pub const ROPE_THICKNESS: f32 = 60.0;
 pub const AIRSHIELD_W:    f32 = 220.0;
 pub const AIRSHIELD_H:    f32 = 160.0;
@@ -135,7 +142,7 @@ pub const PAD_BELOW_HOOK_Y_GAP: f32 = 400.0;
 pub const PAD_Y_MIN: f32 = HOOK_Y_MAX + 150.0; // ≈ 1200.0
 
 /// Fixed upward velocity applied when the player hits a bounce pad.
-pub const PAD_BOUNCE_VY: f32 = -52.0;
+pub const PAD_BOUNCE_VY: f32 = -104.0;
 
 /// Restitution (bounciness) applied when a space asteroid hits a bounce pad.
 pub const PAD_ASTEROID_RESTITUTION: f32 = 0.75;
@@ -332,6 +339,9 @@ pub const PLAYER_CHAR_NAMES: &[&str] = &["CALICO", "SILVER", "BLUE", "GREEN", "O
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
 pub const C_HOOK_NEAR:(u8,u8,u8) = (255, 120, 50 );
+pub const C_HOOK_SPECIAL:      (u8,u8,u8) = (52, 196, 84);
+pub const C_HOOK_SPECIAL_NEAR: (u8,u8,u8) = (105, 244, 140);
+pub const C_HOOK_SPECIAL_ON:   (u8,u8,u8) = (175, 255, 196);
 pub const C_ROPE:     (u8,u8,u8) = (220, 220, 220);
 pub const C_DANGER:   (u8,u8,u8) = (200, 50,  50 );
 pub const C_PAD:      (u8,u8,u8) = (60,  200, 255);
@@ -386,12 +396,20 @@ pub const ASSET_ARCADE_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/a
 pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wobbly_meow.mp3");
 pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
 pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
-pub const ASSET_THRUSTER1_GIF: &[u8] = include_bytes!("../assets/thruster1.gif");
+pub const ASSET_HOOK_ARTIFACT_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact.gif");
+pub const ASSET_HOOK_ARTIFACT_GREEN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact_green.gif");
+/// Average ticks between automatic comet spawn attempts (at 60 fps ≈ 5 seconds).
+pub const COMET_SPAWN_INTERVAL: u32 = 300;
+pub const HOOK_ARTIFACT_FPS: f32 = 13.0;
+pub const HOOK_ARTIFACT_INTRO_FPS: f32 = 24.0;
+pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
 pub const ASSET_CALICOBALL_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/calicoball.gif");
 pub const ASSET_BLACKHOLE1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/blackhole1.gif");
 pub const ASSET_WORMHOLE2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wormhole2.gif");
 pub const ASSET_GWELLON_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwellon.gif");
 pub const ASSET_GWELLOFF_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwelloff.gif");
+pub const ASSET_ZERO_G_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ZeroG.gif");
+pub const ASSET_SPACE_RIP_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/space_rip.gif");
 pub const CALICO_FPS: f32 = 12.0;
 pub const GWELL_FPS: f32 = 10.0;
 pub const BLACKHOLE_FPS: f32 = 12.0;
@@ -419,8 +437,8 @@ pub const GWELL_RADIUS_MAX:    f32 = 1080.0;
 
 /// Pull force range. 0 = no pull, 1 = full gravity override.
 /// Increase GWELL_STRENGTH_MAX to make wells harder to escape.
-pub const GWELL_STRENGTH_MIN:  f32 = 0.75;
-pub const GWELL_STRENGTH_MAX:  f32 = 1.0;
+pub const GWELL_STRENGTH_MIN:  f32 = 0.9;
+pub const GWELL_STRENGTH_MAX:  f32 = 1.2;
 
 /// How long the well is active before going dormant (ticks). 240 = 4 s @ 60 fps.
 pub const GWELL_ON_TICKS:      u32 = 240;
@@ -469,6 +487,71 @@ pub const TURRET_PHASE_3_X:     f32 = 40_000.0;
 pub const TURRET_DUAL_SHOT_GAP: f32 = 44.0;   // kept for reference, no longer used for parallel
 pub const TURRET_PREDICT_MAX_T: f32 = 60.0;   // max lead-time clamp (ticks); raised for better phase-3 aim
 pub const BULLET_POOL_SIZE:     usize = 64;
+
+// ── Boss fight ────────────────────────────────────────────────────────────────
+pub const BOSS_THRESHOLD_X:      f32   = 20_000.0; // player X that triggers boss zone entry
+pub const BOSS_ZONE_X1:          f32   = 20_000.0; // left wall of boss arena
+pub const BOSS_ZONE_X2:          f32   = 27_000.0; // right wall of boss arena
+pub const BOSS_ENTRY_DELAY_TICKS: u32  = 180;      // 3 seconds before boss appears
+pub const BOSS_SIZE:             f32   = 360.0;    // width and height of boss body
+pub const BOSS_MAX_HP:           i32   = 20;
+pub const BOSS_BOLT_POOL_SIZE:   usize = 24;
+pub const BOSS_BOLT_W:           f32   = 80.0;
+pub const BOSS_BOLT_H:           f32   = 30.0;
+pub const BOSS_BOLT_SPEED:       f32   = 16.0;
+pub const BOSS_BOLT_LIFETIME:    u32   = 360;      // 6 s at 60 fps
+pub const BOSS_SHOOT_INTERVAL:   u32   = 90;       // 1.5 s at 60 fps
+pub const BOSS_FLOAT_SPEED:      f32   = 2.8;      // kept for reference
+pub const BOSS_HP_BAR_W:         f32   = 900.0;
+pub const BOSS_HP_BAR_H:         f32   = 50.0;
+/// Gravity multiplier applied to the player while inside the boss arena.
+pub const BOSS_GRAVITY_SCALE:    f32   = 0.42;
+/// Number of decorative asteroid GIFs placed around the boss arena.
+pub const BOSS_ASTEROID_COUNT:   usize = 16; // 4 cols × 4 rows
+// Movement pattern speeds for lissajous figure-8
+pub const BOSS_PHASE_X_SPEED:    f32   = 0.024;    // radians per tick (horizontal sweep)
+pub const BOSS_PHASE_Y_SPEED:    f32   = 0.048;    // radians per tick (vertical — 2× for figure-8)
+pub const BOSS_ARENA_HALF_W:     f32   = (BOSS_ZONE_X2 - BOSS_ZONE_X1) * 0.52; // amplitude — uses 52% for full traversal
+pub const BOSS_ARENA_CENTER_X:   f32   = (BOSS_ZONE_X1 + BOSS_ZONE_X2) * 0.5;
+pub const BOSS_Y_CENTER:         f32   = -2500.0;  // HUD Y ≈ -2500 (upper sky)
+pub const BOSS_Y_AMPLITUDE:      f32   = 400.0;    // ±400 Y, boss sweeps -2900..−2100
+pub const C_BOSS_BODY:           (u8,u8,u8) = (60, 20, 200);   // deep purple
+pub const C_BOSS_BOLT:           (u8,u8,u8) = (255, 110, 20);  // hot orange
+pub const C_BOSS_HP_FILL:        (u8,u8,u8) = (220, 40,  40);  // red fill
+pub const C_BOSS_HP_BG:          (u8,u8,u8) = (40,  10,  10);  // dark bg
+
+// ── Comets ────────────────────────────────────────────────────────────────────
+pub const COMET_POOL_SIZE:        usize = 8;
+pub const COMET_SIZE:             f32   = 840.0;
+pub const COMET_SPEED:            f32   = 84.0;
+pub const COMET_LIFETIME:         u32   = 360;    // 6 s at 60 fps
+/// Collision radius — smaller than the sprite so only the core fire cone hits.
+pub const COMET_HIT_RADIUS:       f32   = 180.0;
+/// Min vertical offset above player when spawning (world units).
+pub const COMET_SPAWN_ABOVE:      f32   = 1000.0;
+/// Max additional above offset so comets can come from varying heights.
+pub const COMET_SPAWN_ABOVE_EXTRA: f32  = 800.0;
+/// Horizontal spread from player centre on spawn.
+pub const COMET_SPAWN_SPREAD:     f32   = 1600.0;
+/// Knockback impulse applied to player on hit.
+pub const COMET_KNOCKBACK:        f32   = 30.0;
+pub const COMET_FPS:              f32   = 16.0;
+
+// ── Comet warning indicator ───────────────────────────────────────────────────
+pub const COMET_WARN_POOL_SIZE:   usize = 8;   // must equal COMET_POOL_SIZE
+pub const COMET_WARN_W:           f32   = 200.0;
+pub const COMET_WARN_H:           f32   = 400.0;
+/// Total warning duration in ticks (2 s).
+pub const COMET_WARN_TOTAL:       u32   = 120;
+/// Tick at which phase 1 ends and phase 2 begins (1 s).
+pub const COMET_WARN_P1_END:      u32   = 60;
+/// Phase 1: ticks per image alternation (fast flash).
+pub const COMET_WARN_ALT:         u32   = 4;
+/// Phase 2 sub-boundaries (within phase 2, offset from P1_END):
+/// 0..20 = light_explode, 20..40 = dark_explode, 40..60 = light_explode.
+pub const COMET_WARN_P2_A:        u32   = 20;
+pub const COMET_WARN_P2_B:        u32   = 40;
+
 pub const BULLET_W:             f32 = 36.0;
 pub const BULLET_H:             f32 = 12.0;
 pub const BULLET_SPEED:         f32 = 52.0;  // phase 1 enhancement: significantly faster bullets
@@ -535,7 +618,7 @@ pub const SPACE_PLANET_POOL_SIZE:    usize = 24;
 pub const SPACE_HOOK_POOL_SIZE:      usize = 160;
 pub const SPACE_COIN_POOL_SIZE:      usize = 80;
 pub const SPACE_BLACKHOLE_POOL_SIZE: usize = 8;
-pub const SPACE_ASTEROID_POOL_SIZE:  usize = 40;
+pub const SPACE_ASTEROID_POOL_SIZE:  usize = 80;
 
 // Space object spawn budgets per tick
 pub const SPACE_PLANET_SPAWN_BUDGET:    usize = 2;
@@ -637,12 +720,20 @@ pub const SPACE_ASTEROID_GAP_MIN:        f32 = 1300.0;
 pub const SPACE_ASTEROID_GAP_MAX:        f32 = 2800.0;
 // Small asteroids float near the hook zone; large ones drift higher.
 // Y is interpolated between these two bands based on normalised size.
-pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -450.0;  // small, closest to action
-pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -80.0;
+pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -700.0;  // small, closest to action
+pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -400.0;
 pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -2200.0; // large, highest (visible zoomed-out)
-pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -700.0;
+pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -900.0;
 pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
-pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 420.0;
+pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 480.0;
+/// Base outward knockback speed applied to player when hit by a space asteroid.
+pub const ASTEROID_PLAYER_KNOCKBACK_BASE: f32 = 26.0;
+/// Extra knockback from relative closing speed along the collision normal.
+pub const ASTEROID_PLAYER_KNOCKBACK_IMPACT: f32 = 1.10;
+/// Clamp for total asteroid hit knockback to avoid absurd launch speeds.
+pub const ASTEROID_PLAYER_KNOCKBACK_MAX: f32 = 130.0;
+/// How much asteroid velocity is carried into player velocity on hit.
+pub const ASTEROID_PLAYER_KNOCKBACK_CARRY: f32 = 0.60;
 /// Crystalline collision layer bits.
 pub const ASTEROID_COLLISION_LAYER: u32 = 1 << 8;
 pub const PLAYER_COLLISION_LAYER:   u32 = 1 << 1; // matches collision_layers::PLAYER
@@ -672,6 +763,18 @@ pub const C_SPACE_COIN:  (u8,u8,u8) = (255, 230, 100);
 pub const C_SPACE_COIN_HIGH: (u8,u8,u8) = (120, 255, 220);
 pub const C_SPACE_HOOK:  (u8,u8,u8) = (155, 115, 255);
 pub const C_SPACE_HOOK_ON: (u8,u8,u8) = (210, 185, 255);
+pub const SPECIAL_HOOK_TAG: &str = "hook_special";
+pub const SPECIAL_HOOK_SPAWN_CHANCE: f32 = 0.30;
+pub const SPECIAL_HOOK_MIN_X_GAP: f32 = 10_000.0;
+pub const C_HOOK_EXTENDED:      (u8,u8,u8) = (220, 60, 80);
+pub const C_HOOK_EXTENDED_NEAR: (u8,u8,u8) = (255, 120, 140);
+pub const C_HOOK_EXTENDED_ON:   (u8,u8,u8) = (255, 180, 200);
+pub const EXTENDED_HOOK_TAG: &str = "hook_extended";
+pub const EXTENDED_HOOK_REACH_MULT: f32 = 2.0;
+pub const EXTENDED_HOOK_MIN_X_GAP: f32 = 20_000.0;
+pub const EXTENDED_HOOK_SPAWN_CHANCE: f32 = 0.08;
+pub const POWERUP_MAGNET_RADIUS: f32 = 160.0;
+pub const POWERUP_MAGNET_PULL: f32 = 0.35;
 pub const C_BLACKHOLE:   (u8,u8,u8) = (18,  8,   26);
 pub const C_GWELL_TELEPORT: (u8,u8,u8) = (90, 170, 255);
 
@@ -763,7 +866,7 @@ pub const SPACE_ASTEROID_VY_MIN: f32 = -2.0;
 pub const SPACE_ASTEROID_VY_MAX: f32 =  2.0;
 // Fraction of the player's incoming velocity transferred to an asteroid on hook.
 // Scaled by (SIZE_MIN / actual_size) so smaller asteroids receive more impulse.
-pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.08;
+pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.28;
 
 // Stasis orbit (shared between entry/exit stasis and game-start stasis)
 pub const STASIS_ORBIT_R:     f32 = 240.0;

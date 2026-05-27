@@ -12,6 +12,7 @@ mod background;
 mod gravity_wells;
 mod turrets;
 mod gravity_cannon;
+mod boss;
 pub mod space_zone;
 mod build_scene;
 

@@ -1,12 +1,14 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
 
+use crate::achievements::*;
 use crate::constants::*;
 use crate::state::*;
-use super::helpers::pad_thruster_id;
+use super::helpers::{pad_thruster_id, sfx_vol};
 
 pub fn tick_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     tick_coin_magnet(c, st);
+    tick_powerup_magnet(c, st);
     tick_coin_collect(c, st);
     tick_flip_collect(c, st, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
     tick_score_x2_collect(c, st);
@@ -242,6 +244,117 @@ fn tick_coin_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
+// ── Powerup magnet pull ──────────────────────────────────────────────────────
+
+fn tick_powerup_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let magnet_r = POWERUP_MAGNET_RADIUS;
+
+    // Flip pickups
+    let flip_live = s.flip_live.clone();
+    let mut newly_locked: Vec<String> = Vec::new();
+    for name in &flip_live {
+        if s.flip_magnet_locked.contains(name) { continue; }
+        if let Some(obj) = c.get_game_object(name) {
+            let cx = obj.position.0 + obj.size.0 * 0.5;
+            let cy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = s.px - cx;
+            let dy = s.py - cy;
+            if dx * dx + dy * dy < magnet_r * magnet_r {
+                newly_locked.push(name.clone());
+            }
+        }
+    }
+    for name in &newly_locked {
+        s.flip_magnet_locked.push(name.clone());
+    }
+
+    // Score x2 pickups
+    let score_x2_live = s.score_x2_live.clone();
+    newly_locked.clear();
+    for name in &score_x2_live {
+        if s.score_x2_magnet_locked.contains(name) { continue; }
+        if let Some(obj) = c.get_game_object(name) {
+            let cx = obj.position.0 + obj.size.0 * 0.5;
+            let cy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = s.px - cx;
+            let dy = s.py - cy;
+            if dx * dx + dy * dy < magnet_r * magnet_r {
+                newly_locked.push(name.clone());
+            }
+        }
+    }
+    for name in &newly_locked {
+        s.score_x2_magnet_locked.push(name.clone());
+    }
+
+    // Zero-g pickups
+    let zero_g_live = s.zero_g_live.clone();
+    newly_locked.clear();
+    for name in &zero_g_live {
+        if s.zero_g_magnet_locked.contains(name) { continue; }
+        if let Some(obj) = c.get_game_object(name) {
+            let cx = obj.position.0 + obj.size.0 * 0.5;
+            let cy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = s.px - cx;
+            let dy = s.py - cy;
+            if dx * dx + dy * dy < magnet_r * magnet_r {
+                newly_locked.push(name.clone());
+            }
+        }
+    }
+    for name in &newly_locked {
+        s.zero_g_magnet_locked.push(name.clone());
+    }
+    drop(s);
+
+    // Apply pull to all locked powerups
+    let s = st.lock().unwrap();
+    let px = s.px;
+    let py = s.py;
+    let flip_locked = s.flip_magnet_locked.clone();
+    let score_x2_locked = s.score_x2_magnet_locked.clone();
+    let zero_g_locked = s.zero_g_magnet_locked.clone();
+    drop(s);
+
+    for name in &flip_locked {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            let cx = obj.position.0 + obj.size.0 * 0.5;
+            let cy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = px - cx;
+            let dy = py - cy;
+            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+            let pull = (POWERUP_MAGNET_PULL * dist).min(dist);
+            obj.position.0 += dx / dist * pull;
+            obj.position.1 += dy / dist * pull;
+        }
+    }
+    for name in &score_x2_locked {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            let cx = obj.position.0 + obj.size.0 * 0.5;
+            let cy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = px - cx;
+            let dy = py - cy;
+            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+            let pull = (POWERUP_MAGNET_PULL * dist).min(dist);
+            obj.position.0 += dx / dist * pull;
+            obj.position.1 += dy / dist * pull;
+        }
+    }
+    for name in &zero_g_locked {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            let cx = obj.position.0 + obj.size.0 * 0.5;
+            let cy = obj.position.1 + obj.size.1 * 0.5;
+            let dx = px - cx;
+            let dy = py - cy;
+            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+            let pull = (POWERUP_MAGNET_PULL * dist).min(dist);
+            obj.position.0 += dx / dist * pull;
+            obj.position.1 += dy / dist * pull;
+        }
+    }
+}
+
 // ── Coin collect ────────────────────────────────────────────────────────────
 
 fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -271,6 +384,17 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     drop(s);
 
+    if !collected.is_empty() {
+        let current_total = match c.get_var(TOTAL_COINS_COLLECTED_VAR) {
+            Some(Value::I32(v)) => v.max(0),
+            _ => 0,
+        };
+        let gained = (collected.len() as i32).saturating_mul(coin_mult as i32);
+        let new_total = current_total.saturating_add(gained);
+        c.set_var(TOTAL_COINS_COLLECTED_VAR, new_total);
+        let _ = maybe_unlock_gold_master(c, new_total);
+    }
+
     for name in &collected {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.visible = false;
@@ -279,13 +403,7 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        let sfx_path = match c.get_i32("coin_sfx_index") {
-            1 => ASSET_COIN_SFX_1,
-            2 => ASSET_COIN_SFX_2,
-            3 => ASSET_COIN_SFX_4,
-            _ => ASSET_COIN_SFX_3,
-        };
-        c.play_sound_with(sfx_path, SoundOptions::new().volume(0.2));
+        c.play_sound_with(ASSET_COIN_SFX_3, SoundOptions::new().volume(sfx_vol(c, 0.2)));
     }
 }
 
@@ -311,6 +429,7 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &I
 
     for name in &collected {
         s.flip_live.retain(|n| n != name);
+        s.flip_magnet_locked.retain(|n| n != name);
         s.flip_free.push(name.clone());
         let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
         s.score = s.score.saturating_add(50u32.saturating_mul(score_mult));
@@ -328,7 +447,7 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &I
         trigger_flip(c, st, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
 
         // coin_up SFX on gravity flip collect
-        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(0.2));
+        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2)));
 
         // Purple flash + screen shake on gravity flip collect
         if let Some(cam) = c.camera_mut() {
@@ -367,6 +486,7 @@ fn tick_score_x2_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     for name in &collected {
         s.score_x2_live.retain(|n| n != name);
+        s.score_x2_magnet_locked.retain(|n| n != name);
         s.score_x2_free.push(name.clone());
         s.score_x2_timer = SCORE_X2_DURATION;
     }
@@ -402,6 +522,7 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     for name in &collected {
         s.zero_g_live.retain(|n| n != name);
+        s.zero_g_magnet_locked.retain(|n| n != name);
         s.zero_g_free.push(name.clone());
         s.zero_g_timer = ZERO_G_DURATION;
         let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
@@ -417,7 +538,7 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(0.2));
+        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2)));
     }
 }
 

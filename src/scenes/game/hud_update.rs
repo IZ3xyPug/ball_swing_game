@@ -1,6 +1,7 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
 
+use crate::achievements::*;
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
 use crate::hud::*;
@@ -41,6 +42,9 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dirty_flip      = flip_timer     != s.hud_last_flip_timer;
     let dirty_zero_g    = zero_g_timer   != s.hud_last_zero_g_timer;
     let dirty_score_x2  = score_x2_timer != s.hud_last_score_x2_timer;
+    let prev_flip_timer    = s.hud_last_flip_timer;
+    let prev_zero_g_timer  = s.hud_last_zero_g_timer;
+    let prev_score_x2_timer = s.hud_last_score_x2_timer;
     s.hud_last_flip_timer      = flip_timer;
     s.hud_last_zero_g_timer    = zero_g_timer;
     s.hud_last_score_x2_timer  = score_x2_timer;
@@ -119,9 +123,14 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             });
         }
     }
+    // Animated catcoingold icon — show when coin counter is visible, no tint (avoids white box).
+    if let Some(obj) = c.get_game_object_mut("coin_icon_anim") {
+        obj.visible = coin_alpha > 0;
+    }
 
     // Score counter (top-right)
     if let Some(obj) = c.get_game_object_mut("score_counter") {
+        obj.visible = true;
         obj.position = (VW - 450.0, 40.0);
         if dirty_score {
             obj.set_image(Image {
@@ -142,6 +151,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Y meter
     if let Some(obj) = c.get_game_object_mut("y_meter") {
+        obj.visible = true;
         obj.position = (30.0, 344.0);
         if dirty_py {
             obj.set_image(Image {
@@ -154,6 +164,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // X meter
     if let Some(obj) = c.get_game_object_mut("x_meter") {
+        obj.visible = true;
         obj.position = (30.0, 442.0);
         if dirty_px {
             obj.set_image(Image {
@@ -164,53 +175,128 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    if let Some(obj) = c.get_game_object_mut("flip_timer") {
-        if flip_timer > 0 {
-            obj.visible = true;
-            if dirty_flip {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: flip_timer_img(flip_timer, FLIP_DURATION).into(),
-                    color: None,
-                });
+    // Timer HUD bars removed — abilities are indicated by the icons near the scoreboard.
+    if let Some(obj) = c.get_game_object_mut("flip_timer")     { obj.visible = false; }
+    if let Some(obj) = c.get_game_object_mut("zero_g_timer")   { obj.visible = false; }
+    if let Some(obj) = c.get_game_object_mut("score_x2_timer") { obj.visible = false; }
+
+    // Ability icons to the left of the scoreboard.
+    if let Some(obj) = c.get_game_object_mut("flip_icon") {
+        obj.visible = flip_timer > 0;
+    }
+    if dirty_zero_g {
+        if let Some(obj) = c.get_game_object_mut("zero_g_icon") {
+            if zero_g_timer > 0 {
+                obj.visible = true;
+                if prev_zero_g_timer == 0 {
+                    if let Some(anim) = &mut obj.animated_sprite {
+                        anim.reset();
+                        anim.set_fps(8.0);
+                    }
+                }
+            } else {
+                obj.visible = false;
+                if let Some(anim) = &mut obj.animated_sprite { anim.set_fps(0.001); }
             }
-        } else {
-            obj.visible = false;
+        }
+    }
+    if dirty_score_x2 {
+        if let Some(obj) = c.get_game_object_mut("score_x2_icon") {
+            if score_x2_timer > 0 {
+                obj.visible = true;
+                if prev_score_x2_timer == 0 {
+                    if let Some(anim) = &mut obj.animated_sprite {
+                        anim.reset();
+                        anim.set_fps(12.0);
+                    }
+                }
+            } else {
+                obj.visible = false;
+                if let Some(anim) = &mut obj.animated_sprite { anim.set_fps(0.001); }
+            }
         }
     }
 
-    if let Some(obj) = c.get_game_object_mut("zero_g_timer") {
-        if zero_g_timer > 0 {
-            obj.visible = true;
-            if dirty_zero_g {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: flip_timer_img(zero_g_timer, ZERO_G_DURATION).into(),
-                    color: None,
-                });
-            }
+    let toast_active = gold_master_toast_active(c);
+    let toast_ticks = gold_master_toast_ticks(c);
+    if toast_active && toast_ticks < GOLD_MASTER_TOAST_TOTAL_TICKS {
+        let panel_w = GOLD_MASTER_TOAST_WIDTH;
+        let panel_h = GOLD_MASTER_TOAST_HEIGHT;
+        let target_x = VW * 0.5 - panel_w * 0.5;
+        let target_y = 20.0;
+        let start_y = -panel_h - 28.0;
+        let slide_t = (toast_ticks.min(GOLD_MASTER_TOAST_RISE_TICKS) as f32)
+            / (GOLD_MASTER_TOAST_RISE_TICKS as f32);
+        let eased = 1.0 - (1.0 - slide_t).powi(3);
+        let y = if toast_ticks < GOLD_MASTER_TOAST_RISE_TICKS {
+            start_y + (target_y - start_y) * eased
         } else {
-            obj.visible = false;
-        }
-    }
+            target_y
+        };
 
-    if let Some(obj) = c.get_game_object_mut("score_x2_timer") {
-        if score_x2_timer > 0 {
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_PANEL_NAME) {
+            obj.position = (target_x, y);
             obj.visible = true;
-            if dirty_score_x2 {
-                obj.set_image(Image {
-                    shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-                    image: score_x2_timer_img(score_x2_timer, SCORE_X2_DURATION).into(),
-                    color: None,
-                });
+        }
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
+            obj.position = (target_x + 40.0, y + 22.0);
+            obj.visible = true;
+        }
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
+            obj.position = (target_x + 40.0, y + 74.0);
+            obj.visible = true;
+        }
+        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_CHECK_NAME) {
+            obj.position = (target_x + panel_w - 150.0, y + 34.0);
+            obj.visible = true;
+        }
+
+        c.set_var(GOLD_MASTER_TOAST_TICKS_VAR, toast_ticks.saturating_add(1) as i32);
+        if toast_ticks + 1 >= GOLD_MASTER_TOAST_TOTAL_TICKS {
+            c.set_var(GOLD_MASTER_TOAST_ACTIVE_VAR, false);
+        }
+    } else {
+        for name in [
+            GOLD_MASTER_TOAST_PANEL_NAME,
+            GOLD_MASTER_TOAST_TITLE_NAME,
+            GOLD_MASTER_TOAST_DESC_NAME,
+            GOLD_MASTER_TOAST_CHECK_NAME,
+        ] {
+            if let Some(obj) = c.get_game_object_mut(name) {
+                obj.visible = false;
             }
-        } else {
-            obj.visible = false;
         }
     }
 
     // Hide combo flash periodically
     if ticks % 40 == 0 {
         c.run(Action::Hide { target: Target::name("combo_flash") });
+    }
+
+    // Zero-G overlay: kept invisible (ZeroG effect shown via ability icon only).
+    if let Some(obj) = c.get_game_object_mut("zero_g_overlay") {
+        obj.visible = false;
+    }
+
+    // Space rip overlay: looping background effect for the full flip duration.
+    // Layer 3 keeps it behind all gameplay objects.
+    if dirty_flip {
+        if let Some(obj) = c.get_game_object_mut("space_rip_overlay") {
+            if flip_timer > 0 {
+                obj.visible = true;
+                if prev_flip_timer == 0 {
+                    // Rising edge: start the loop from frame 0.
+                    if let Some(anim) = &mut obj.animated_sprite {
+                        anim.reset();
+                        anim.set_fps(16.0);
+                    }
+                }
+            } else {
+                obj.visible = false;
+                if let Some(anim) = &mut obj.animated_sprite {
+                    anim.set_fps(0.001);
+                }
+            }
+        }
     }
 }

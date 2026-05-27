@@ -76,7 +76,7 @@ fn cached_space_coin_static(kind: u8, radius: f32) -> Image {
         }
     }
 
-    let built = load_image_sized(catcoin_image_bytes(kind), d as f32, d as f32);
+    let built = load_image_sized_path(catcoin_image_path(kind), d as f32, d as f32);
     cache.lock().unwrap().insert(key, built.clone());
     built
 }
@@ -522,10 +522,10 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let hy = SPACE_ENTRY_Y - STASIS_ORBIT_R * 2.5;
 
         if let Some(obj) = c.get_game_object_mut(&hook_id) {
-            obj.position = (hx - HOOK_R, hy - HOOK_R);
-            obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+            obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
+            obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
             obj.visible  = true;
-            obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::Base));
+            if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
         }
 
         {
@@ -640,10 +640,10 @@ fn spawn_catch_planet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
         drop(s);
         if let Some(obj) = c.get_game_object_mut(&hook_id) {
-            obj.position = (hx - HOOK_R, hy - HOOK_R);
-            obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+            obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
+            obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
             obj.visible  = true;
-            obj.set_image(hook_asteroid_img_for_id(&hook_id, AsteroidHookState::Base));
+            if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
         }
         s = st.lock().unwrap();
     }
@@ -752,8 +752,8 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
             let hy = VH * 0.28; // well within normal play zone, near top third
 
             if let Some(obj) = c.get_game_object_mut(&hook_id) {
-                obj.position = (hx - HOOK_R, hy - HOOK_R);
-                obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+                obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
+                obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
                 obj.visible  = true;
             }
 
@@ -1238,8 +1238,8 @@ fn spawn_space_sun_bonus_clusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if !obj.visible {
             continue;
         }
-        let hx = obj.position.0 + HOOK_R;
-        let hy = obj.position.1 + HOOK_R;
+        let hx = obj.position.0 + obj.size.0 * 0.5;
+        let hy = obj.position.1 + obj.size.1 * 0.5;
         if hx < px + VW * 0.2 || hx > px + GEN_AHEAD {
             continue;
         }
@@ -1301,13 +1301,25 @@ fn spawn_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_hook_live.push(id.clone());
         s.space_hook_rightmost = x;
         spawned += 1;
+        let size     = lcg_range(&mut s.seed, SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MAX);
+        let drift_vx = lcg_range(&mut s.seed, SPACE_ASTEROID_VX_MIN, SPACE_ASTEROID_VX_MAX);
+        let drift_vy = lcg_range(&mut s.seed, SPACE_ASTEROID_VY_MIN, SPACE_ASTEROID_VY_MAX);
+        let rot_mom  = (lcg(&mut s.seed) - 0.5) * 0.016;
         drop(s);
 
         if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x - HOOK_R, y - HOOK_R);
-            obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
-            obj.visible  = true;
-            obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
+            obj.position          = (x - size * 0.5, y - size * 0.5);
+            obj.size              = (size, size);
+            obj.momentum          = (drift_vx, drift_vy);
+            obj.rotation_momentum = rot_mom;
+            obj.visible           = true;
+            // Set GIF animation lazily at spawn time (not at boot) to avoid
+            // ticking 160 invisible sprites every frame.
+            if obj.animated_sprite.is_none() {
+                if let Some(anim) = super::bootstrap::hook_asteroid_anim_for_spawn() {
+                    obj.set_animation(anim);
+                }
+            }
         }
 
         s = st.lock().unwrap();
@@ -1456,10 +1468,10 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
                 drop(s);
                 if let Some(obj) = c.get_game_object_mut(hook_id) {
-                    obj.position = (hx - HOOK_R, hy - HOOK_R);
-                    obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+                    obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
+                    obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
                     obj.visible  = true;
-                    obj.set_image(hook_asteroid_img_for_id(hook_id, AsteroidHookState::Base));
+                    if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
                 }
                 s = st.lock().unwrap();
             }
@@ -1584,10 +1596,10 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
                 drop(s);
                 if let Some(obj) = c.get_game_object_mut(hook_id) {
-                    obj.position = (hx - HOOK_R, hy - HOOK_R);
-                    obj.size     = (HOOK_R * 2.0, HOOK_R * 2.0);
+                    obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
+                    obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
                     obj.visible  = true;
-                    obj.set_image(hook_asteroid_img_for_id(hook_id, AsteroidHookState::Base));
+                    if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
                 }
                 s = st.lock().unwrap();
             }
@@ -2063,7 +2075,7 @@ fn cull_space_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let cutoff = s.px - VW * 1.5;
     let to_remove: Vec<String> = s.space_hook_live.iter()
-        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + HOOK_R * 2.0 < cutoff).unwrap_or(true))
+        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + HOOK_ARTIFACT_R * 2.0 < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) {
@@ -2342,7 +2354,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if !collected.is_empty() {
         c.play_sound_with(
             crate::constants::ASSET_COIN_SFX_2,
-            SoundOptions::new().volume(0.28),
+            SoundOptions::new().volume(sfx_vol(c, 0.28)),
         );
     }
 
@@ -2422,7 +2434,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if !blue_collected.is_empty() || !red_collected.is_empty() {
             c.play_sound_with(
                 crate::constants::ASSET_COIN_SFX_2,
-                SoundOptions::new().volume(0.45),
+                SoundOptions::new().volume(sfx_vol(c, 0.45)),
             );
         }
     }

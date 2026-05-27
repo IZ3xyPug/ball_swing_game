@@ -109,3 +109,35 @@ pub fn apply_grab_impulse(s: &mut State, hx: f32, hy: f32) {
     s.vx = nvx;
     s.vy = nvy;
 }
+
+pub fn apply_special_hook_boost(s: &mut State, hx: f32, hy: f32) {
+    let dx = s.px - hx;
+    let dy = s.py - hy;
+    let inv_dist = 1.0 / (dx * dx + dy * dy).sqrt().max(1.0);
+    let nx = dx * inv_dist;
+    let ny = dy * inv_dist;
+    let tx = -ny;
+    let ty = nx;
+    let tangent_v = s.vx * tx + s.vy * ty;
+
+    let dir = if tangent_v.abs() > 0.05 {
+        tangent_v.signum()
+    } else if s.vx.abs() > 0.05 {
+        s.vx.signum()
+    } else if s.px >= hx {
+        1.0
+    } else {
+        -1.0
+    };
+
+    s.vx += tx * SPECIAL_HOOK_BOOST_SURGE * dir;
+    s.vy += ty * SPECIAL_HOOK_BOOST_SURGE * dir;
+    s.vy *= SPECIAL_HOOK_VERTICAL_BOOST;
+
+    let speed = (s.vx * s.vx + s.vy * s.vy).sqrt();
+    if speed < SPECIAL_HOOK_MIN_SPEED {
+        let k = SPECIAL_HOOK_MIN_SPEED / speed.max(0.01);
+        s.vx *= k;
+        s.vy *= k;
+    }
+}

@@ -87,6 +87,21 @@ pub fn gen_hook_batch(seed: &mut u64, from_x: f32, gen_head_x: &mut f32, gen_hea
     all_hooks
 }
 
+/// Tracks a pending comet: warning display + reserved comet object.
+#[derive(Clone)]
+pub struct CometWarn {
+    /// ID of the warning indicator game object.
+    pub warn_obj_id: String,
+    /// ID of the comet game object (reserved but invisible until warning ends).
+    pub comet_id: String,
+    /// Ticks elapsed since warning started.
+    pub timer: u32,
+    /// Random horizontal offset from player centre to far-above spawn point.
+    pub h_offset: f32,
+    /// Random vertical distance above player to comet spawn point.
+    pub v_offset: f32,
+}
+
 #[derive(Clone)]
 pub struct State {
     pub px: f32, pub py: f32,
@@ -153,16 +168,19 @@ pub struct State {
     pub flip_free:      Vec<String>,
     pub flip_rightmost: f32,
     pub flip_timer:     u32,
+    pub flip_magnet_locked: Vec<String>,
 
     pub score_x2_live:      Vec<String>,
     pub score_x2_free:      Vec<String>,
     pub score_x2_rightmost: f32,
     pub score_x2_timer:     u32,
+    pub score_x2_magnet_locked: Vec<String>,
 
     pub zero_g_live:      Vec<String>,
     pub zero_g_free:      Vec<String>,
     pub zero_g_rightmost: f32,
     pub zero_g_timer:     u32,
+    pub zero_g_magnet_locked: Vec<String>,
 
     pub gate_live:      Vec<String>,
     pub gate_free:      Vec<String>,
@@ -327,4 +345,28 @@ pub struct State {
     pub cannon_capture_id: String,
     /// Remaining ticks of reduced gravity after cannon launch.
     pub cannon_damp_timer: u32,
+    // ── Boss fight ────────────────────────────────────────────────────────────
+    pub boss_active: bool,
+    pub boss_entry_ticks: u32,      // counts up after crossing threshold
+    pub boss_spawned: bool,         // body object made visible
+    pub boss_cleared: bool,         // arena cleared on entry (one-shot)
+    pub boss_hp: i32,
+    pub boss_phase: f32,            // lissajous phase angle (radians, advances per tick)
+    pub boss_vx: f32,               // kept for bolts; movement now parametric
+    pub boss_vy: f32,
+    pub boss_shoot_timer: u32,      // ticks until next bolt
+    pub boss_bolt_live: Vec<(String, f32, f32, u32)>, // (id, vx, vy, ttl)
+    pub boss_bolt_free: Vec<String>,
+    pub boss_asteroids: Vec<String>, // decorative asteroids in the arena
+    pub hud_last_boss_hp: i32,
+
+    // ── Comets ────────────────────────────────────────────────────────────────
+    /// Live comets: (id, vx, vy, ticks_remaining)
+    pub comet_live: Vec<(String, f32, f32, u32)>,
+    pub comet_free: Vec<String>,
+    /// Pending warnings before comet spawn: see CometWarn.
+    pub comet_warn_live: Vec<CometWarn>,
+    pub warn_free: Vec<String>,
+    /// Countdown to next auto-comet spawn attempt (ticks).
+    pub comet_spawn_timer: u32,
 }

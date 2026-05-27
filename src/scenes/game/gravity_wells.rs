@@ -107,6 +107,7 @@ pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
             if let Some(obj) = c.get_game_object(id) {
                 let pr = obj.planet_radius.unwrap_or(0.0);
                 if pr <= 0.0 { continue; }
+                let strength_scale = obj.gravity_strength.max(GWELL_STRENGTH_MIN);
                 let well_cx = obj.position.0 + obj.size.0 * 0.5;
                 let well_cy = obj.position.1 + obj.size.1 * 0.5;
                 let dx = well_cx - ax;
@@ -114,7 +115,7 @@ pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
                 let dist2 = dx * dx + dy * dy;
                 if dist2 < pr * pr {
                     let dist = dist2.sqrt().max(1.0);
-                    let strength = GWELL_STRENGTH_MIN * (1.0 - dist / pr);
+                    let strength = strength_scale * (1.0 - dist / pr);
                     force_x += dx / dist * strength;
                     force_y += dy / dist * strength;
                 }

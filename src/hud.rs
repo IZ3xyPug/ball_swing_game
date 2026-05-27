@@ -2,25 +2,10 @@ use crate::constants::*;
 use crate::images::*;
 use std::sync::OnceLock;
 
-fn hud_coin_icon() -> &'static image::RgbaImage {
-    static ICON: OnceLock<image::RgbaImage> = OnceLock::new();
-    ICON.get_or_init(|| {
-        let gif_data = include_bytes!("../assets/coin.gif");
-        let img = image::load_from_memory(gif_data)
-            .expect("coin.gif decode failed")
-            .into_rgba8();
-        image::imageops::resize(&img, 112, 112, image::imageops::FilterType::Lanczos3)
-    })
-}
-
 pub fn coin_counter_img(count: u32) -> image::RgbaImage {
     let w = 640;
     let h = 168;
     let mut img = image::RgbaImage::new(w, h);
-
-    let icon_x = 12i64;
-    let icon_y = ((h - 112) / 2) as i64;
-    image::imageops::overlay(&mut img, hud_coin_icon(), icon_x, icon_y);
 
     let clamped = count.min(999_999);
     let digits = clamped.to_string();

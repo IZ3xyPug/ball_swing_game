@@ -69,3 +69,19 @@ pub fn menu_bgm_finished() -> bool {
         .and_then(|slot| slot.as_ref().map(|h| h.is_finished()))
         .unwrap_or(false)
 }
+
+pub fn set_game_bgm_volume(vol: f32) {
+    if let Ok(slot) = game_bgm_slot().lock() {
+        if let Some(h) = slot.as_ref() {
+            h.set_volume(vol.max(0.0));
+        }
+    }
+}
+
+pub fn set_menu_bgm_volume(vol: f32) {
+    if let Ok(slot) = menu_bgm_slot().lock() {
+        if let Some(h) = slot.as_ref() {
+            h.set_volume(vol.max(0.0));
+        }
+    }
+}

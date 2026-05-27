@@ -1,7 +1,10 @@
 use crate::constants::*;
-use crate::images::{circle_cached, asteroid_hook_image_cached};
-use quartz::{Canvas, Image, ShapeType, SoundOptions, Value};
+use crate::images::circle_cached;
+use quartz::{Canvas, GameObject, Image, ShapeType, SoundOptions, Value};
+use quartz::AnimatedSprite;
 use std::sync::OnceLock;
+use std::io::Cursor;
+use image::AnimationDecoder;
 
 /// Play the currently-selected death sound. Call before any load_scene("gameover*").
 /// death_sound_mode: 0 = man_game_over (default), 1 = arcade_game_over.
@@ -11,7 +14,21 @@ pub fn play_death_sound(c: &mut Canvas) {
         _ => 0,
     };
     let asset = if mode == 1 { ASSET_ARCADE_GAME_OVER } else { ASSET_WOBBLY_MEOW };
-    c.play_sound_with(asset, SoundOptions::new().volume(1.0));
+    let vol = sfx_vol(c, 0.65);
+    c.play_sound_with(asset, SoundOptions::new().volume(vol));
+}
+
+/// Compute effective SFX volume: base * vol_master * vol_sound.
+pub fn sfx_vol(c: &Canvas, base: f32) -> f32 {
+    let master = match c.get_var("vol_master") {
+        Some(Value::F32(v)) => v.clamp(0.0, 1.0),
+        _ => 1.0,
+    };
+    let sound = match c.get_var("vol_sound") {
+        Some(Value::F32(v)) => v.clamp(0.0, 1.0),
+        _ => 1.0,
+    };
+    (base * master * sound).clamp(0.0, 1.0)
 }
 
 /// Hook image using circle_cached — keeps hooks in the same
@@ -24,103 +41,153 @@ pub fn hook_img(r: u8, g: u8, b: u8) -> Image {
     }
 }
 
-#[derive(Copy, Clone)]
-pub enum AsteroidHookState {
-    Base,
-    Near,
-    On,
-}
+/// Cached decoded + resized GIF frames (decoded once, cloned cheaply on each spawn).
+static HOOK_ARTIFACT_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
 
-fn asteroid_bucket_for_id(id: &str) -> usize {
-    let mut n: u32 = 0;
-    let mut any = false;
-    for b in id.bytes() {
-        if b.is_ascii_digit() {
-            any = true;
-            n = n.wrapping_mul(10).wrapping_add((b - b'0') as u32);
-        }
+fn decode_hook_artifact_frames() -> Vec<image::RgbaImage> {
+    let bytes = std::fs::read(ASSET_HOOK_ARTIFACT_GIF).expect("hook_artifact.gif missing");
+    let d = (HOOK_ARTIFACT_R * 2.0).round() as u32;
+    let cursor = Cursor::new(bytes);
+    if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
+        let frames: Vec<image::RgbaImage> = decoder.into_frames()
+            .filter_map(|f| f.ok())
+            .map(|f| {
+                let buf = f.into_buffer();
+                let (w, h) = (buf.width(), buf.height());
+                if w == d && h == d { return buf; }
+                let scale = (d as f32 / w as f32).min(d as f32 / h as f32);
+                let rw = (w as f32 * scale).round().max(1.0) as u32;
+                let rh = (h as f32 * scale).round().max(1.0) as u32;
+                let resized = image::imageops::resize(&buf, rw, rh, image::imageops::FilterType::Nearest);
+                let ox = ((d.saturating_sub(rw)) / 2) as i64;
+                let oy = ((d.saturating_sub(rh)) / 2) as i64;
+                let mut canvas = image::RgbaImage::from_pixel(d, d, image::Rgba([0, 0, 0, 0]));
+                image::imageops::overlay(&mut canvas, &resized, ox, oy);
+                canvas
+            })
+            .collect();
+        if !frames.is_empty() { return frames; }
     }
-    if any { (n % 3) as usize } else { 0 }
+    vec![image::RgbaImage::from_pixel(d, d, image::Rgba([200, 200, 200, 255]))]
 }
 
-fn asteroid_scale_for_bucket(bucket: usize) -> f32 {
-    match bucket {
-        0 => 1.50, // small (base hook size)
-        1 => 1.90, // medium
-        _ => 2.25, // big
+/// Prewarm the artifact frame cache (call from a background thread at startup).
+pub fn prewarm_hook_artifact() {
+    HOOK_ARTIFACT_FRAMES.get_or_init(decode_hook_artifact_frames);
+}
+
+/// Returns an AnimatedSprite for the hook artifact GIF, frozen at frame 0.
+/// Call `sprite.reset(); sprite.set_fps(HOOK_ARTIFACT_FPS)` to play it on grab.
+pub fn hook_artifact_anim() -> AnimatedSprite {
+    let d = HOOK_ARTIFACT_R * 2.0;
+    let size = (d, d);
+    // Clone cached frames — much cheaper than re-decoding from disk each time.
+    let frames = HOOK_ARTIFACT_FRAMES.get_or_init(decode_hook_artifact_frames).clone();
+    let mut anim = AnimatedSprite::from_frames(frames, size, HOOK_ARTIFACT_FPS);
+    anim.set_fps(0.001);
+    anim
+}
+
+// ── Green artifact hook (special hook gif) ──────────────────────────────────
+
+// ── Zero-G overlay ─────────────────────────────────────────────────────────
+static ZERO_G_OVERLAY_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
+fn decode_zero_g_overlay_frames() -> Vec<image::RgbaImage> {
+    let bytes = std::fs::read(ASSET_ZERO_G_GIF).expect("ZeroG.gif missing");
+    let d = 256u32; // ZeroG.gif is natively 256×256
+    let cursor = Cursor::new(bytes);
+    if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
+        let frames: Vec<image::RgbaImage> = decoder.into_frames()
+            .filter_map(|f| f.ok())
+            .map(|f| {
+                let buf = f.into_buffer();
+                let (w, h) = (buf.width(), buf.height());
+                if w == d && h == d { return buf; }
+                let scale = (d as f32 / w as f32).min(d as f32 / h as f32);
+                let rw = (w as f32 * scale).round().max(1.0) as u32;
+                let rh = (h as f32 * scale).round().max(1.0) as u32;
+                let resized = image::imageops::resize(&buf, rw, rh, image::imageops::FilterType::Nearest);
+                let ox = ((d.saturating_sub(rw)) / 2) as i64;
+                let oy = ((d.saturating_sub(rh)) / 2) as i64;
+                let mut canvas = image::RgbaImage::from_pixel(d, d, image::Rgba([0, 0, 0, 0]));
+                image::imageops::overlay(&mut canvas, &resized, ox, oy);
+                canvas
+            })
+            .collect();
+        if !frames.is_empty() { return frames; }
     }
+    vec![image::RgbaImage::from_pixel(d, d, image::Rgba([135, 220, 255, 180]))]
+}
+pub fn prewarm_zero_g_overlay() {
+    ZERO_G_OVERLAY_FRAMES.get_or_init(decode_zero_g_overlay_frames);
+}
+pub fn zero_g_overlay_anim() -> AnimatedSprite {
+    let size = (256.0, 256.0); // matches native 256×256 GIF
+    let frames = ZERO_G_OVERLAY_FRAMES.get_or_init(decode_zero_g_overlay_frames).clone();
+    let mut anim = AnimatedSprite::from_frames(frames, size, 16.0);
+    anim.set_fps(0.001); // frozen until activated
+    anim
 }
 
-fn asteroid_state_idx(state: AsteroidHookState) -> usize {
-    match state {
-        AsteroidHookState::Base => 0,
-        AsteroidHookState::Near => 1,
-        AsteroidHookState::On => 2,
+// ── Space rip overlay ──────────────────────────────────────────────────────
+// Display size: 512×1024 virtual px (portrait, matches space_rip.gif 1:2 ratio).
+// AnimatedSprite::new resizes each frame with fit-contain so the image fills
+// correctly — no distortion / no full-screen stretch.
+pub const SPACE_RIP_W: f32 = 512.0;
+pub const SPACE_RIP_H: f32 = 1024.0;
+
+pub fn space_rip_overlay_anim() -> AnimatedSprite {
+    let bytes = include_bytes!("../../../assets/space_rip.gif");
+    let mut anim = AnimatedSprite::new(bytes, (SPACE_RIP_W, SPACE_RIP_H), 16.0)
+        .unwrap_or_else(|_| {
+            let fallback = vec![image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 0]))];
+            AnimatedSprite::from_frames(fallback, (SPACE_RIP_W, SPACE_RIP_H), 16.0)
+        });
+    anim.set_fps(0.001); // frozen until activated by hud_update
+    anim
+}
+
+static HOOK_ARTIFACT_GREEN_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
+
+fn decode_hook_artifact_green_frames() -> Vec<image::RgbaImage> {
+    let bytes = std::fs::read(ASSET_HOOK_ARTIFACT_GREEN_GIF).expect("hook_artifact_green.gif missing");
+    let d = (HOOK_ARTIFACT_R * 2.0).round() as u32;
+    let cursor = Cursor::new(bytes);
+    if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
+        let frames: Vec<image::RgbaImage> = decoder.into_frames()
+            .filter_map(|f| f.ok())
+            .map(|f| {
+                let buf = f.into_buffer();
+                let (w, h) = (buf.width(), buf.height());
+                if w == d && h == d { return buf; }
+                let scale = (d as f32 / w as f32).min(d as f32 / h as f32);
+                let rw = (w as f32 * scale).round().max(1.0) as u32;
+                let rh = (h as f32 * scale).round().max(1.0) as u32;
+                let resized = image::imageops::resize(&buf, rw, rh, image::imageops::FilterType::Nearest);
+                let ox = ((d.saturating_sub(rw)) / 2) as i64;
+                let oy = ((d.saturating_sub(rh)) / 2) as i64;
+                let mut canvas = image::RgbaImage::from_pixel(d, d, image::Rgba([0, 0, 0, 0]));
+                image::imageops::overlay(&mut canvas, &resized, ox, oy);
+                canvas
+            })
+            .collect();
+        if !frames.is_empty() { return frames; }
     }
+    vec![image::RgbaImage::from_pixel(d, d, image::Rgba([52, 196, 84, 255]))]
 }
 
-fn tint_asteroid_pixels(mut img: image::RgbaImage, state: AsteroidHookState) -> image::RgbaImage {
-    let (mul, add_r, add_g, add_b) = match state {
-        AsteroidHookState::Base => (1.00,  0.0,  0.0, 0.0),
-        AsteroidHookState::Near => (1.12, 16.0, 12.0, 3.0),
-        AsteroidHookState::On   => (1.25, 34.0, 24.0, 6.0),
-    };
-    for px in img.pixels_mut() {
-        if px[3] == 0 {
-            continue;
-        }
-        let r = (px[0] as f32 * mul + add_r).clamp(0.0, 255.0);
-        let g = (px[1] as f32 * mul + add_g).clamp(0.0, 255.0);
-        let b = (px[2] as f32 * mul + add_b).clamp(0.0, 255.0);
-        px[0] = r as u8;
-        px[1] = g as u8;
-        px[2] = b as u8;
-    }
-    img
+pub fn prewarm_hook_artifact_green() {
+    HOOK_ARTIFACT_GREEN_FRAMES.get_or_init(decode_hook_artifact_green_frames);
 }
 
-fn build_asteroid_variant(scale: f32, state: AsteroidHookState) -> image::RgbaImage {
-    let base = asteroid_hook_image_cached();
-    let (w, h) = base.dimensions();
-    let zw = ((w as f32 * scale).round() as u32).max(w);
-    let zh = ((h as f32 * scale).round() as u32).max(h);
-    let zoomed = image::imageops::resize(
-        base.as_ref(),
-        zw,
-        zh,
-        image::imageops::FilterType::Lanczos3,
-    );
-    let x0 = (zw - w) / 2;
-    let y0 = (zh - h) / 2;
-    let cropped = image::imageops::crop_imm(&zoomed, x0, y0, w, h).to_image();
-    tint_asteroid_pixels(cropped, state)
-}
-
-/// Asteroid hook image with deterministic small/medium/big variants by id
-/// and pixel-only highlight variants for near/grab states.
-pub fn hook_asteroid_img_for_id(id: &str, state: AsteroidHookState) -> Image {
-    type Cache = [[std::sync::Arc<image::RgbaImage>; 3]; 3];
-    static CACHE: OnceLock<Cache> = OnceLock::new();
-
-    let cache = CACHE.get_or_init(|| {
-        std::array::from_fn(|bucket| {
-            let scale = asteroid_scale_for_bucket(bucket);
-            [
-                std::sync::Arc::new(build_asteroid_variant(scale, AsteroidHookState::Base)),
-                std::sync::Arc::new(build_asteroid_variant(scale, AsteroidHookState::Near)),
-                std::sync::Arc::new(build_asteroid_variant(scale, AsteroidHookState::On)),
-            ]
-        })
-    });
-
-    let bucket = asteroid_bucket_for_id(id);
-    let state_idx = asteroid_state_idx(state);
-    Image {
-        // Ellipse mask avoids square-edge highlighting artifacts.
-        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-        image: cache[bucket][state_idx].clone(),
-        color: None,
-    }
+/// Returns an AnimatedSprite for the green hook artifact GIF, frozen at frame 0.
+pub fn hook_artifact_green_anim() -> AnimatedSprite {
+    let d = HOOK_ARTIFACT_R * 2.0;
+    let size = (d, d);
+    let frames = HOOK_ARTIFACT_GREEN_FRAMES.get_or_init(decode_hook_artifact_green_frames).clone();
+    let mut anim = AnimatedSprite::from_frames(frames, size, HOOK_ARTIFACT_FPS);
+    anim.set_fps(0.001);
+    anim
 }
 
 pub fn hook_base_for_zone(zone_idx: usize) -> (u8, u8, u8) {
@@ -144,6 +211,49 @@ pub fn hook_on_for_zone(zone_idx: usize) -> (u8, u8, u8) {
         1 => C_HOOK_ON_ZONE1,
         2 => C_HOOK_ON_ZONE2,
         _ => C_HOOK_ON,
+    }
+}
+
+#[inline]
+pub fn is_special_hook_obj(obj: &GameObject) -> bool {
+    obj.tags.iter().any(|t| t == SPECIAL_HOOK_TAG)
+}
+
+#[inline]
+pub fn is_extended_hook_obj(obj: &GameObject) -> bool {
+    obj.tags.iter().any(|t| t == EXTENDED_HOOK_TAG)
+}
+
+#[inline]
+pub fn hook_base_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
+    if is_extended_hook_obj(obj) {
+        C_HOOK_EXTENDED
+    } else if is_special_hook_obj(obj) {
+        C_HOOK_SPECIAL
+    } else {
+        hook_base_for_zone(zone_idx)
+    }
+}
+
+#[inline]
+pub fn hook_near_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
+    if is_extended_hook_obj(obj) {
+        C_HOOK_EXTENDED_NEAR
+    } else if is_special_hook_obj(obj) {
+        C_HOOK_SPECIAL_NEAR
+    } else {
+        hook_near_for_zone(zone_idx)
+    }
+}
+
+#[inline]
+pub fn hook_on_for_obj(obj: &GameObject, zone_idx: usize) -> (u8, u8, u8) {
+    if is_extended_hook_obj(obj) {
+        C_HOOK_EXTENDED_ON
+    } else if is_special_hook_obj(obj) {
+        C_HOOK_SPECIAL_ON
+    } else {
+        hook_on_for_zone(zone_idx)
     }
 }
 
@@ -205,3 +315,56 @@ pub fn spinner_for_zone(zone_idx: usize) -> (u8, u8, u8) {
 pub fn pad_thruster_id(pad_id: &str) -> String {
     format!("{pad_id}_thruster")
 }
+
+// ── Comet warning images ──────────────────────────────────────────────────────
+// Each image is decoded once (OnceLock) and cloned cheaply on each use.
+
+fn load_warn_rgba(bytes: &[u8]) -> std::sync::Arc<image::RgbaImage> {
+    let src = image::load_from_memory(bytes)
+        .expect("warn image decode failed")
+        .to_rgba8();
+    let resized = image::imageops::resize(
+        &src,
+        COMET_WARN_W as u32,
+        COMET_WARN_H as u32,
+        image::imageops::FilterType::Lanczos3,
+    );
+    std::sync::Arc::new(resized)
+}
+
+macro_rules! warn_img_accessor {
+    ($fn_name:ident, $lock_name:ident, $bytes:expr) => {
+        static $lock_name: OnceLock<Image> = OnceLock::new();
+        pub fn $fn_name() -> Image {
+            $lock_name.get_or_init(|| {
+                let rgba = load_warn_rgba($bytes);
+                Image {
+                    shape: ShapeType::Rectangle(0.0, (COMET_WARN_W, COMET_WARN_H), 0.0),
+                    image: rgba,
+                    color: None,
+                }
+            }).clone()
+        }
+    };
+}
+
+warn_img_accessor!(
+    warn_img_dark,
+    WARN_IMG_DARK,
+    include_bytes!("../../../assets/exclamation_dark.webp")
+);
+warn_img_accessor!(
+    warn_img_light,
+    WARN_IMG_LIGHT,
+    include_bytes!("../../../assets/exclamation_light.webp")
+);
+warn_img_accessor!(
+    warn_img_dark_explode,
+    WARN_IMG_DARK_EXPLODE,
+    include_bytes!("../../../assets/exclamation_dark_explode.webp")
+);
+warn_img_accessor!(
+    warn_img_light_explode,
+    WARN_IMG_LIGHT_EXPLODE,
+    include_bytes!("../../../assets/exclamation_light_explode.webp")
+);

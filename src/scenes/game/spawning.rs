@@ -9,6 +9,14 @@ use crate::state::*;
 use super::helpers::*;
 
 static GWELLON_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
+static COMET_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
+
+pub fn comet_template() -> AnimatedSprite {
+    COMET_TEMPLATE.get_or_init(|| {
+        AnimatedSprite::new(include_bytes!("../../../assets/comet.gif"), (COMET_SIZE, COMET_SIZE), COMET_FPS)
+            .expect("comet.gif decode")
+    }).clone()
+}
 
 fn gwellon_template() -> AnimatedSprite {
     GWELLON_TEMPLATE.get_or_init(|| {
@@ -115,6 +123,136 @@ pub fn tick_spawn_animations(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
+/// Debug helper: spawn one comet targeting the player from above.
+/// Shows a 2-second warning indicator first; comet appears when warning finishes.
+/// Returns true if queued, false if pool is empty.
+/// Pre-warm all comet asset OnceLocks. Call from a background thread at scene
+/// entry so the first J-press has no lag.
+pub fn preload_comet_assets() {
+    comet_template();
+    warn_img_dark();
+    warn_img_light();
+    warn_img_dark_explode();
+    warn_img_light_explode();
+}
+
+pub fn spawn_debug_comet(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    let mut s = st.lock().unwrap();
+    let Some(comet_id) = s.comet_free.pop() else { return false; };
+    let Some(warn_id) = s.warn_free.pop() else {
+        s.comet_free.push(comet_id);
+        return false;
+    };
+
+    let h_offset = lcg_range(&mut s.seed, -COMET_SPAWN_SPREAD, COMET_SPAWN_SPREAD);
+    let v_offset = lcg_range(&mut s.seed, COMET_SPAWN_ABOVE, COMET_SPAWN_ABOVE + COMET_SPAWN_ABOVE_EXTRA);
+
+    // Warning indicator: follows player each tick, centered on comet spawn offset.
+    let init_warn_x = s.px + h_offset - COMET_WARN_W * 0.5;
+    let init_warn_y = s.py - v_offset - COMET_WARN_H * 0.5;
+
+    s.comet_warn_live.push(CometWarn {
+        warn_obj_id: warn_id.clone(),
+        comet_id:    comet_id.clone(),
+        timer:       0,
+        h_offset,
+        v_offset,
+    });
+    drop(s);
+
+    if let Some(obj) = c.get_game_object_mut(&warn_id) {
+        obj.set_image(warn_img_dark());
+        obj.position = (init_warn_x, init_warn_y);
+        obj.size = (COMET_WARN_W, COMET_WARN_H);
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.rotation = 0.0;
+        obj.visible = true;
+    }
+
+    true
+}
+
+/// Debug helper: spawn one special green grab hook near the player when requested.
+/// Returns true if a hook was spawned, false if no pooled hook was available.
+pub fn spawn_debug_special_hook(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    let mut s = st.lock().unwrap();
+    let Some(id) = s.pool_free.pop() else { return false; };
+
+    let hx = s.px + VW * 0.24;
+    let hy = (s.py - 260.0).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+
+    s.live_hooks.push(id.clone());
+    if hx > s.rightmost_x { s.rightmost_x = hx; }
+    s.last_hook_y = hy;
+    s.world_sampler.add(hx, hy);
+    s.spawn_animations.retain(|a| a.id != id);
+    drop(s);
+
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.visible = true;
+        obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
+        obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.clear_glow();
+        obj.tags.retain(|t| t != SPECIAL_HOOK_TAG);
+        obj.tags.push(SPECIAL_HOOK_TAG.into());
+        obj.set_animation(hook_artifact_green_anim());
+        c.set_var("special_hook_last_x", Value::F32(hx));
+        true
+    } else {
+        // Return hook id back to pool if object lookup failed unexpectedly.
+        let mut s = st.lock().unwrap();
+        s.live_hooks.retain(|n| n != &id);
+        s.pool_free.push(id);
+        false
+    }
+}
+
+/// Debug helper: spawn one extended red grab hook near the player when requested.
+/// Returns true if a hook was spawned, false if no pooled hook was available.
+pub fn spawn_debug_extended_hook(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    let mut s = st.lock().unwrap();
+    let Some(id) = s.pool_free.pop() else { return false; };
+
+    let hx = s.px + VW * 0.24;
+    let hy = (s.py - 260.0).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+
+    s.live_hooks.push(id.clone());
+    if hx > s.rightmost_x { s.rightmost_x = hx; }
+    s.last_hook_y = hy;
+    s.world_sampler.add(hx, hy);
+    s.spawn_animations.retain(|a| a.id != id);
+    drop(s);
+
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.visible = true;
+        obj.position = (hx - HOOK_R, hy - HOOK_R);
+        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+        obj.animated_sprite = None;
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.clear_glow();
+        obj.tags.retain(|t| t != EXTENDED_HOOK_TAG);
+        obj.tags.push(EXTENDED_HOOK_TAG.into());
+        obj.set_image(hook_img(C_HOOK_EXTENDED.0, C_HOOK_EXTENDED.1, C_HOOK_EXTENDED.2));
+        c.set_var("extended_hook_last_x", Value::F32(hx));
+        true
+    } else {
+        // Return hook id back to pool if object lookup failed unexpectedly.
+        let mut s = st.lock().unwrap();
+        s.live_hooks.retain(|n| n != &id);
+        s.pool_free.push(id);
+        false
+    }
+}
+
 pub fn tick_spawning(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
@@ -127,6 +265,11 @@ pub fn tick_spawning(
     pad_thruster_anim_template_flipped: Option<&AnimatedSprite>,
 ) {
     if st.lock().unwrap().in_space_mode {
+        return;
+    }
+    // No normal spawning inside the boss arena.
+    if st.lock().unwrap().boss_active {
+        tick_spawn_animations(c, st);
         return;
     }
 
@@ -165,7 +308,26 @@ pub fn tick_spawning(
     spawn_rocket_pads(c, st);
     spawn_main_asteroids(c, st);
     super::gravity_cannon::spawn_cannons(c, st);
+    // Auto-comet: counts down and fires with 50% chance.
+    spawn_auto_comet(c, st);
     tick_spawn_animations(c, st);
+}
+
+/// Automatically attempt to spawn a comet on a timer. 50% chance each interval.
+fn spawn_auto_comet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    {
+        let mut s = st.lock().unwrap();
+        if s.comet_spawn_timer > 0 {
+            s.comet_spawn_timer -= 1;
+            return;
+        }
+        // Reset timer for next interval (add some jitter via lcg).
+        let jitter = lcg_range(&mut s.seed, 0.0, COMET_SPAWN_INTERVAL as f32 * 0.5) as u32;
+        s.comet_spawn_timer = COMET_SPAWN_INTERVAL + jitter;
+        // 50% chance to actually fire.
+        if lcg(&mut s.seed) >= 0.5 { return; }
+    }
+    spawn_debug_comet(c, st);
 }
 
 fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -258,6 +420,17 @@ fn find_safe_hook_position(c: &Canvas, s: &State, base_x: f32, base_y: f32) -> O
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
 fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Read asteroid mode once from canvas before locking State.
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let mut last_special_x = c.get_var("special_hook_last_x").and_then(|v| {
+        if let Value::F32(x) = v {
+            Some(x)
+        } else if let Value::F64(x) = v {
+            Some(x as f32)
+        } else {
+            None
+        }
+    });
     let mut s = st.lock().unwrap();
     let mut hooks_spawned = 0usize;
     while hooks_spawned < HOOKS_SPAWN_BUDGET_PER_TICK
@@ -375,16 +548,55 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         hooks_spawned += 1;
         s.world_sampler.add(hx, hy);
 
+        let rolled_special = lcg(&mut s.seed) < SPECIAL_HOOK_SPAWN_CHANCE;
+        let has_special_gap = last_special_x
+            .map(|prev_x| (hx - prev_x).abs() >= SPECIAL_HOOK_MIN_X_GAP)
+            .unwrap_or(true);
+        let is_special_hook = rolled_special && has_special_gap;
+        if is_special_hook {
+            last_special_x = Some(hx);
+            c.set_var("special_hook_last_x", Value::F32(hx));
+        }
+
+        let rolled_extended = lcg(&mut s.seed) < EXTENDED_HOOK_SPAWN_CHANCE;
+        let last_extended_x = c.get_var("extended_hook_last_x").and_then(|v| {
+            if let Value::F32(x) = v {
+                Some(x)
+            } else if let Value::F64(x) = v {
+                Some(x as f32)
+            } else {
+                None
+            }
+        });
+        let has_extended_gap = last_extended_x
+            .map(|prev_x| (hx - prev_x).abs() >= EXTENDED_HOOK_MIN_X_GAP)
+            .unwrap_or(true);
+        let is_extended_hook = rolled_extended && has_extended_gap && !is_special_hook;
+        if is_extended_hook {
+            c.set_var("extended_hook_last_x", Value::F32(hx));
+        }
+
+        let hook_half = if asteroid_mode || is_special_hook {
+            HOOK_ARTIFACT_R
+        } else {
+            HOOK_R
+        };
+
         // Enqueue drop-in animation, gravity-aware entry direction.
         let start_rot   = lcg_range(&mut s.seed, -80.0, 80.0);
-        let target_x    = hx - HOOK_R;
+        let target_x    = hx - hook_half;
         let gravity_dir = s.gravity_dir;
         // target_y: where the hook rests.  hook_start_y: where it begins off-screen.
         let (target_y, hook_start_y) = if gravity_dir < 0.0 {
-            let ty = VH - hy - HOOK_R;      // mirrored position for flipped gravity
+            let ty = VH - hy - hook_half;   // mirrored position for flipped gravity
             (ty, ty + SPAWN_ANIM_DROP)      // enter from below screen
         } else {
-            let ty = hy - HOOK_R;
+            // For asteroid hooks clamp so the top edge never goes above y = -600.
+            let ty = if asteroid_mode {
+                (hy - hook_half).max(-600.0)
+            } else {
+                hy - hook_half
+            };
             (ty, ty - SPAWN_ANIM_DROP)      // enter from above screen
         };
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
@@ -402,17 +614,38 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let zone_idx = zone_index_for_distance(s.distance);
         drop(s);
 
-        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+        let asteroid_mode = asteroid_mode; // shadowed for clarity inside drop scope
         if let Some(obj) = c.get_game_object_mut(&id) {
             // Start off-screen on the gravity-entry side; tick_spawn_animations moves it.
-            obj.position = (hx - HOOK_R, hook_start_y);
-            obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+            obj.position = (hx - hook_half, hook_start_y);
             obj.visible = false; // hidden until animation starts
-            if asteroid_mode {
-                obj.set_image(hook_asteroid_img_for_id(&id, AsteroidHookState::Base));
+            obj.tags.retain(|t| t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG);
+            if asteroid_mode && !is_special_hook {
+                // Artifact GIF hook — stationary, animation frozen until grabbed.
+                obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                obj.set_animation(hook_artifact_anim());
+                obj.gravity = 0.0;
+                obj.momentum = (0.0, 0.0);
+                obj.rotation_momentum = 0.0;
+                obj.collision_mode = CollisionMode::NonPlatform;
+            } else if is_special_hook {
+                // Green special hook — uses the green artifact gif.
+                obj.tags.push(SPECIAL_HOOK_TAG.into());
+                obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                obj.set_animation(hook_artifact_green_anim());
+                obj.gravity = 0.0;
+                obj.momentum = (0.0, 0.0);
+                obj.rotation_momentum = 0.0;
+                obj.collision_mode = CollisionMode::NonPlatform;
             } else {
-                let (r, g, b) = hook_base_for_zone(zone_idx);
+                obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+                if is_extended_hook {
+                    obj.tags.push(EXTENDED_HOOK_TAG.into());
+                }
+                obj.animated_sprite = None;
+                let (r, g, b) = hook_base_for_obj(obj, zone_idx);
                 obj.set_image(hook_img(r, g, b));
+                obj.collision_mode = CollisionMode::NonPlatform;
             }
             obj.clear_highlight();
         }
@@ -433,6 +666,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.pending.extend(batch);
         }
     }
+    drop(s);
 }
 
 // ── Pads ──────────────────────────────────────────────────────────────────────
@@ -923,6 +1157,8 @@ fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Gates ─────────────────────────────────────────────────────────────────────
 
 fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Read asteroid mode before locking State (canvas borrow + state lock can't coexist).
+    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     let mut s = st.lock().unwrap();
     let mut spawned = 0usize;
     while spawned < GATES_SPAWN_BUDGET_PER_TICK
@@ -1000,11 +1236,22 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
             }
             if let Some((hook_id, hx, hy)) = hook_spawn {
+                let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
                 if let Some(obj) = c.get_game_object_mut(hook_id) {
-                    let (r, g, b) = hook_base_for_zone(zone_idx);
-                    obj.position = (*hx - HOOK_R, *hy - HOOK_R);
+                    obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+                    if asteroid_mode {
+                        obj.position = (*hx - HOOK_R, *hy - HOOK_R);
+                        obj.set_animation(hook_artifact_anim());
+                        obj.gravity = 0.0;
+                        obj.momentum = (0.0, 0.0);
+                        obj.rotation_momentum = 0.0;
+                        obj.collision_mode = CollisionMode::NonPlatform;
+                    } else {
+                        let (r, g, b) = hook_base_for_obj(obj, zone_idx);
+                        obj.position = (*hx - HOOK_R, *hy - HOOK_R);
+                        obj.set_image(hook_img(r, g, b));
+                    }
                     obj.visible = true;
-                    obj.set_image(hook_img(r, g, b));
                 }
             }
         }
@@ -1108,12 +1355,8 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let gap = lcg_range(&mut s.seed, TURRET_GAP_MIN, TURRET_GAP_MAX);
         let x = s.turret_rightmost + gap;
-        // Dual Y-band: 100–250 (top) or 1400–1850 (bottom).
-        let y = if lcg(&mut s.seed) < 0.5 {
-            lcg_range(&mut s.seed, 100.0, 250.0)
-        } else {
-            lcg_range(&mut s.seed, 1400.0, 1850.0)
-        };
+        // Spawn 200y above the last hook position (clamped to screen bounds).
+        let y = (s.last_hook_y - 200.0).clamp(50.0, VH - 50.0);
         let Some(id) = s.turret_free.pop() else { break; };
         s.turret_live.push(id.clone());
         s.turret_rightmost = x;

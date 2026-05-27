@@ -6,12 +6,13 @@ use quartz::*;
 use quartz::plugin::terrain_collision::TerrainCollisionPlugin;
 use std::sync::{Arc, Mutex};
 
+use crate::achievements::*;
 use crate::audio_state;
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
 use crate::state::gen_hook_batch;
 use crate::images::*;
-use crate::objects::ui_text_spec;
+use crate::objects::{ui_text_left_spec, ui_text_spec};
 use crate::state::*;
 use crate::shop::{SHOP_ROPE_COLORS, SHOP_TRAIL_COLORS, SHOP_BG_COLORS};
 use super::bootstrap;
@@ -27,6 +28,7 @@ use super::background;
 use super::gravity_wells;
 use super::turrets;
 use super::gravity_cannon;
+use super::boss;
 use super::helpers::*;
 
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
@@ -42,12 +44,6 @@ fn volume_value(c: &Canvas, var: &str, default: f32) -> f32 {
 
 fn set_volume_value(c: &mut Canvas, var: &str, v: f32) {
     c.set_var(var, v.clamp(0.0, 1.0));
-}
-
-fn slider_bar(v: f32, steps: usize) -> String {
-    let clamped = v.clamp(0.0, 1.0);
-    let filled = ((clamped * steps as f32).round() as usize).min(steps);
-    format!("{}{}", "#".repeat(filled), "-".repeat(steps - filled))
 }
 
 fn game_music_volume(c: &Canvas, base: f32) -> f32 {
@@ -94,30 +90,64 @@ fn mid_trail_color(near: (u8, u8, u8)) -> (u8, u8, u8) {
     const ANCHOR: (f32, f32, f32) = (100.0, 120.0, 255.0);
     let b = |c: u8, a: f32| ((c as f32 * 0.35 + a * 0.65).round() as u8);
     (b(near.0, ANCHOR.0), b(near.1, ANCHOR.1), b(near.2, ANCHOR.2))
+// Slider layout constants (must match bootstrap.rs SLIDER_Y / SLIDER_TRACK_W).
+const SLIDER_TRACK_W: f32 = 1400.0;
+const SLIDER_THUMB_W: f32 = 60.0;
+const SLIDER_THUMB_H: f32 = 80.0;
+const SLIDER_TRACK_H: f32 = 24.0;
+const SLIDER_TRACK_X: f32 = (VW - SLIDER_TRACK_W) / 2.0;
+const SLIDER_Y: [f32; 3] = [820.0, 1120.0, 1420.0];
+const SLIDER_VARS:   [&str; 3] = ["vol_master", "vol_music", "vol_sound"];
+const SLIDER_THUMBS: [&str; 3] = ["slider_master_thumb", "slider_music_thumb", "slider_sound_thumb"];
+const SLIDER_TRACKS: [&str; 3] = ["slider_master_track", "slider_music_track", "slider_sound_track"];
+
+fn position_slider_thumbs(c: &mut Canvas) {
+    for i in 0..3 {
+        let vol = volume_value(c, SLIDER_VARS[i], 1.0);
+        let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+        let thumb_y = SLIDER_Y[i] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+        if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[i]) {
+            obj.position = (thumb_x, thumb_y);
+        }
+    }
+    // Engine may be hard-paused — sync offsets so the renderer sees new positions.
+}
+
+fn update_bgm_volume(c: &Canvas) {
+    let base = c.get_f32("bgm_base_vol");
+    if base > 0.0 {
+        audio_state::set_game_bgm_volume(game_music_volume(c, base));
+    }
+}
+
+/// Returns a cached copy of the UI font — parses the TTF once, clones cheaply after.
+fn settings_font() -> Option<Font> {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Font> = OnceLock::new();
+    CACHED.get_or_init(||
+        Font::from_bytes(include_bytes!("../../../assets/font.ttf"))
+            .expect("font.ttf must be valid")
+    ).clone().into()
 }
 
 fn update_settings_text(c: &mut Canvas) {
     let master = volume_value(c, "vol_master", 1.0);
-    let music = volume_value(c, "vol_music", 1.0);
-    let sound = volume_value(c, "vol_sound", 1.0);
-    let text = format!(
-        "MASTER VOLUME\n  [{}] {:>3}%\n\
-         MUSIC VOLUME\n  [{}] {:>3}%\n\
-         SOUND VOLUME\n  [{}] {:>3}%\n\
-         CONTROLS: [A]/[D] MASTER   [J]/[L] MUSIC   [N]/[M] SOUND",
-        slider_bar(master, 20),
-        (master * 100.0).round() as i32,
-        slider_bar(music, 20),
-        (music * 100.0).round() as i32,
-        slider_bar(sound, 20),
-        (sound * 100.0).round() as i32,
-    );
-    if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+    let music  = volume_value(c, "vol_music",  1.0);
+    let sound  = volume_value(c, "vol_sound",  1.0);
+    let labels = [
+        format!("MASTER VOLUME   {:>3}%", (master * 100.0).round() as i32),
+        format!("MUSIC VOLUME    {:>3}%",  (music  * 100.0).round() as i32),
+        format!("SOUND VOLUME    {:>3}%",  (sound  * 100.0).round() as i32),
+    ];
+    let names = ["settings_label_0", "settings_label_1", "settings_label_2"];
+    if let Some(font) = settings_font() {
         let s = c.virtual_scale();
-        if let Some(obj) = c.get_game_object_mut("settings_text") {
-            obj.set_drawable(Box::new(ui_text_spec(
-                &text, &font, 38.0 * s, Color(235, 245, 255, 255), 1500.0 * s,
-            )));
+        for i in 0..3 {
+            if let Some(obj) = c.get_game_object_mut(names[i]) {
+                obj.set_drawable(Box::new(ui_text_spec(
+                    &labels[i], &font, 38.0 * s, Color(235, 245, 255, 255), 1500.0 * s,
+                )));
+            }
         }
     }
 }
@@ -240,6 +270,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_asteroid_free,
         space_red_coin_free,
         cannon_free,
+        boss_bolt_free,
+        boss_asteroid_ids,
+        comet_free,
+        warn_free,
     } = pools;
 
     // Starter hook positions (must match bootstrap.rs).
@@ -271,6 +305,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 canvas.add_plugin(TerrainCollisionPlugin::new());
                 canvas.set_var("terrain_collision_registered", true);
             }
+            // Pre-warm comet GIF + warning image OnceLocks in a background
+            // thread so the first J-press has zero decode lag.
+            std::thread::spawn(spawning::preload_comet_assets);
 
             // ── Player particle trail ────────────────────────────────────
             // Determine selected trail colour first so it can be used here and on resume.
@@ -326,6 +363,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("coin_sfx_index", 0);
             canvas.set_var("space_zoom_mode", 3);
             canvas.set_var("asteroid_hooks_on", true);
+            canvas.set_var("boss_mode_cleared", false);
             canvas.set_var("start_orbit_ticks", 0i32);
             canvas.set_var("start_follow_force_ticks", 0i32);
             canvas.set_var("start_zoom_recover_ticks", 0i32);
@@ -388,6 +426,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 );
                 audio_state::replace_game_bgm(handle);
                 canvas.set_var("bgm_track_index", 0);
+                canvas.set_var("bgm_base_vol", 0.084_f32);
             }
             // Stop menu music when starting the game.
             audio_state::stop_menu_bgm();
@@ -464,6 +503,47 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
+                    // Key 'o': spawn one special green grab hook for testing.
+                    if *key == Key::Character("o".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let _ = spawning::spawn_debug_special_hook(c, &state_arc);
+                        }
+                        return;
+                    }
+
+                    // Key 'k': spawn one extended red grab hook for testing.
+                    if *key == Key::Character("k".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let _ = spawning::spawn_debug_extended_hook(c, &state_arc);
+                        }
+                        return;
+                    }
+
+                    // Key 'j': spawn a comet targeting the player from above.
+                    // Note: 'j' is also used for music volume when settings panel is open,
+                    // but that block returns early so we only reach here when settings are closed.
+                    if *key == Key::Character("j".into()) {
+                        let game_paused = c.is_paused()
+                            || matches!(c.get_var("game_paused"), Some(Value::Bool(true)));
+                        if game_paused { return; }
+
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let _ = spawning::spawn_debug_comet(c, &state_arc);
+                        }
+                        return;
+                    }
+
                     if *key == Key::Character("7".into()) {
                         if c.get_i32("bgm_track_index") != 1 {
                             let handle = c.play_sound_with(
@@ -472,6 +552,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 1);
+                            c.set_var("bgm_base_vol", 0.167_f32);
                         }
                         return;
                     }
@@ -484,6 +565,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 2);
+                            c.set_var("bgm_base_vol", 0.5_f32);
                         }
                         return;
                     }
@@ -496,6 +578,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             );
                             audio_state::replace_game_bgm(handle);
                             c.set_var("bgm_track_index", 3);
+                            c.set_var("bgm_base_vol", 0.18_f32);
                         }
                         return;
                     }
@@ -553,6 +636,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             let cur = volume_value(c, var, 1.0);
                             set_volume_value(c, var, cur + delta);
                             update_settings_text(c);
+                            position_slider_thumbs(c);
+                            update_bgm_volume(c);
                             return;
                         }
                     }
@@ -635,13 +720,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                      "pause_resume_btn", "pause_restart_btn",
                                      "pause_settings_btn", "pause_menu_btn",
                                      "start_prompt_text",
-                                     "settings_text", "settings_back_btn"] {
+                                     "settings_label_0", "settings_label_1", "settings_label_2",
+                                     "settings_back_btn",
+                                     "slider_master_track", "slider_master_thumb",
+                                     "slider_music_track",  "slider_music_thumb",
+                                     "slider_sound_track",  "slider_sound_thumb"] {
                             if let Some(obj) = c.get_game_object_mut(name) {
                                 obj.visible = false;
                                 obj.clear_highlight();
                             }
                         }
                         c.set_var("settings_open", false);
+                        c.set_var("settings_dragging", -1i32);
 
                         // If launching from orbit start, give the ball its tangential velocity
                         // and release the intro zoom so tick_zoom takes over naturally.
@@ -750,6 +840,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("bg_force_refresh", true);
             canvas.set_var("pause_hover_idx", -1);
             canvas.set_var("settings_open", false);
+            canvas.set_var("settings_dragging", -1i32);
 
             if canvas.get_var("vol_master").is_none() {
                 canvas.set_var("vol_master", 1.0f32);
@@ -862,14 +953,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 flip_free: flip_free.clone(),
                 flip_rightmost: SPAWN_X + VW * 1.1,
                 flip_timer: 0,
+                flip_magnet_locked: Vec::new(),
                 score_x2_live: Vec::new(),
                 score_x2_free: score_x2_free.clone(),
                 score_x2_rightmost: SPAWN_X + VW * 1.35,
                 score_x2_timer: 0,
+                score_x2_magnet_locked: Vec::new(),
                 zero_g_live: Vec::new(),
                 zero_g_free: zero_g_free.clone(),
                 zero_g_rightmost: SPAWN_X + VW * 1.6,
                 zero_g_timer: 0,
+                zero_g_magnet_locked: Vec::new(),
                 gate_live: Vec::new(),
                 gate_free: gate_free.clone(),
                 gate_rightmost: SPAWN_X + VW * 1.0,
@@ -979,6 +1073,26 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 cannon_captured:   false,
                 cannon_capture_id: String::new(),
                 cannon_damp_timer: 0,
+                boss_active:       false,
+                boss_entry_ticks:  0,
+                boss_spawned:      false,
+                boss_cleared:      false,
+                boss_hp:           crate::constants::BOSS_MAX_HP,
+                boss_phase:        0.0,
+                boss_vx:           0.0,
+                boss_vy:           0.0,
+                boss_shoot_timer:  crate::constants::BOSS_SHOOT_INTERVAL,
+                boss_bolt_live:    Vec::new(),
+                boss_bolt_free:    boss_bolt_free.clone(),
+                boss_asteroids:    boss_asteroid_ids.clone(),
+                hud_last_boss_hp:  -999,
+
+                comet_live:        Vec::new(),
+                comet_free:        comet_free.clone(),
+
+                comet_warn_live:   Vec::new(),
+                warn_free:         warn_free.clone(),
+                comet_spawn_timer: COMET_SPAWN_INTERVAL,
             };
 
             // Reuse persistent Arc across respawns.
@@ -1006,10 +1120,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // Reset starter hooks to their canonical positions — they may have
             // been culled (hidden + moved off-screen) during a previous run.
+            let asteroid_mode_reset = matches!(canvas.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+            let hook_half_reset = if asteroid_mode_reset { HOOK_ARTIFACT_R } else { HOOK_R };
             for (i, &(hx, hy)) in starter_hooks.iter().enumerate() {
                 let id = format!("hook_{i}");
                 if let Some(obj) = canvas.get_game_object_mut(&id) {
-                    obj.position = (hx - HOOK_R, hy - HOOK_R);
+                    obj.position = (hx - hook_half_reset, hy - hook_half_reset);
                     obj.visible = true;
                     obj.momentum = (0.0, 0.0);
                 }
@@ -1042,11 +1158,44 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     )));
                     obj.visible = true;
                 }
+
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
+                    obj.set_drawable(Box::new(ui_text_left_spec(
+                        GOLD_MASTER_TITLE,
+                        &font,
+                        46.0 * s,
+                        Color(250, 225, 120, 255),
+                        1080.0 * s,
+                    )));
+                    obj.visible = false;
+                }
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
+                    obj.set_drawable(Box::new(ui_text_left_spec(
+                        GOLD_MASTER_DESCRIPTION,
+                        &font,
+                        28.0 * s,
+                        Color(210, 220, 235, 230),
+                        1080.0 * s,
+                    )));
+                    obj.visible = false;
+                }
+                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_CHECK_NAME) {
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "✓",
+                        &font,
+                        52.0 * s,
+                        Color(130, 255, 165, 255),
+                        120.0 * s,
+                    )));
+                    obj.visible = false;
+                }
             }
             if let Some(obj) = canvas.get_game_object_mut("pause_overlay") {
                 obj.position = (-400.0, 0.0);
                 obj.visible = false;
             }
+
+            clear_gold_master_toast(canvas);
 
             // Set background image AND apply the proper overscan/raise size so
             // the background fills the screen correctly from the first frame.
@@ -1091,17 +1240,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 pad_thruster_anim_template_flipped.as_ref(),
             );
 
-            // Paint every live hook as an asteroid image now that asteroid_hooks_on is true
-            // and spawning has populated the full set of hooks visible at start.
+            // Set up all live hooks for asteroid mode.
             {
                 let hooks = state.lock().unwrap().live_hooks.clone();
                 for hid in &hooks {
                     if let Some(obj) = canvas.get_game_object_mut(hid) {
-                        if hid.as_str() == "hook_0" {
-                            obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Near));
-                        } else {
-                            obj.set_image(hook_asteroid_img_for_id(hid, AsteroidHookState::Base));
-                        }
+                        obj.set_animation(hook_artifact_anim());
+                        obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                        obj.collision_mode = CollisionMode::NonPlatform;
+                        obj.gravity = 0.0;
+                        obj.momentum = (0.0, 0.0);
+                        obj.rotation_momentum = 0.0;
                     }
                 }
             }
@@ -1133,11 +1282,42 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             super::space_zone::prewarm_solar_decode(&state);
             // Pre-warm catcoin GIF decode so first space coin spawn does not hitch.
             super::space_zone::prewarm_space_coin_decode();
+            // Pre-warm artifact hook GIF decode (background thread) to avoid
+            // per-spawn disk read and decode stalls during gameplay.
+            std::thread::spawn(|| { super::helpers::prewarm_hook_artifact(); });
+            std::thread::spawn(|| { super::helpers::prewarm_hook_artifact_green(); });
+            std::thread::spawn(|| { super::helpers::prewarm_zero_g_overlay(); });
 
-            // ── Pre-warm asteroid hook image cache (background thread) ───
-            // Builds all 9 variants (3 buckets × 3 states) off the main thread
-            // so the first frame of gameplay doesn't stall on disk I/O + resize.
-            std::thread::spawn(|| { hook_asteroid_img_for_id("hook_0", AsteroidHookState::Base); });
+            // Assign overlay animations once so they're ready to play on demand.
+            if let Some(obj) = canvas.get_game_object_mut("zero_g_overlay") {
+                obj.set_animation(super::helpers::zero_g_overlay_anim());
+            }
+            if let Some(obj) = canvas.get_game_object_mut("space_rip_overlay") {
+                obj.set_animation(super::helpers::space_rip_overlay_anim());
+            }
+            // Animated catcoingold icon in the coin counter slot.
+            if let Ok(anim) = AnimatedSprite::new(
+                include_bytes!("../../../assets/catcoingold.gif"),
+                (112.0, 112.0),
+                12.0,
+            ) {
+                if let Some(obj) = canvas.get_game_object_mut("coin_icon_anim") {
+                    obj.set_animation(anim);
+                }
+            }
+            // Ability icon animations (ZeroG.gif and 2x.gif shown in HUD near scoreboard).
+            if let Some(obj) = canvas.get_game_object_mut("zero_g_icon") {
+                obj.set_animation(super::helpers::zero_g_overlay_anim());
+            }
+            if let Ok(anim) = AnimatedSprite::new(
+                include_bytes!("../../../assets/2x.gif"),
+                (120.0, 120.0),
+                12.0,
+            ) {
+                if let Some(obj) = canvas.get_game_object_mut("score_x2_icon") {
+                    obj.set_animation(anim);
+                }
+            }
 
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
@@ -1192,13 +1372,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     for name in ["pause_overlay", "pause_title",
                                  "pause_resume_btn", "pause_restart_btn",
                                  "pause_settings_btn", "pause_menu_btn",
-                                 "settings_text", "settings_back_btn"] {
+                                 "settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn",
+                                 "slider_master_track", "slider_master_thumb",
+                                 "slider_music_track",  "slider_music_thumb",
+                                 "slider_sound_track",  "slider_sound_thumb"] {
                         if let Some(obj) = c.get_game_object_mut(name) {
                             obj.visible = false;
                             obj.clear_highlight();
                         }
                     }
                     c.set_var("settings_open", false);
+                    c.set_var("settings_dragging", -1i32);
                 });
                 canvas.register_custom_event("pause_restart_click".into(), |c| {
                     if !matches!(c.get_var("game_paused"), Some(Value::Bool(true))) { return; }
@@ -1207,11 +1392,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.set_var("pause_anim_frames", 0);
                     c.set_var("pause_hover_idx", -1);
                     c.set_var("settings_open", false);
+                    c.set_var("settings_dragging", -1i32);
                     c.set_var("game_paused", false);
                     for name in ["pause_overlay", "pause_title",
                                  "pause_resume_btn", "pause_restart_btn",
                                  "pause_settings_btn", "pause_menu_btn",
-                                 "settings_text", "settings_back_btn"] {
+                                 "settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn",
+                                 "slider_master_track", "slider_master_thumb",
+                                 "slider_music_track",  "slider_music_thumb",
+                                 "slider_sound_track",  "slider_sound_thumb"] {
                         if let Some(obj) = c.get_game_object_mut(name) {
                             obj.visible = false;
                             obj.clear_highlight();
@@ -1228,11 +1418,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     c.set_var("pause_anim_frames", 0);
                     c.set_var("pause_hover_idx", -1);
                     c.set_var("settings_open", false);
+                    c.set_var("settings_dragging", -1i32);
                     c.set_var("game_paused", false);
                     for name in ["pause_overlay", "pause_title",
                                  "pause_resume_btn", "pause_restart_btn",
                                  "pause_settings_btn", "pause_menu_btn",
-                                 "settings_text", "settings_back_btn"] {
+                                 "settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn",
+                                 "slider_master_track", "slider_master_thumb",
+                                 "slider_music_track",  "slider_music_thumb",
+                                 "slider_sound_track",  "slider_sound_thumb"] {
                         if let Some(obj) = c.get_game_object_mut(name) {
                             obj.visible = false;
                             obj.clear_highlight();
@@ -1255,18 +1450,32 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
                     }
                     c.set_var("settings_open", true);
-                    // Render toggle text
+                    c.set_var("settings_dragging", -1i32);
+                    // Render label text (percentages only)
                     update_settings_text(c);
-                    if let Some(obj) = c.get_game_object_mut("settings_text") { obj.visible = true; }
+                    for name in ["settings_label_0", "settings_label_1", "settings_label_2"] {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
+                    }
                     if let Some(obj) = c.get_game_object_mut("settings_back_btn") {
                         obj.position = ((VW - 700.0) / 2.0, 1660.0);
                         obj.visible = true;
                     }
+                    // Show slider tracks and thumbs at positions matching current vols
+                    position_slider_thumbs(c);
+                    for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
+                    }
                 });
                 canvas.register_custom_event("settings_back_click".into(), |c| {
                     c.set_var("settings_open", false);
-                    if let Some(obj) = c.get_game_object_mut("settings_text") { obj.visible = false; }
-                    if let Some(obj) = c.get_game_object_mut("settings_back_btn") { obj.visible = false; }
+                    c.set_var("settings_dragging", -1i32);
+                    for name in ["settings_label_0", "settings_label_1", "settings_label_2",
+                                 "settings_back_btn"] {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                    }
+                    for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
+                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                    }
                     // Re-show pause menu.
                     let btn_layout: &[(&str, f32, f32)] = &[
                         ("pause_title", (VW - 650.0) / 2.0, VH * 0.20),
@@ -1298,9 +1507,30 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 return;
                             }
 
-                            // `pos` is in scaled virtual space (layout scale includes zoom).
-                            // Ignore-zoom UI is authored in base virtual space, so rescale.
-                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                            // pos is world-space; multiply by zoom to get virtual-screen space
+                            // so ignore_zoom UI hit tests are correct at any camera zoom level.
+                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
+
+                            // If dragging a settings slider, update its position/value.
+                            let dragging = c.get_i32("settings_dragging");
+                            if dragging >= 0 && matches!(c.get_var("settings_open"), Some(Value::Bool(true))) {
+                                let idx = dragging as usize;
+                                if idx < 3 {
+                                    let vol = ((pos.0 * zoom - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                    set_volume_value(c, SLIDER_VARS[idx], vol);
+                                    let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+                                    let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+                                    if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
+                                        obj.position = (thumb_x, thumb_y);
+                                    }
+                                    // Sync so the renderer sees the new thumb position
+                                    // while the engine is hard-paused.
+                                    update_settings_text(c);
+                                    update_bgm_volume(c);
+                                }
+                                return;
+                            }
+
                             let ux = pos.0 * zoom;
                             let uy = pos.1 * zoom;
                             let bx = (VW - 700.0) / 2.0;
@@ -1358,9 +1588,33 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             return;
                         }
 
-                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.01);
+                        // pos is world-space (divided by zoom); ignore_zoom UI lives in
+                        // virtual-screen space (0..VW, 0..VH). Multiply by zoom to convert.
+                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
                         let ux = pos.0 * zoom;
                         let uy = pos.1 * zoom;
+
+                        // If settings panel is open, check for slider track hits first.
+                        if matches!(c.get_var("settings_open"), Some(Value::Bool(true))) {
+                            if ux >= SLIDER_TRACK_X && ux <= SLIDER_TRACK_X + SLIDER_TRACK_W {
+                                for idx in 0..3usize {
+                                    if uy >= SLIDER_Y[idx] - 40.0 && uy <= SLIDER_Y[idx] + 64.0 {
+                                        let vol = ((ux - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                        set_volume_value(c, SLIDER_VARS[idx], vol);
+                                        let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+                                        let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+                                        if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
+                                            obj.position = (thumb_x, thumb_y);
+                                        }
+                                        update_settings_text(c);
+                                        update_bgm_volume(c);
+                                        c.set_var("settings_dragging", idx as i32);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
                         let bx = (VW - 700.0) / 2.0;
 
                         if ux >= bx && ux <= bx + 700.0 {
@@ -1376,6 +1630,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 c.run(Action::Custom { name: "settings_back_click".into() });
                             }
                         }
+                    });
+
+                    canvas.on_mouse_release(move |c, _btn, _pos| {
+                        if !c.is_scene("game") { return; }
+                        c.set_var("settings_dragging", -1i32);
                     });
 
                     canvas.set_var("pause_ui_mouse_registered", true);
@@ -1620,6 +1879,19 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 }
                             }
                             c.set_var("start_orbit_ticks", ticks as i32 + 1);
+
+                            // Keep asteroid-mode hooks frozen on the start screen.
+                            // The physics engine still runs (soft pause only), so we
+                            // zero every live hook's momentum each frame to prevent drift.
+                            {
+                                let hooks = st.lock().unwrap().live_hooks.clone();
+                                for hid in &hooks {
+                                    if let Some(obj) = c.get_game_object_mut(hid) {
+                                        obj.momentum = (0.0, 0.0);
+                                        obj.rotation_momentum = 0.0;
+                                    }
+                                }
+                            }
                         }
                         if let Some(obj) =
                             c.get_game_object_mut("pause_overlay")
@@ -1734,6 +2006,22 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Collision ────────────────────────────────────────
                     collision::tick_collision(c, &st);
 
+                    // ── Asteroid-hook Y clamp ─────────────────────────────
+                    // Prevent asteroid-mode hooks from drifting above y = -600.
+                    if matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true))) {
+                        let live = st.lock().unwrap().live_hooks.clone();
+                        for hid in &live {
+                            if let Some(obj) = c.get_game_object_mut(hid) {
+                                if obj.position.1 < -600.0 {
+                                    obj.position.1 = -600.0;
+                                    if obj.momentum.1 < 0.0 {
+                                        obj.momentum.1 = 0.0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // ── Pickups ──────────────────────────────────────────
                     pickups::tick_pickups(c, &st, &tech_bounce_img, &tech_bounce_img_flipped, pad_thruster_anim_template.as_ref(), pad_thruster_anim_template_flipped.as_ref());
 
@@ -1766,6 +2054,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Gravity cannons ───────────────────────────────────
                     gravity_cannon::tick_cannons(c, &st);
+                    // ── Boss fight ────────────────────────────────────────
+                    boss::tick_boss(c, &st);
 
                     // ── Space zone ────────────────────────────────────────
                     super::space_zone::tick_space_zone(c, &st, frame_counter);
@@ -2025,9 +2315,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // Positions are rounded to whole pixels to prevent sub-pixel
                         // jitter / blur that is most visible during lag spikes.
                         let px = (bg_x - offset).round();
-                        // Slight Y offset avoids exact alignment with static stars,
-                        // reducing shimmer/blur artifacts during horizontal scroll.
-                        let py = (bg_y + 35.0).round();
+                        // Y offset pushes moving star panels lower on screen.
+                        let py = (bg_y + 200.0).round();
                         if let Some(obj) = c.get_game_object_mut("bg_space") {
                             obj.size = (bg_w, bg_h);
                             obj.position = (px, py);
@@ -2050,6 +2339,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {
                         c.set_var("last_distance", s.distance);
+                        c.set_var("last_score", s.score as i32);
                         c.set_var("last_coins", s.coin_count as i32);
                         s.dead = true;
                         drop(s);
