@@ -1,5 +1,6 @@
 use quartz::*;
 use ramp::prism;
+use ramp::Drawable;
 
 mod constants;
 mod audio_state;

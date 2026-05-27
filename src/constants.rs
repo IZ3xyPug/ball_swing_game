@@ -371,11 +371,11 @@ pub const SPAWN_Y: f32 = VH * 0.38;
 pub const START_HOOK_X: f32 = SPAWN_X + 160.0;
 pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 
-// ── Asset paths ──────────────────────────────────────────────────────────────
-pub const ASSET_COIN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif");
-pub const ASSET_SCORE_X2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/2x.gif");
-pub const ASSET_TECH_BOUNCE_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/techbouncernew.gif");
-pub const TECH_BOUNCE_FPS: f32 = 8.0;
+// ── Asset bytes ──────────────────────────────────────────────────────────────
+pub const ASSET_COIN_GIF: &[u8] = include_bytes!("../assets/coin.gif");
+pub const ASSET_SCORE_X2_GIF: &[u8] = include_bytes!("../assets/2x.gif");
+pub const ASSET_TECH_BOUNCE_GIF: &[u8] = include_bytes!("../assets/techbouncernew.gif");
+pub const TECH_BOUNCE_FPS: f32 = 12.0;
 pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
 pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
 pub const ASSET_COIN_SFX_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_collect.mp3");
@@ -389,7 +389,7 @@ pub const ASSET_MENU_BGM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Ro
 pub const ASSET_MENU_BGM_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Pill.mp3");
 pub const ASSET_MENU_BGM_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Menumusic.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
-pub const ASSET_BACKGROUND_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background_2.webp");
+pub const ASSET_BACKGROUND_2: &[u8] = include_bytes!("../assets/background_2.webp");
 pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
 pub const ASSET_MAN_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/man_game_over.mp3");
 pub const ASSET_ARCADE_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/arcade_game_over.mp3");
@@ -871,3 +871,31 @@ pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.28;
 // Stasis orbit (shared between entry/exit stasis and game-start stasis)
 pub const STASIS_ORBIT_R:     f32 = 240.0;
 pub const STASIS_ORBIT_OMEGA: f32 = 0.038;
+
+// ── Gravity Cannon obstacle ───────────────────────────────────────────────────
+pub const GRAVITYCANNON_W:               f32   = 300.0;
+pub const GRAVITYCANNON_H:               f32   = 300.0;
+pub const GRAVITYCANNON_FPS:             f32   = 8.0;
+pub const GRAVITYCANNON_FRAME_COUNT:     usize = 9;  // frames 0–8
+pub const CANNON_DEFAULT_FRAME_INDEX:    usize = 8;  // frame 9 (1-based)
+pub const CANNON_POOL_SIZE:              usize = 4;
+pub const CANNON_GAP_MIN:                f32   = 8000.0;
+pub const CANNON_GAP_MAX:                f32   = 14000.0;
+pub const CANNON_DEFAULT_ROTATION:       f32   = -90.0;  // 90° CCW
+pub const CANNON_BOB_AMP:                f32   = 35.0;   // px
+pub const CANNON_BOB_SPEED:              f32   = 0.055;  // rad/tick ≈ 1.9 rad/s at 60 fps
+pub const CANNON_TRIGGER_RADIUS:         f32   = 240.0;
+pub const CANNON_PULL_RADIUS:            f32   = 520.0;
+pub const CANNON_PULL_ACCEL:             f32   = 2.80;   // per-tick pull at strongest
+pub const CANNON_PULL_SPEED_CAP:         f32   = 72.0;   // cap speed while being pulled
+pub const CANNON_CAPTURE_TICKS_PER_FRAME: u32  = 5;     // pulse frames 8→7→6→7→8
+pub const CANNON_CHARGE_TICKS:           u32   = 40;    // hold player in barrel
+pub const CANNON_CHARGE_ROTATION_DEG:    f32   = 50.0;  // CW rotation during charge
+pub const CANNON_FIRE_TICKS_PER_FRAME:   u32   = 3;     // frames 8→0
+pub const CANNON_LAUNCH_VX:              f32   = 124.0; // very long forward shot
+pub const CANNON_LAUNCH_VY:              f32   = -38.0; // stronger upward arc
+pub const CANNON_GRAVITY_DAMP_TICKS:     u32   = 180;   // longer reduced gravity after launch
+pub const GRAVITY_DAMP_SCALE:            f32   = 0.03;  // gravity multiplier during damp
+pub const CANNON_RECOVER_TICKS:          u32   = 60;    // rotate back to default rotation
+pub const LAYER_CANNON_ACTIVE:           i32   = 60;    // above player layer (42)
+pub const ASSET_GRAVITYCANNON_GIF: &[u8] = include_bytes!("../assets/gravitycannon.gif");

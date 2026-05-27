@@ -16,6 +16,7 @@ mod math;
 mod rocket_pads;
 mod planets;
 mod black_holes;
+mod gravity_cannon;
 
 pub use hooks::*;
 pub use pads::*;
@@ -30,3 +31,4 @@ pub use math::*;
 pub use rocket_pads::*;
 pub use planets::*;
 pub use black_holes::*;
+pub use gravity_cannon::*;
