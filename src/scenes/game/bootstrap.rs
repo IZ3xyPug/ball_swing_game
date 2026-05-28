@@ -107,13 +107,13 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
     let bytes = include_bytes!("../../../assets/techbouncernew.gif");
     let cursor = std::io::Cursor::new(bytes.as_slice());
     let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) else {
-        return vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
     };
 
     let (gif_w, gif_h) = decoder.dimensions();
     let mut composed = image::RgbaImage::from_pixel(gif_w.max(1), gif_h.max(1), image::Rgba([0, 0, 0, 0]));
     let Ok(frames) = decoder.into_frames().collect_frames() else {
-        return vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
+        return vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)];
     };
 
     let out_w = PAD_W.max(1.0).round() as u32;
@@ -204,7 +204,7 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
     }
 
     if out.is_empty() {
-        vec![load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
+        vec![load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H)]
     } else {
         out
     }
@@ -821,7 +821,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let tech_bounce_static_img = tech_bounce_anim_frames
         .first()
         .cloned()
-        .unwrap_or_else(|| load_image_sized_path(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
+        .unwrap_or_else(|| load_image_sized(ASSET_TECH_BOUNCE_GIF, PAD_W, PAD_H));
     let tech_bounce_anim_frames_flipped: Vec<Image> = tech_bounce_anim_frames.iter()
         .map(|img| flip_vertical(img.clone()))
         .collect();
@@ -840,7 +840,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let pad_thruster_static_img = pad_thruster_anim_template
         .as_ref()
         .map(|a| a.get_current_image())
-        .unwrap_or_else(|| load_image_sized_path(ASSET_THRUSTER1_GIF, PAD_THRUSTER_W, PAD_THRUSTER_H));
+        .unwrap_or_else(|| load_image_sized(include_bytes!("../../../assets/thruster1.gif"), PAD_THRUSTER_W, PAD_THRUSTER_H));
     let mut pad_free: Vec<String> = Vec::new();
     for i in 0..PAD_POOL_SIZE {
         let id = format!("pad_{i}");
@@ -883,7 +883,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Coin pool ────────────────────────────────────────────────────────
-    let coin_static_sprite = load_image_sized_path(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
+    let coin_static_sprite = load_image_sized(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
     let coin_anim_template = AnimatedSprite::new(
         include_bytes!("../../../assets/catcoingold.gif"),
         (COIN_R * 2.0, COIN_R * 2.0),
@@ -916,7 +916,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Score x2 pool ────────────────────────────────────────────────────
-    let score_x2_sprite = load_image_sized_path(ASSET_SCORE_X2_GIF, SCORE_X2_W, SCORE_X2_H);
+    let score_x2_sprite = load_image_sized(ASSET_SCORE_X2_GIF, SCORE_X2_W, SCORE_X2_H);
     let mut score_x2_free: Vec<String> = Vec::new();
     for i in 0..SCORE_X2_POOL_SIZE {
         let id = format!("score_x2_{i}");
@@ -1057,8 +1057,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space coin pool ───────────────────────────────────────────────────
-    let space_cat_static = load_image_sized_path(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoin.gif"),
+    let space_cat_static = load_image_sized(
+        include_bytes!("../../../assets/catcoin.gif"),
         SPACE_COIN_R * 2.0,
         SPACE_COIN_R * 2.0,
     );
@@ -1088,8 +1088,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space blue-coin pool ─────────────────────────────────────────────
-    let space_cat_blue_static = load_image_sized_path(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoinblue.gif"),
+    let space_cat_blue_static = load_image_sized(
+        include_bytes!("../../../assets/catcoinblue.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
     );
@@ -1171,8 +1171,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space red-coin pool ───────────────────────────────────────────────
-    let space_cat_red_static = load_image_sized_path(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/catcoingold.gif"),
+    let space_cat_red_static = load_image_sized(
+        include_bytes!("../../../assets/catcoingold.gif"),
         SPACE_RED_COIN_R * 2.0,
         SPACE_RED_COIN_R * 2.0,
     );

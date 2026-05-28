@@ -76,7 +76,7 @@ fn cached_space_coin_static(kind: u8, radius: f32) -> Image {
         }
     }
 
-    let built = load_image_sized_path(catcoin_image_path(kind), d as f32, d as f32);
+    let built = load_image_sized(catcoin_image_bytes(kind), d as f32, d as f32);
     cache.lock().unwrap().insert(key, built.clone());
     built
 }

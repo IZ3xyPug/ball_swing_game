@@ -90,6 +90,7 @@ fn mid_trail_color(near: (u8, u8, u8)) -> (u8, u8, u8) {
     const ANCHOR: (f32, f32, f32) = (100.0, 120.0, 255.0);
     let b = |c: u8, a: f32| ((c as f32 * 0.35 + a * 0.65).round() as u8);
     (b(near.0, ANCHOR.0), b(near.1, ANCHOR.1), b(near.2, ANCHOR.2))
+}
 // Slider layout constants (must match bootstrap.rs SLIDER_Y / SLIDER_TRACK_W).
 const SLIDER_TRACK_W: f32 = 1400.0;
 const SLIDER_THUMB_W: f32 = 60.0;
