@@ -1,6 +1,7 @@
 use std::sync::{Arc, OnceLock, Mutex};
 use std::collections::HashMap;
 use crate::constants::*;
+use quartz::AnimatedSprite;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitives
@@ -174,27 +175,6 @@ pub fn turret_img(
     img
 }
 
-pub fn turret_img_with_phase(
-    body_r: u32,
-    barrel_len: u32,
-    barrel_w: u32,
-    body_rgb: (u8, u8, u8),
-    barrel_rgb: (u8, u8, u8),
-    phase: u8,
-) -> image::RgbaImage {
-    let mut img = turret_img(body_r, barrel_len, barrel_w, body_rgb, barrel_rgb);
-    let size = (body_r + barrel_len) * 2;
-    let scale = (body_r / 5).max(4);
-    let digit_w = 3 * scale;
-    let digit_h = 5 * scale;
-    let cx = size / 2;
-    let cy = size / 2;
-    let x = cx.saturating_sub(digit_w / 2);
-    let y = cy.saturating_sub(digit_h / 2);
-    let digit = phase.clamp(1, 3);
-    draw_digit_7seg(&mut img, x, y, scale, digit, [245, 245, 255, 255]);
-    img
-}
 
 pub fn circle_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     let d = radius * 2;
@@ -207,16 +187,6 @@ pub fn circle_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
             img.put_pixel(px, py, image::Rgba([r, g, b, 255]));
         }
     }}
-    img
-}
-
-/// Multiply every pixel's RGB channels by `factor`, clamping to 255. Alpha is unchanged.
-pub fn brighten_image(mut img: image::RgbaImage, factor: f32) -> image::RgbaImage {
-    for px in img.pixels_mut() {
-        px[0] = (px[0] as f32 * factor).min(255.0) as u8;
-        px[1] = (px[1] as f32 * factor).min(255.0) as u8;
-        px[2] = (px[2] as f32 * factor).min(255.0) as u8;
-    }
     img
 }
 
@@ -381,20 +351,19 @@ fn pad_img_with_tuning(
     });
 
     if let Some(base_src) = base {
-        let mut stretched_src: Option<image::RgbaImage> = None;
-        let src: &image::RgbaImage = if (source_y_stretch - 1.0).abs() > f32::EPSILON {
+        let stretched_src: Option<image::RgbaImage> = if (source_y_stretch - 1.0).abs() > f32::EPSILON {
             let stretched_h = ((base_src.height() as f32) * source_y_stretch).round() as u32;
             let final_h = stretched_h.max(base_src.height()).max(1);
-            stretched_src = Some(image::imageops::resize(
+            Some(image::imageops::resize(
                 base_src,
                 base_src.width().max(1),
                 final_h,
                 image::imageops::FilterType::CatmullRom,
-            ));
-            stretched_src.as_ref().unwrap()
+            ))
         } else {
-            base_src
+            None
         };
+        let src: &image::RgbaImage = stretched_src.as_ref().unwrap_or(base_src);
 
         let sw = src.width();
         let sh = src.height();
@@ -522,22 +491,6 @@ fn pause_pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
 
 cached_image!(pad_image_cached, pad_img(PAD_W as u32, PAD_H as u32, C_PAD.0, C_PAD.1, C_PAD.2));
 
-/// Cached pad image keyed by (w, h, r, g, b). Each unique color/size combo
-/// is rasterized once; subsequent calls return the cached Arc.
-pub fn pad_cached(w: u32, h: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
-    static CACHE: OnceLock<Mutex<HashMap<(u32, u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
-    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = (w, h, r, g, b);
-    let mut guard = map.lock().unwrap();
-    if let Some(cached) = guard.get(&key) {
-        return cached.clone();
-    }
-    let img = pad_img(w, h, r, g, b);
-    let arc: Arc<image::RgbaImage> = Arc::new(img);
-    guard.insert(key, arc.clone());
-    arc
-}
-
 pub fn pause_pad_cached(w: u32, h: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
     static CACHE: OnceLock<Mutex<HashMap<(u32, u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
     let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -612,6 +565,20 @@ pub fn flip_img(w: u32, h: u32) -> image::RgbaImage {
 }
 cached_image!(flip_image_cached, flip_img(FLIP_W as u32, FLIP_H as u32));
 
+/// Cached AnimatedSprite for the gravity-flip pickup, decoded once from space_rip.gif.
+pub fn space_rip_flip_anim_cached() -> Option<AnimatedSprite> {
+    static ANIM: OnceLock<AnimatedSprite> = OnceLock::new();
+    Some(ANIM.get_or_init(|| {
+        let bytes = include_bytes!("../assets/space_rip.gif");
+        AnimatedSprite::new(bytes, (FLIP_ANIM_W, FLIP_ANIM_H), 12.0)
+            .unwrap_or_else(|_| AnimatedSprite::from_frames(
+                vec![image::RgbaImage::from_pixel(FLIP_ANIM_W as u32, FLIP_ANIM_H as u32, image::Rgba([C_FLIP.0, C_FLIP.1, C_FLIP.2, 220]))],
+                (FLIP_ANIM_W, FLIP_ANIM_H),
+                1.0,
+            ))
+    }).clone())
+}
+
 pub fn gate_img(w: u32, h: u32) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
     for py in 0..h { for px in 0..w {
@@ -672,50 +639,6 @@ fn draw_word(img: &mut image::RgbaImage, x: u32, y: u32, scale: u32, text: &str,
         draw_block_char(img, cx, y, scale, ch, color);
         cx += 6 * scale;
     }
-}
-
-/// Cached asteroid image resized to hook dimensions (HOOK_R*2 × HOOK_R*2).
-/// Loaded from disk once; subsequent calls return the same Arc.
-pub fn asteroid_hook_image_cached() -> Arc<image::RgbaImage> {
-    static CACHE: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        let d = (HOOK_R * 2.0) as u32;
-        match image::open(ASSET_ASTEROID) {
-            Ok(img) => Arc::new(image::imageops::resize(
-                &img.into_rgba8(), d, d,
-                image::imageops::FilterType::Lanczos3,
-            )),
-            Err(_) => Arc::new(circle_img(HOOK_R as u32, 128, 128, 128)),
-        }
-    }).clone()
-}
-
-/// Brownish-red tinted asteroid image for floating space asteroids.
-/// Single resolution (256×256); Quartz scales it via the shape's display size.
-/// Loaded/tinted once and cached for the lifetime of the process.
-pub fn asteroid_space_img_cached() -> Arc<image::RgbaImage> {
-    static CACHE: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        let d = 256u32;
-        let base = match image::open(ASSET_ASTEROID) {
-            Ok(img) => image::imageops::resize(
-                &img.into_rgba8(), d, d,
-                image::imageops::FilterType::Lanczos3,
-            ),
-            Err(_) => circle_img(d / 2, 160, 60, 30),
-        };
-        let mut tinted = base;
-        for px in tinted.pixels_mut() {
-            if px[3] == 0 { continue; }
-            let r = (px[0] as f32 * 1.05 + 50.0).min(255.0) as u8;
-            let g = (px[1] as f32 * 0.85 - 15.0).max(0.0) as u8;
-            let b = (px[2] as f32 * 0.78 - 20.0).max(0.0) as u8;
-            px[0] = r;
-            px[1] = g;
-            px[2] = b;
-        }
-        Arc::new(tinted)
-    }).clone()
 }
 
 fn draw_block_char(img: &mut image::RgbaImage, x: u32, y: u32, s: u32, ch: u8, c: [u8; 4]) {
@@ -942,50 +865,6 @@ pub fn black_hole_img_cached(radius: f32) -> Arc<image::RgbaImage> {
     }
     let img: Arc<image::RgbaImage> = black_hole_img(radius).into();
     guard.insert(key, img.clone());
-    img
-}
-
-fn gif_resized_img(bytes: &[u8], radius: u32) -> image::RgbaImage {
-    let d = radius.saturating_mul(2).max(2);
-    let base = image::load_from_memory(bytes)
-        .map(|img| img.into_rgba8())
-        .unwrap_or_else(|_| circle_img(radius.max(2), 255, 255, 255));
-    image::imageops::resize(&base, d, d, image::imageops::FilterType::Nearest)
-}
-
-/// Space coin image: untinted regular coin.gif for space pickups.
-pub fn space_coin_img(radius: u32) -> image::RgbaImage {
-    gif_resized_img(include_bytes!("../assets/coin.gif"), radius)
-}
-
-/// Cached space coin image keyed by radius.
-pub fn space_coin_img_cached(radius: u32) -> Arc<image::RgbaImage> {
-    static CACHE: OnceLock<Mutex<HashMap<u32, Arc<image::RgbaImage>>>> = OnceLock::new();
-    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = map.lock().unwrap();
-    if let Some(cached) = guard.get(&radius) {
-        return cached.clone();
-    }
-    let img: Arc<image::RgbaImage> = space_coin_img(radius).into();
-    guard.insert(radius, img.clone());
-    img
-}
-
-/// High-value space coin image: also uses regular untinted coin.gif.
-pub fn red_coin_img(radius: u32) -> image::RgbaImage {
-    gif_resized_img(include_bytes!("../assets/coin.gif"), radius)
-}
-
-/// Cached red arc-coin image keyed by radius.
-pub fn red_coin_img_cached(radius: u32) -> Arc<image::RgbaImage> {
-    static CACHE: OnceLock<Mutex<HashMap<u32, Arc<image::RgbaImage>>>> = OnceLock::new();
-    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = map.lock().unwrap();
-    if let Some(cached) = guard.get(&radius) {
-        return cached.clone();
-    }
-    let img: Arc<image::RgbaImage> = red_coin_img(radius).into();
-    guard.insert(radius, img.clone());
     img
 }
 

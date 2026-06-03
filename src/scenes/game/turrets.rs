@@ -343,7 +343,7 @@ fn tick_bullet_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.gravity = GRAVITY * gravity_scale * gdir;
         }
         if !prev.is_empty() {
-            let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+            let asteroid_mode = c.get_bool("asteroid_hooks_on");
             if let Some(hobj) = c.get_game_object_mut(&prev) {
                 if asteroid_mode {
                     if let Some(sprite) = &mut hobj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
@@ -425,7 +425,7 @@ fn tick_bullet_solid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (live_bullets, pads, spinners, hooks, asteroid_mode) = {
         let s = st.lock().unwrap();
         if s.bullet_live.is_empty() { return; }
-        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+        let asteroid_mode = c.get_bool("asteroid_hooks_on");
         (
             s.bullet_live.iter().map(|(id, _, _, _)| id.clone()).collect::<Vec<_>>(),
             s.pad_live.clone(),

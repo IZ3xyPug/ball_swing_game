@@ -27,21 +27,10 @@ pub fn make_gravity_cannon(ctx: &mut Context, id: &str, x: f32, y: f32) -> GameO
         })
     };
 
-    let mut obj = GameObject::new_rect(
-        ctx,
-        id.into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (GRAVITYCANNON_W, GRAVITYCANNON_H), 0.0),
-            image: default_img,
-            color: None,
-        }),
-        (GRAVITYCANNON_W, GRAVITYCANNON_H),
-        (x - GRAVITYCANNON_W * 0.5, y - GRAVITYCANNON_H * 0.5),
-        vec!["gravity_cannon".into()],
-        (0.0, 0.0),   // momentum
-        (1.0, 1.0),   // resistance
-        0.0,          // gravity — cannon floats manually, never physics-driven
-    );
+    let mut obj = GameObject::new_rect(ctx, id.into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (GRAVITYCANNON_W, GRAVITYCANNON_H), 0.0), image: default_img, color: None }),
+        (GRAVITYCANNON_W, GRAVITYCANNON_H), (x - GRAVITYCANNON_W * 0.5, y - GRAVITYCANNON_H * 0.5),
+        vec!["gravity_cannon".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
     obj.rotation = CANNON_DEFAULT_ROTATION;
     obj.layer = 30; // normal layer — elevated to LAYER_CANNON_ACTIVE during capture
     obj

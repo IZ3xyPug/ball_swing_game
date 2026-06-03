@@ -196,11 +196,7 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
         );
         let mut framed = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([0, 0, 0, 0]));
         image::imageops::overlay(&mut framed, &scaled, offset_x, offset_y);
-        out.push(Image {
-            shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0),
-            image: framed.into(),
-            color: None,
-        });
+        out.push(Image { shape: ShapeType::Rectangle(0.0, (PAD_W, PAD_H), 0.0), image: framed.into(), color: None });
     }
 
     if out.is_empty() {
@@ -208,6 +204,71 @@ fn decode_tech_bounce_frames_stretched() -> Vec<Image> {
     } else {
         out
     }
+}
+
+/// Build a pool of space-coin `GameObject`s, returning the free-list and a
+/// vec of (id, object) pairs ready to be folded into the scene.
+fn build_space_coin_pool(
+    ctx: &mut Context,
+    prefix: &str,
+    pool_size: usize,
+    spawn_xy: f32,
+    asset_bytes: &'static [u8],
+    coin_r: f32,
+    layer: i32,
+    coin_tag: &'static str,
+) -> (Vec<String>, Vec<(String, GameObject)>) {
+    let d = coin_r * 2.0;
+    let static_img = load_image_sized(asset_bytes, d, d);
+    let anim_template = AnimatedSprite::new(asset_bytes, (d, d), SPACE_COIN_ANIM_FPS).ok();
+    let mut free = Vec::with_capacity(pool_size);
+    let mut objects = Vec::with_capacity(pool_size);
+    for i in 0..pool_size {
+        let id = format!("{prefix}_{i}");
+        let mut obj = make_coin(ctx, &id, spawn_xy, spawn_xy);
+        obj.set_image(static_img.clone());
+        if let Some(anim) = &anim_template {
+            obj.set_animation(anim.clone());
+            if let Some(a) = obj.animated_sprite.as_mut() { a.set_frame(0); }
+        }
+        obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
+        obj.tags.push(coin_tag.to_string());
+        obj.visible = false;
+        obj.layer = layer;
+        free.push(id.clone());
+        objects.push((id, obj));
+    }
+    (free, objects)
+}
+
+/// Hidden, ignore-zoom HUD rect at layer 100.  Pass `None` for objects whose image is set later.
+fn hud_obj(ctx: &mut Context, id: &str, w: f32, h: f32, x: f32, y: f32, img: Option<Image>) -> GameObject {
+    let mut obj = GameObject::new_rect(ctx, id.into(), img, (w, h), (x, y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    obj.ignore_zoom = true;
+    obj.layer = 100;
+    obj.visible = false;
+    obj
+}
+
+/// Rectangle-shaped `Image` from an `RgbaImage`.
+fn rect_img(w: f32, h: f32, data: image::RgbaImage) -> Image {
+    Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: data.into(), color: None }
+}
+
+/// Build a simple object pool: call `make` for each id, set invisible, add to scene.
+fn simple_pool(ctx: &mut Context, scene: Scene, prefix: &str, size: usize,
+    make: impl Fn(&mut Context, &str) -> GameObject) -> (Scene, Vec<String>) {
+    let mut free = Vec::with_capacity(size);
+    let mut scene = scene;
+    for i in 0..size {
+        let id = format!("{prefix}_{i}");
+        let mut obj = make(ctx, &id);
+        obj.visible = false;
+        free.push(id.clone());
+        scene = scene.with_object(id, obj);
+    }
+    (scene, free)
 }
 
 pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
@@ -220,60 +281,34 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
                 &img.to_rgba8(),
                 bg_texture_w,
                 bg_texture_h,
-                image::imageops::FilterType::CatmullRom,
+                image::imageops::FilterType::Triangle,
             )
         })
         .unwrap_or_else(|_| gradient_rect(bg_texture_w, bg_texture_h, C_SKY_TOP, C_SKY_BOT));
 
-    let mut bg = GameObject::new_rect(
-        ctx, "bg".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: bg_zone_start.clone().into(),
-            color: None,
-        }),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut bg = GameObject::new_rect(ctx, "bg".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: bg_zone_start.clone().into(), color: None }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     bg.ignore_zoom = true;
 
-    let mut bg_space = GameObject::new_rect(
-        ctx, "bg_space".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: bg_zone_start.clone().into(),
-            color: None,
-        }),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut bg_space = GameObject::new_rect(ctx, "bg_space".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: bg_zone_start.clone().into(), color: None }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     bg_space.ignore_zoom = true;
     bg_space.visible = false;
 
-    let mut bg_stars_b = GameObject::new_rect(
-        ctx, "bg_stars_b".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-            image: solid(0, 0, 0, 0).into(),
-            color: None,
-        }),
-        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut bg_stars_b = GameObject::new_rect(ctx, "bg_stars_b".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: solid(0, 0, 0, 0).into(), color: None }),
+        (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     bg_stars_b.ignore_zoom = true;
     bg_stars_b.visible = false;
 
     // ── Energy hook reference display (top-right corner) ─────────────────
     const ASTEROID_W: f32 = 480.0;
     const ASTEROID_H: f32 = 480.0;
-    let mut asteroid = GameObject::new_rect(
-        ctx, "asteroid".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (ASTEROID_W, ASTEROID_H), 0.0),
-            image: solid(0, 0, 0, 0).into(),
-            color: None,
-        }),
-        (ASTEROID_W, ASTEROID_H),
-        (VW - ASTEROID_W - 80.0, 80.0),
-        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut asteroid = GameObject::new_rect(ctx, "asteroid".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (ASTEROID_W, ASTEROID_H), 0.0), image: solid(0, 0, 0, 0).into(), color: None }),
+        (ASTEROID_W, ASTEROID_H), (VW - ASTEROID_W - 80.0, 80.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     if let Ok(anim) = AnimatedSprite::new(
         include_bytes!("../../../assets/energy_hook_1.gif"),
         (ASTEROID_W, ASTEROID_H),
@@ -287,20 +322,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     asteroid.visible = false;
 
     // ── Player — engine-native gravity ───────────────────────────────────
-    let mut player = GameObject::new_rect(
-        ctx, "player".into(),
-        Some(Image {
-            shape: ShapeType::Ellipse(0.0, (PLAYER_R*2.0, PLAYER_R*2.0), 0.0),
-            image: circle_cached(PLAYER_R as u32, C_PLAYER.0, C_PLAYER.1, C_PLAYER.2),
-            color: None,
-        }),
-        (PLAYER_R*2.0, PLAYER_R*2.0),
-        (SPAWN_X - PLAYER_R, SPAWN_Y - PLAYER_R),
-        vec!["player".into()],
-        (18.0, 0.0),   // initial rightward push
-        (1.0, 1.0),   // no engine resistance
-        0.0,           // gravity set to 0 initially (hooked at start)
-    );
+    let mut player = GameObject::new_rect(ctx, "player".into(),
+        Some(Image { shape: ShapeType::Ellipse(0.0, (PLAYER_R*2.0, PLAYER_R*2.0), 0.0), image: circle_cached(PLAYER_R as u32, C_PLAYER.0, C_PLAYER.1, C_PLAYER.2), color: None }),
+        (PLAYER_R*2.0, PLAYER_R*2.0), (SPAWN_X - PLAYER_R, SPAWN_Y - PLAYER_R),
+        vec!["player".into()], (18.0, 0.0), (1.0, 1.0), 0.0);
     // Opt into gravity well forces.
     player.gravity_all_sources = true;
     player.gravity_falloff = GravityFalloff::InverseSquare;
@@ -323,17 +348,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // Velocity-facing air shield. The gif is mirrored on X once at load time,
     // then rotated each post-physics tick based on player net velocity.
-    let mut airshield = GameObject::new_rect(
-        ctx, "airshield".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (AIRSHIELD_W, AIRSHIELD_H), 0.0),
-            image: solid(0, 0, 0, 0).into(),
-            color: None,
-        }),
-        (AIRSHIELD_W, AIRSHIELD_H),
-        (SPAWN_X - AIRSHIELD_W * 0.5, SPAWN_Y - AIRSHIELD_H * 0.5),
-        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut airshield = GameObject::new_rect(ctx, "airshield".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (AIRSHIELD_W, AIRSHIELD_H), 0.0), image: solid(0, 0, 0, 0).into(), color: None }),
+        (AIRSHIELD_W, AIRSHIELD_H), (SPAWN_X - AIRSHIELD_W * 0.5, SPAWN_Y - AIRSHIELD_H * 0.5),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     if let Ok(mut anim) = AnimatedSprite::new(
         include_bytes!("../../../assets/airshield2.gif"),
         (AIRSHIELD_W, AIRSHIELD_H),
@@ -346,129 +364,32 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     airshield.visible = false;
     airshield.layer = LAYER_AIRSHIELD;
 
-    // Rope visual is driven each tick in physics.rs (dynamic width-matched beam).
     let rope_beam_h = ROPE_THICKNESS;
-    let mut rope = GameObject::new_rect(
-        ctx, "rope".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (4.0, rope_beam_h), 0.0),
-            image: solid(C_ROPE.0, C_ROPE.1, C_ROPE.2, 255).into(),
-            color: None,
-        }),
-        (4.0, rope_beam_h), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut rope = GameObject::new_rect(ctx, "rope".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (4.0, rope_beam_h), 0.0), image: solid(C_ROPE.0, C_ROPE.1, C_ROPE.2, 255).into(), color: None }),
+        (4.0, rope_beam_h), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     rope.visible = false;
     rope.layer = LAYER_ROPE;
 
-    // Danger floor
-    let mut floor = GameObject::new_rect(
-        ctx, "danger_floor".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (VW, 28.0), 0.0),
-            image: solid(C_DANGER.0, C_DANGER.1, C_DANGER.2, 200).into(),
-            color: None,
-        }),
-        (VW, 28.0), (0.0, VH - 28.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut floor = GameObject::new_rect(ctx, "danger_floor".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (VW, 28.0), 0.0), image: solid(C_DANGER.0, C_DANGER.1, C_DANGER.2, 200).into(), color: None }),
+        (VW, 28.0), (0.0, VH - 28.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     floor.ignore_zoom = true;
 
     // ── HUD elements ─────────────────────────────────────────────────────
-    let mut dist_bar = GameObject::new_rect(
-        ctx, "dist_bar".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0),
-            image: bar_img(920, 48, 0.0, 80, 220, 160).into(),
-            color: None,
-        }),
+    let mut dist_bar = GameObject::new_rect(ctx, "dist_bar".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (920.0, 48.0), 0.0), image: bar_img(920, 48, 0.0, 80, 220, 160).into(), color: None }),
         (920.0, 48.0), (VW * 0.5 - 460.0, 30.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
     dist_bar.ignore_zoom = true;
     dist_bar.layer = 100;
 
-    let mut coin_counter = GameObject::new_rect(
-        ctx, "coin_counter".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (640.0, 168.0), 0.0),
-            image: coin_counter_img(0).into(),
-            color: None,
-        }),
-        (640.0, 168.0), (26.0, 24.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    coin_counter.ignore_zoom = true;
-    coin_counter.layer = 100;
-    coin_counter.visible = false;
-
-    let mut score_counter = GameObject::new_rect(
-        ctx, "score_counter".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
-            image: score_counter_img(0).into(),
-            color: None,
-        }),
-        (420.0, 98.0), (VW - 450.0, 40.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    score_counter.ignore_zoom = true;
-    score_counter.layer = 100;
-    score_counter.visible = false;
-
-    let mut momentum_counter = GameObject::new_rect(
-        ctx, "momentum_counter".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
-            image: momentum_counter_img(0.0).into(),
-            color: None,
-        }),
-        (420.0, 86.0), (30.0, 150.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    momentum_counter.ignore_zoom = true;
-    momentum_counter.layer = 100;
-    momentum_counter.visible = false;
-
-    let mut gravity_indicator = GameObject::new_rect(
-        ctx, "gravity_indicator".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (308.0, 84.0), 0.0),
-            image: gravity_indicator_img(false, true).into(),
-            color: None,
-        }),
-        (308.0, 84.0), (30.0, 248.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    gravity_indicator.ignore_zoom = true;
-    gravity_indicator.layer = 100;
-    gravity_indicator.visible = false;
-
-    let mut y_meter = GameObject::new_rect(
-        ctx, "y_meter".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
-            image: y_counter_img(SPAWN_Y).into(),
-            color: None,
-        }),
-        (420.0, 86.0), (30.0, 344.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    y_meter.ignore_zoom = true;
-    y_meter.layer = 100;
-    y_meter.visible = false;
-
-    let mut x_meter = GameObject::new_rect(
-        ctx, "x_meter".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
-            image: x_counter_img(SPAWN_X).into(),
-            color: None,
-        }),
-        (420.0, 86.0), (30.0, 442.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    x_meter.ignore_zoom = true;
-    x_meter.layer = 100;
-    x_meter.visible = false;
+    let coin_counter      = hud_obj(ctx, "coin_counter",      640.0, 168.0, 26.0,       24.0,  Some(rect_img(640.0, 168.0, coin_counter_img(0))));
+    let score_counter     = hud_obj(ctx, "score_counter",     420.0,  98.0, VW - 450.0, 40.0,  Some(rect_img(420.0,  98.0, score_counter_img(0))));
+    let momentum_counter  = hud_obj(ctx, "momentum_counter",  420.0,  86.0, 30.0,       150.0, Some(rect_img(420.0,  86.0, momentum_counter_img(0.0))));
+    let gravity_indicator = hud_obj(ctx, "gravity_indicator", 308.0,  84.0, 30.0,       248.0, Some(rect_img(308.0,  84.0, gravity_indicator_img(false, true))));
+    let y_meter           = hud_obj(ctx, "y_meter",           420.0,  86.0, 30.0,       344.0, Some(rect_img(420.0,  86.0, y_counter_img(SPAWN_Y))));
+    let x_meter           = hud_obj(ctx, "x_meter",           420.0,  86.0, 30.0,       442.0, Some(rect_img(420.0,  86.0, x_counter_img(SPAWN_X))));
 
     let mut combo_flash = {
         let (w, h) = (420u32, 80u32);
@@ -476,12 +397,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         for py in 0..h { for px in 0..w {
             img.put_pixel(px, py, image::Rgba([255, 200, 60, 230]));
         }}
-        GameObject::new_rect(
-            ctx, "combo_flash".into(),
+        GameObject::new_rect(ctx, "combo_flash".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
             (w as f32, h as f32), (VW/2.0 - w as f32/2.0, VH*0.08),
-            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        )
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
     };
     combo_flash.visible = false;
     combo_flash.ignore_zoom = true;
@@ -490,63 +409,22 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut pause_overlay = {
         const PO_OVERSCAN: f32 = 400.0;
         let po_w = VW + PO_OVERSCAN * 2.0;
-        let mut obj = GameObject::new_rect(
-            ctx, "pause_overlay".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (po_w, VH), 0.0),
-                image: pause_overlay_img().into(),
-                color: None,
-            }),
+        let obj = GameObject::new_rect(ctx, "pause_overlay".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (po_w, VH), 0.0), image: pause_overlay_img().into(), color: None }),
             (po_w, VH), (-PO_OVERSCAN, 0.0),
-            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj
     };
     pause_overlay.visible = false;
     pause_overlay.layer = 10_000;
     pause_overlay.ignore_zoom = true;
 
-    let mut flip_timer_hud = GameObject::new_rect(
-        ctx, "flip_timer".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-            image: flip_timer_img(FLIP_DURATION, FLIP_DURATION).into(),
-            color: None,
-        }),
-        (504.0, 118.0), (VW * 0.5 - 252.0, 560.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    flip_timer_hud.visible = false;
-    flip_timer_hud.ignore_zoom = true;
-    flip_timer_hud.layer = 100;
-
-    let mut zero_g_timer_hud = GameObject::new_rect(
-        ctx, "zero_g_timer".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-            image: flip_timer_img(ZERO_G_DURATION, ZERO_G_DURATION).into(),
-            color: None,
-        }),
-        (504.0, 118.0), (VW * 0.5 - 252.0, 690.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    zero_g_timer_hud.visible = false;
-    zero_g_timer_hud.ignore_zoom = true;
-    zero_g_timer_hud.layer = 100;
-
-    let mut score_x2_timer_hud = GameObject::new_rect(
-        ctx, "score_x2_timer".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (504.0, 118.0), 0.0),
-            image: score_x2_timer_img(SCORE_X2_DURATION, SCORE_X2_DURATION).into(),
-            color: None,
-        }),
-        (504.0, 118.0), (VW * 0.5 - 252.0, 820.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    score_x2_timer_hud.visible = false;
-    score_x2_timer_hud.ignore_zoom = true;
-    score_x2_timer_hud.layer = 100;
+    let flip_timer_hud     = hud_obj(ctx, "flip_timer",     504.0, 118.0, VW * 0.5 - 252.0, 560.0,
+        Some(rect_img(504.0, 118.0, flip_timer_img(FLIP_DURATION, FLIP_DURATION))));
+    let zero_g_timer_hud   = hud_obj(ctx, "zero_g_timer",   504.0, 118.0, VW * 0.5 - 252.0, 690.0,
+        Some(rect_img(504.0, 118.0, flip_timer_img(ZERO_G_DURATION, ZERO_G_DURATION))));
+    let score_x2_timer_hud = hud_obj(ctx, "score_x2_timer", 504.0, 118.0, VW * 0.5 - 252.0, 820.0,
+        Some(rect_img(504.0, 118.0, score_x2_timer_img(SCORE_X2_DURATION, SCORE_X2_DURATION))));
 
     let toast_w = GOLD_MASTER_TOAST_WIDTH;
     let toast_h = GOLD_MASTER_TOAST_HEIGHT;
@@ -557,20 +435,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
             img.put_pixel(px, py, image::Rgba([24, 30, 44, if border { 240 } else { 210 }]));
         }}
-        GameObject::new_rect(
-            ctx, GOLD_MASTER_TOAST_PANEL_NAME.into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0),
-                image: img.into(),
-                color: None,
-            }),
-            (w as f32, h as f32),
-            (VW * 0.5 - w as f32 * 0.5, -(h as f32) - 32.0),
-            vec!["hud".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        )
+        GameObject::new_rect(ctx, GOLD_MASTER_TOAST_PANEL_NAME.into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW * 0.5 - w as f32 * 0.5, -(h as f32) - 32.0),
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
     };
     achievement_toast_panel.visible = false;
     achievement_toast_panel.ignore_zoom = true;
@@ -620,55 +488,27 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
                 }
             }
         }
-        GameObject::new_rect(
-            ctx, "coin_magnet_radius".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (d as f32, d as f32), 0.0),
-                image: img.into(),
-                color: None,
-            }),
-            (d as f32, d as f32),
-            (SPAWN_X - COIN_MAGNET_RADIUS, SPAWN_Y - COIN_MAGNET_RADIUS),
-            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-        )
+        GameObject::new_rect(ctx, "coin_magnet_radius".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (d as f32, d as f32), 0.0), image: img.into(), color: None }),
+            (d as f32, d as f32), (SPAWN_X - COIN_MAGNET_RADIUS, SPAWN_Y - COIN_MAGNET_RADIUS),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0)
     };
     coin_magnet_radius.visible = false;
 
     // ── Fullscreen effect overlays (shown/hidden by tick_hud) ────────────
     // zero_g_overlay: kept invisible — its gif is shown via the ability icon HUD.
-    let mut zero_g_overlay = GameObject::new_rect(
-        ctx, "zero_g_overlay".into(),
-        None::<Image>,
-        (256.0, 256.0),
-        (VW * 0.5 - 128.0, VH * 0.5 - 128.0),
-        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut zero_g_overlay = GameObject::new_rect(ctx, "zero_g_overlay".into(),
+        None::<Image>, (256.0, 256.0), (VW * 0.5 - 128.0, VH * 0.5 - 128.0),
+        vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     zero_g_overlay.ignore_zoom = true;
     zero_g_overlay.visible = false;
     zero_g_overlay.layer = 50;
 
-    // space_rip overlay: 512×1024 virtual px, centred on screen.
-    // AnimatedSprite::new resizes frames correctly — no full-screen stretch.
-    // Layer 3 keeps it behind all gameplay objects.
-    let mut space_rip_overlay = GameObject::new_rect(
-        ctx, "space_rip_overlay".into(),
-        None::<Image>,
-        (super::helpers::SPACE_RIP_W, super::helpers::SPACE_RIP_H),
-        (VW * 0.5 - super::helpers::SPACE_RIP_W * 0.5, VH * 0.5 - super::helpers::SPACE_RIP_H * 0.5),
-        vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    space_rip_overlay.ignore_zoom = true;
-    space_rip_overlay.visible = false;
-    space_rip_overlay.layer = 3; // Behind all gameplay (player=42), above plain bg (0)
-
     // Animated catcoingold icon overlaid on the coin counter slot.
     // coin_counter is at (26, 24), icon slot is at (12, 28) within it → abs (38, 52).
-    let mut coin_icon_anim = GameObject::new_rect(
-        ctx, "coin_icon_anim".into(),
-        None::<Image>,
-        (112.0, 112.0), (38.0, 52.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+    let mut coin_icon_anim = GameObject::new_rect(ctx, "coin_icon_anim".into(),
+        None::<Image>, (112.0, 112.0), (38.0, 52.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
     coin_icon_anim.ignore_zoom = true;
     coin_icon_anim.layer = 101;
     coin_icon_anim.visible = false;
@@ -684,39 +524,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     const ICON_X1: f32 = ICON_X0 - ICON_W - 10.0;    // zero_g
     const ICON_X2: f32 = ICON_X1 - ICON_W - 10.0;    // score_x2
 
-    let mut flip_icon = GameObject::new_rect(
-        ctx, "flip_icon".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (ICON_W, ICON_H), 0.0),
-            image: flip_image_cached(),
-            color: None,
-        }),
-        (ICON_W, ICON_H), (ICON_X0, ICON_Y),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    flip_icon.ignore_zoom = true;
-    flip_icon.visible = false;
-    flip_icon.layer = 100;
-
-    let mut zero_g_icon = GameObject::new_rect(
-        ctx, "zero_g_icon".into(),
-        None::<Image>,
-        (ICON_W, ICON_H), (ICON_X1, ICON_Y),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    zero_g_icon.ignore_zoom = true;
-    zero_g_icon.visible = false;
-    zero_g_icon.layer = 100;
-
-    let mut score_x2_icon = GameObject::new_rect(
-        ctx, "score_x2_icon".into(),
-        None::<Image>,
-        (ICON_W, ICON_H), (ICON_X2, ICON_Y),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
-    score_x2_icon.ignore_zoom = true;
-    score_x2_icon.visible = false;
-    score_x2_icon.layer = 100;
+    let flip_icon = hud_obj(ctx, "flip_icon", ICON_W, ICON_H, ICON_X0, ICON_Y,
+        Some(Image { shape: ShapeType::Rectangle(0.0, (ICON_W, ICON_H), 0.0), image: flip_image_cached(), color: None }));
+    let zero_g_icon   = hud_obj(ctx, "zero_g_icon",   ICON_W, ICON_H, ICON_X1, ICON_Y, None);
+    let score_x2_icon = hud_obj(ctx, "score_x2_icon", ICON_W, ICON_H, ICON_X2, ICON_Y, None);
 
     // ── Starter hooks ────────────────────────────────────────────────────
     let starter_hooks: &[(f32, f32)] = &[
@@ -753,7 +564,6 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object(GOLD_MASTER_TOAST_CHECK_NAME, achievement_toast_check)
         .with_object("coin_magnet_radius", coin_magnet_radius)
         .with_object("zero_g_overlay",    zero_g_overlay)
-        .with_object("space_rip_overlay", space_rip_overlay)
         .with_object("coin_icon_anim",    coin_icon_anim)
         .with_object("flip_icon",         flip_icon)
         .with_object("zero_g_icon",       zero_g_icon)
@@ -783,17 +593,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         } else {
             (-2000.0, -2000.0)
         };
-        let mut obj = GameObject::new_rect(
-            ctx,
-            id.clone(),
-            None::<Image>,
-            (size, size),
-            (init_x, init_y),
-            vec!["hook".into()],
-            (dv_x, dv_y),
-            (1.0, 1.0),
-            0.0,
-        );
+        let mut obj = GameObject::new_rect(ctx, id.clone(), None::<Image>,
+            (size, size), (init_x, init_y),
+            vec!["hook".into()], (dv_x, dv_y), (1.0, 1.0), 0.0);
         // Only set animation on starter hooks (initially visible).
         // Pool hooks are invisible; enabling their animation would tick
         // all 60+ GIF sprites every frame even off-screen, causing lag.
@@ -852,35 +654,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object(id, obj);
 
         let thr_id = format!("pad_{i}_thruster");
-        let mut thr = GameObject::new_rect(
-            ctx,
-            thr_id.clone(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (PAD_THRUSTER_W, PAD_THRUSTER_H), 0.0),
-                image: pad_thruster_static_img.image.clone(),
-                color: None,
-            }),
-            (PAD_THRUSTER_W, PAD_THRUSTER_H),
-            (-3000.0, -3000.0),
-            vec!["pad_thruster".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
+        let mut thr = GameObject::new_rect(ctx, thr_id.clone(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (PAD_THRUSTER_W, PAD_THRUSTER_H), 0.0), image: pad_thruster_static_img.image.clone(), color: None }),
+            (PAD_THRUSTER_W, PAD_THRUSTER_H), (-3000.0, -3000.0),
+            vec!["pad_thruster".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         thr.layer = 4;
         thr.visible = false;
         scene = scene.with_object(thr_id, thr);
     }
 
     // ── Spinner pool ─────────────────────────────────────────────────────
-    let mut spinner_free: Vec<String> = Vec::new();
-    for i in 0..SPINNER_POOL_SIZE {
-        let id = format!("spinner_{i}");
-        let mut obj = make_spinner(ctx, &id, -3500.0, -3500.0);
-        obj.visible = false;
-        spinner_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    let (mut scene, spinner_free) = simple_pool(ctx, scene, "spinner", SPINNER_POOL_SIZE,
+        |c, id| make_spinner(c, id, -3500.0, -3500.0));
 
     // ── Coin pool ────────────────────────────────────────────────────────
     let coin_static_sprite = load_image_sized(ASSET_COIN_GIF, COIN_R * 2.0, COIN_R * 2.0);
@@ -906,14 +691,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Flip pool ────────────────────────────────────────────────────────
-    let mut flip_free: Vec<String> = Vec::new();
-    for i in 0..FLIP_POOL_SIZE {
-        let id = format!("flip_{i}");
-        let mut obj = make_flip(ctx, &id, -3800.0, -3800.0);
-        obj.visible = false;
-        flip_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    let (mut scene, flip_free) = simple_pool(ctx, scene, "flip", FLIP_POOL_SIZE,
+        |c, id| make_flip(c, id, -3800.0, -3800.0));
 
     // ── Score x2 pool ────────────────────────────────────────────────────
     let score_x2_sprite = load_image_sized(ASSET_SCORE_X2_GIF, SCORE_X2_W, SCORE_X2_H);
@@ -978,44 +757,20 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Turret pool ──────────────────────────────────────────────────────
-    let mut turret_free: Vec<String> = Vec::new();
-    for i in 0..TURRET_POOL_SIZE {
-        let id = format!("turret_{i}");
-        let mut obj = make_turret(ctx, &id, -4500.0, -4500.0);
-        obj.visible = false;
-        turret_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    let (scene, turret_free) = simple_pool(ctx, scene, "turret", TURRET_POOL_SIZE,
+        |c, id| make_turret(c, id, -4500.0, -4500.0));
 
     // ── Bullet pool ──────────────────────────────────────────────────────
-    let mut bullet_free: Vec<String> = Vec::new();
-    for i in 0..BULLET_POOL_SIZE {
-        let id = format!("bullet_{i}");
-        let mut obj = make_turret_bullet(ctx, &id);
-        obj.visible = false;
-        bullet_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    let (scene, bullet_free) = simple_pool(ctx, scene, "bullet", BULLET_POOL_SIZE,
+        |c, id| make_turret_bullet(c, id));
 
     // ── Rocket pad pool ───────────────────────────────────────────────────
-    let mut rocket_pad_free: Vec<String> = Vec::new();
-    for i in 0..ROCKET_PAD_POOL_SIZE {
-        let id = format!("rocket_pad_{i}");
-        let mut obj = make_rocket_pad(ctx, &id, -5200.0, -5200.0);
-        obj.visible = false;
-        rocket_pad_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    let (scene, rocket_pad_free) = simple_pool(ctx, scene, "rocket_pad", ROCKET_PAD_POOL_SIZE,
+        |c, id| make_rocket_pad(c, id, -5200.0, -5200.0));
 
     // ── Gravity cannon pool ───────────────────────────────────────────────
-    let mut cannon_free: Vec<String> = Vec::new();
-    for i in 0..CANNON_POOL_SIZE {
-        let id = format!("cannon_{i}");
-        let mut obj = make_gravity_cannon(ctx, &id, -6000.0, -6000.0);
-        obj.visible = false;
-        cannon_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    let (mut scene, cannon_free) = simple_pool(ctx, scene, "cannon", CANNON_POOL_SIZE,
+        |c, id| make_gravity_cannon(c, id, -6000.0, -6000.0));
 
     // ── Space planet pool ─────────────────────────────────────────────────
     let mut space_planet_free: Vec<String> = Vec::new();
@@ -1037,17 +792,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     for i in 0..SPACE_HOOK_POOL_SIZE {
         let id = format!("space_hook_{i}");
         let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 59.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
-        let mut obj = GameObject::new_rect(
-            ctx,
-            id.clone(),
-            None::<Image>,
-            (size, size),
-            (-5700.0, -5700.0),
-            vec!["hook".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
+        let mut obj = GameObject::new_rect(ctx, id.clone(), None::<Image>,
+            (size, size), (-5700.0, -5700.0),
+            vec!["hook".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.gravity = 0.0;
         obj.rotation_momentum = ((i as f32 * 1.1 + 0.4) % 1.0 - 0.5) * 0.008;
         obj.visible = false;
@@ -1057,66 +804,20 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space coin pool ───────────────────────────────────────────────────
-    let space_cat_static = load_image_sized(
+    let (space_coin_free, sc_objs) = build_space_coin_pool(
+        ctx, "space_coin", SPACE_COIN_POOL_SIZE, -5900.0,
         include_bytes!("../../../assets/catcoin.gif"),
-        SPACE_COIN_R * 2.0,
-        SPACE_COIN_R * 2.0,
+        SPACE_COIN_R, LAYER_SPACE_COIN, "space_catcoin",
     );
-    let space_cat_anim_template = AnimatedSprite::new(
-        include_bytes!("../../../assets/catcoin.gif"),
-        (SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0),
-        SPACE_COIN_ANIM_FPS,
-    ).ok();
-
-    let mut space_coin_free: Vec<String> = Vec::new();
-    for i in 0..SPACE_COIN_POOL_SIZE {
-        let id = format!("space_coin_{i}");
-        let mut obj = make_coin(ctx, &id, -5900.0, -5900.0);
-        obj.set_image(space_cat_static.clone());
-        if let Some(anim) = &space_cat_anim_template {
-            obj.set_animation(anim.clone());
-            if let Some(a) = obj.animated_sprite.as_mut() {
-                a.set_frame(0);
-            }
-        }
-        obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
-        obj.tags.push("space_catcoin".to_string());
-        obj.visible = false;
-        obj.layer = LAYER_SPACE_COIN;
-        space_coin_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    for (id, obj) in sc_objs { scene = scene.with_object(id, obj); }
 
     // ── Space blue-coin pool ─────────────────────────────────────────────
-    let space_cat_blue_static = load_image_sized(
+    let (space_blue_coin_free, sbc_objs) = build_space_coin_pool(
+        ctx, "space_blue_coin", SPACE_BLUE_COIN_POOL_SIZE, -6450.0,
         include_bytes!("../../../assets/catcoinblue.gif"),
-        SPACE_RED_COIN_R * 2.0,
-        SPACE_RED_COIN_R * 2.0,
+        SPACE_RED_COIN_R, LAYER_SPACE_RED_COIN, "space_catcoin_blue",
     );
-    let space_cat_blue_anim_template = AnimatedSprite::new(
-        include_bytes!("../../../assets/catcoinblue.gif"),
-        (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0),
-        SPACE_COIN_ANIM_FPS,
-    ).ok();
-
-    let mut space_blue_coin_free: Vec<String> = Vec::new();
-    for i in 0..SPACE_BLUE_COIN_POOL_SIZE {
-        let id = format!("space_blue_coin_{i}");
-        let mut obj = make_coin(ctx, &id, -6450.0, -6450.0);
-        obj.set_image(space_cat_blue_static.clone());
-        if let Some(anim) = &space_cat_blue_anim_template {
-            obj.set_animation(anim.clone());
-            if let Some(a) = obj.animated_sprite.as_mut() {
-                a.set_frame(0);
-            }
-        }
-        obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
-        obj.tags.push("space_catcoin_blue".to_string());
-        obj.visible = false;
-        obj.layer = LAYER_SPACE_RED_COIN;
-        space_blue_coin_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    for (id, obj) in sbc_objs { scene = scene.with_object(id, obj); }
 
     // ── Space black hole pool ─────────────────────────────────────────────
     let mut space_bh_free: Vec<String> = Vec::new();
@@ -1143,21 +844,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut space_asteroid_free: Vec<String> = Vec::new();
     for i in 0..SPACE_ASTEROID_POOL_SIZE {
         let id = format!("space_asteroid_{i}");
-        let mut obj = GameObject::new_rect(
-            ctx,
-            id.clone(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN), 0.0),
-                image: asteroid_space_img.clone().into(),
-                color: None,
-            }),
-            (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN),
-            (-6300.0, -6300.0),
-            vec!["hook".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
+        let mut obj = GameObject::new_rect(ctx, id.clone(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN), 0.0), image: asteroid_space_img.clone().into(), color: None }),
+            (SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MIN), (-6300.0, -6300.0),
+            vec!["hook".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         if let Some(anim) = &asteroid_anim_template {
             obj.set_animation(anim.clone());
         }
@@ -1171,47 +861,19 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Space red-coin pool ───────────────────────────────────────────────
-    let space_cat_red_static = load_image_sized(
+    let (space_red_coin_free, src_objs) = build_space_coin_pool(
+        ctx, "space_red_coin", SPACE_RED_COIN_POOL_SIZE, -6500.0,
         include_bytes!("../../../assets/catcoingold.gif"),
-        SPACE_RED_COIN_R * 2.0,
-        SPACE_RED_COIN_R * 2.0,
+        SPACE_RED_COIN_R, LAYER_SPACE_RED_COIN, "space_catcoin_red",
     );
-    let space_cat_red_anim_template = AnimatedSprite::new(
-        include_bytes!("../../../assets/catcoingold.gif"),
-        (SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0),
-        SPACE_COIN_ANIM_FPS,
-    ).ok();
-
-    let mut space_red_coin_free: Vec<String> = Vec::new();
-    for i in 0..SPACE_RED_COIN_POOL_SIZE {
-        let id = format!("space_red_coin_{i}");
-        let mut obj = make_coin(ctx, &id, -6500.0, -6500.0);
-        obj.set_image(space_cat_red_static.clone());
-        if let Some(anim) = &space_cat_red_anim_template {
-            obj.set_animation(anim.clone());
-            if let Some(a) = obj.animated_sprite.as_mut() {
-                a.set_frame(0);
-            }
-        }
-        obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
-        obj.tags.push("space_catcoin_red".to_string());
-        obj.visible = false;
-        obj.layer = LAYER_SPACE_RED_COIN;
-        space_red_coin_free.push(id.clone());
-        scene = scene.with_object(id, obj);
-    }
+    for (id, obj) in src_objs { scene = scene.with_object(id, obj); }
 
     // ── Solar ceiling ─────────────────────────────────────────────────────
     // Placeholder object only — AnimatedSprite is decoded lazily on first
     // enter_space() to avoid a multi-second freeze at game startup.
     {
-        let mut solar_ceiling = GameObject::new_rect(
-            ctx, "solar_ceiling".into(),
-            None::<Image>,  // no image at startup — set on first space entry
-            (VW, SPACE_SOLAR_H),
-            (0.0, -SPACE_SOLAR_H),  // starts above screen; tick_solar_screen_pos moves it
-            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+        let mut solar_ceiling = GameObject::new_rect(ctx, "solar_ceiling".into(), None::<Image>,
+            (VW, SPACE_SOLAR_H), (0.0, -SPACE_SOLAR_H), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
         solar_ceiling.visible     = false;
         solar_ceiling.layer       = LAYER_SOLAR_CEILING; // behind gameplay objects; still above background
         solar_ceiling.ignore_zoom = true; // screen-space: slides in from top as player approaches
@@ -1220,16 +882,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Space HUD objects ─────────────────────────────────────────────────
     // Oxygen bar (replaces dist_bar while in space)
-    let mut oxygen_bar_obj = GameObject::new_rect(
-        ctx, "oxygen_bar".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (OXYGEN_BAR_W, OXYGEN_BAR_H), 0.0),
-            image: oxygen_bar_img(1.0, OXYGEN_BAR_W as u32, OXYGEN_BAR_H as u32).into(),
-            color: None,
-        }),
+    let mut oxygen_bar_obj = GameObject::new_rect(ctx, "oxygen_bar".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (OXYGEN_BAR_W, OXYGEN_BAR_H), 0.0), image: oxygen_bar_img(1.0, OXYGEN_BAR_W as u32, OXYGEN_BAR_H as u32).into(), color: None }),
         (OXYGEN_BAR_W, OXYGEN_BAR_H), (VW * 0.5 - OXYGEN_BAR_W * 0.5, 30.0),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
     oxygen_bar_obj.visible = false;
     oxygen_bar_obj.ignore_zoom = true;
     oxygen_bar_obj.layer = 100;
@@ -1256,16 +912,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let pause_title_w: f32 = 650.0;
     let pause_title_h: f32 = 100.0;
 
-    let mut pause_title = GameObject::new_rect(
-        ctx, "pause_title".into(),
-        Some(Image {
-            shape: ShapeType::Rectangle(0.0, (pause_title_w, pause_title_h), 0.0),
-            image: pause_title_img().into(),
-            color: None,
-        }),
+    let mut pause_title = GameObject::new_rect(ctx, "pause_title".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (pause_title_w, pause_title_h), 0.0), image: pause_title_img().into(), color: None }),
         (pause_title_w, pause_title_h), ((VW - pause_title_w) / 2.0, VH * 0.20),
-        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
     pause_title.visible = false;
     pause_title.layer = 10_001;
     pause_title.ignore_zoom = true;
@@ -1273,16 +923,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let make_pause_btn = |ctx: &mut Context, name: &str, r: u8, g: u8, b: u8, label: &str, y: f32| {
         let img = pause_btn_img(pause_btn_w as u32, pause_btn_h as u32, r, g, b, label);
         let corner_r = (pause_btn_h * 0.48 * 1.33).clamp(1.0, pause_btn_h * 0.5 - 1.0);
-        let mut obj = GameObject::new_rect(
-            ctx, name.to_string().into(),
-            Some(Image {
-                shape: ShapeType::RoundedRectangle(0.0, (pause_btn_w, pause_btn_h), 0.0, corner_r),
-                image: img.into(),
-                color: None,
-            }),
+        let mut obj = GameObject::new_rect(ctx, name.to_string().into(),
+            Some(Image { shape: ShapeType::RoundedRectangle(0.0, (pause_btn_w, pause_btn_h), 0.0, corner_r), image: img.into(), color: None }),
             (pause_btn_w, pause_btn_h), (pause_btn_x, y),
-            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.visible = false;
         obj.layer = 10_001;
         obj.ignore_zoom = true;
@@ -1335,17 +979,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     const SLIDER_Y: [f32; 3] = [820.0, 1120.0, 1420.0];
 
     let make_slider_track = |ctx: &mut Context, id: &str, y: f32| {
-        let mut obj = GameObject::new_rect(
-            ctx, id.into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (SLIDER_TRACK_W, SLIDER_TRACK_H), 0.0),
-                image: solid(60, 62, 88, 220).into(),
-                color: None,
-            }),
-            (SLIDER_TRACK_W, SLIDER_TRACK_H),
-            (SLIDER_TRACK_X, y),
-            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+        let mut obj = GameObject::new_rect(ctx, id.into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (SLIDER_TRACK_W, SLIDER_TRACK_H), 0.0), image: solid(60, 62, 88, 220).into(), color: None }),
+            (SLIDER_TRACK_W, SLIDER_TRACK_H), (SLIDER_TRACK_X, y),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.visible = false;
         obj.layer = 10_003;
         obj.ignore_zoom = true;
@@ -1353,17 +990,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     };
 
     let make_slider_thumb = |ctx: &mut Context, id: &str, y: f32| {
-        let mut obj = GameObject::new_rect(
-            ctx, id.into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (SLIDER_THUMB_W, SLIDER_THUMB_H), 0.0),
-                image: solid(210, 220, 255, 255).into(),
-                color: None,
-            }),
-            (SLIDER_THUMB_W, SLIDER_THUMB_H),
-            (SLIDER_TRACK_X, y - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0),
-            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+        let mut obj = GameObject::new_rect(ctx, id.into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (SLIDER_THUMB_W, SLIDER_THUMB_H), 0.0), image: solid(210, 220, 255, 255).into(), color: None }),
+            (SLIDER_THUMB_W, SLIDER_THUMB_H), (SLIDER_TRACK_X, y - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.visible = false;
         obj.layer = 10_005;
         obj.ignore_zoom = true;
@@ -1398,20 +1028,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Boss body ─────────────────────────────────────────────────────────
     {
         let s = BOSS_SIZE;
-        let mut boss_obj = GameObject::new_rect(
-            ctx, "boss".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (s, s), 0.0),
-                image: solid(C_BOSS_BODY.0, C_BOSS_BODY.1, C_BOSS_BODY.2, 255).into(),
-                color: None,
-            }),
-            (s, s),
-            (-6000.0, -6000.0),
-            vec!["boss".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
+        let mut boss_obj = GameObject::new_rect(ctx, "boss".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (s, s), 0.0), image: solid(C_BOSS_BODY.0, C_BOSS_BODY.1, C_BOSS_BODY.2, 255).into(), color: None }),
+            (s, s), (-6000.0, -6000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         boss_obj.layer = LAYER_SPACE_HOOK;
         boss_obj.gravity = 0.0;
         boss_obj.visible = false;
@@ -1425,20 +1044,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         for py in 0..bh { for px in 0..bw {
             bar_img.put_pixel(px, py, image::Rgba([C_BOSS_HP_FILL.0, C_BOSS_HP_FILL.1, C_BOSS_HP_FILL.2, 255]));
         }}
-        let mut boss_hp_bar = GameObject::new_rect(
-            ctx, "boss_hp_bar".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (BOSS_HP_BAR_W, BOSS_HP_BAR_H), 0.0),
-                image: bar_img.into(),
-                color: None,
-            }),
-            (BOSS_HP_BAR_W, BOSS_HP_BAR_H),
-            (VW * 0.5 - BOSS_HP_BAR_W * 0.5, VH * 0.12),
-            vec!["hud".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
+        let mut boss_hp_bar = GameObject::new_rect(ctx, "boss_hp_bar".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (BOSS_HP_BAR_W, BOSS_HP_BAR_H), 0.0), image: bar_img.into(), color: None }),
+            (BOSS_HP_BAR_W, BOSS_HP_BAR_H), (VW * 0.5 - BOSS_HP_BAR_W * 0.5, VH * 0.12),
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         boss_hp_bar.visible = false;
         boss_hp_bar.ignore_zoom = true;
         boss_hp_bar.layer = 101;
@@ -1449,49 +1058,26 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut boss_bolt_free: Vec<String> = Vec::new();
     for i in 0..BOSS_BOLT_POOL_SIZE {
         let id = format!("boss_bolt_{i}");
-        let mut obj = GameObject::new_rect(
-            ctx, id.clone(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (BOSS_BOLT_W, BOSS_BOLT_H), 0.0),
-                image: solid(C_BOSS_BOLT.0, C_BOSS_BOLT.1, C_BOSS_BOLT.2, 255).into(),
-                color: None,
-            }),
-            (BOSS_BOLT_W, BOSS_BOLT_H),
-            (-7000.0, -7000.0),
-            vec!["boss_bolt".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
-        obj.gravity = 0.0;
-        obj.visible = false;
+        let mut obj = GameObject::new_rect(ctx, id.clone(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (BOSS_BOLT_W, BOSS_BOLT_H), 0.0), image: solid(C_BOSS_BOLT.0, C_BOSS_BOLT.1, C_BOSS_BOLT.2, 255).into(), color: None }),
+            (BOSS_BOLT_W, BOSS_BOLT_H), (-7000.0, -7000.0),
+            vec!["boss_bolt".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        obj.gravity = 0.0; obj.visible = false;
         boss_bolt_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
 
     // ── Boss arena asteroids ──────────────────────────────────────────────
-    // Decorative floating asteroids shown only during the boss fight.
-    // Animations are set in boss.rs when the boss spawns (same lazy approach
-    // as space_hook pool to avoid ticking invisible GIF sprites every frame).
     let mut boss_asteroid_ids: Vec<String> = Vec::new();
     for i in 0..BOSS_ASTEROID_COUNT {
         let id = format!("boss_asteroid_{i}");
         let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 83.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
-        let mut obj = GameObject::new_rect(
-            ctx,
-            id.clone(),
-            None::<Image>,
-            (size, size),
-            (-8000.0, -8000.0),
-            vec!["hook".into()],   // makes them grabbable like regular hooks
-            (0.0, 0.0),
-            (0.95, 0.95),          // drag so they resist being knocked far
-            0.0,
-        );
+        let mut obj = GameObject::new_rect(ctx, id.clone(), None::<Image>,
+            (size, size), (-8000.0, -8000.0),
+            vec!["hook".into()], (0.0, 0.0), (0.95, 0.95), 0.0);
         obj.gravity = 0.0;
         obj.rotation_momentum = ((i as f32 * 1.7 + 0.3) % 1.0 - 0.5) * 0.006;
         obj.layer = LAYER_SPACE_HOOK;
-        // Full collision so player can bounce into them and they react.
         obj.collision_mode  = CollisionMode::solid_circle(size * 0.5);
         obj.collision_layer = ASTEROID_COLLISION_LAYER;
         obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
@@ -1504,21 +1090,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut comet_free: Vec<String> = Vec::new();
     for i in 0..COMET_POOL_SIZE {
         let id = format!("comet_{i}");
-        let mut obj = GameObject::new_rect(
-            ctx,
-            id.clone(),
-            None::<Image>,
-            (COMET_SIZE, COMET_SIZE),
-            (-9000.0, -9000.0),
-            vec!["comet".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
-        obj.gravity = 0.0;
-        obj.visible = false;
-        obj.collision_mode = CollisionMode::NonPlatform;
-        obj.layer = 10;
+        let mut obj = GameObject::new_rect(ctx, id.clone(), None::<Image>,
+            (COMET_SIZE, COMET_SIZE), (-9000.0, -9000.0),
+            vec!["comet".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        obj.gravity = 0.0; obj.visible = false;
+        obj.collision_mode = CollisionMode::NonPlatform; obj.layer = 10;
         comet_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
@@ -1527,61 +1103,27 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut warn_free: Vec<String> = Vec::new();
     for i in 0..COMET_WARN_POOL_SIZE {
         let id = format!("comet_warn_{i}");
-        let mut obj = GameObject::new_rect(
-            ctx,
-            id.clone(),
-            None::<Image>,
-            (COMET_WARN_W, COMET_WARN_H),
-            (-9500.0, -9500.0),
-            vec!["comet_warn".into()],
-            (0.0, 0.0),
-            (1.0, 1.0),
-            0.0,
-        );
-        obj.gravity = 0.0;
-        obj.visible = false;
-        obj.collision_mode = CollisionMode::NonPlatform;
-        obj.layer = 11;
+        let mut obj = GameObject::new_rect(ctx, id.clone(), None::<Image>,
+            (COMET_WARN_W, COMET_WARN_H), (-9500.0, -9500.0),
+            vec!["comet_warn".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        obj.gravity = 0.0; obj.visible = false;
+        obj.collision_mode = CollisionMode::NonPlatform; obj.layer = 11;
         warn_free.push(id.clone());
         scene = scene.with_object(id, obj);
     }
 
     let pools = PoolSets {
-        starter_names,
-        pool_free,
-        pad_free,
-        spinner_free,
-        coin_free,
-        flip_free,
-        score_x2_free,
-        zero_g_free,
-        gate_free,
-        gwell_free,
-        turret_free,
-        bullet_free,
-        coin_static_sprite,
-        coin_anim_template,
-        score_x2_anim_template,
-        tech_bounce_static_img,
-        tech_bounce_static_img_flipped,
-        tech_bounce_anim_frames,
-        tech_bounce_anim_frames_flipped,
-        pad_thruster_static_img,
-        pad_thruster_anim_template,
-        pad_thruster_anim_template_flipped,
-        rocket_pad_free,
-        space_planet_free,
-        space_hook_free,
-        space_coin_free,
-        space_blue_coin_free,
-        space_bh_free,
-        space_asteroid_free,
-        space_red_coin_free,
-        cannon_free,
-        boss_bolt_free,
-        boss_asteroid_ids,
-        comet_free,
-        warn_free,
+        starter_names, pool_free, pad_free, spinner_free,
+        coin_free, flip_free, score_x2_free, zero_g_free,
+        gate_free, gwell_free, turret_free, bullet_free,
+        coin_static_sprite, coin_anim_template, score_x2_anim_template,
+        tech_bounce_static_img, tech_bounce_static_img_flipped,
+        tech_bounce_anim_frames, tech_bounce_anim_frames_flipped,
+        pad_thruster_static_img, pad_thruster_anim_template, pad_thruster_anim_template_flipped,
+        rocket_pad_free, space_planet_free, space_hook_free,
+        space_coin_free, space_blue_coin_free, space_bh_free,
+        space_asteroid_free, space_red_coin_free, cannon_free,
+        boss_bolt_free, boss_asteroid_ids, comet_free, warn_free,
     };
 
     (scene, pools)

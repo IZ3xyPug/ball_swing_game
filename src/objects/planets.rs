@@ -35,11 +35,7 @@ pub fn make_planet(
     let mut obj = GameObject::build(id)
         .size(d, d)
         .position(x - visual_r, y - visual_r)
-        .image(Image {
-            shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-            image: img,
-            color: None,
-        })
+        .image(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: img, color: None })
         .tag("space_planet")
         // .planet() sets solid_circle collision + registers as a gravity source.
         // Receivers with gravity_target("space_planet") are attracted to this object.
@@ -49,9 +45,6 @@ pub fn make_planet(
         .build(ctx);
 
     // Subtle glow matching planet color
-    obj.set_glow(GlowConfig {
-        color: Color(pr, pg, pb, 60),
-        width: 18.0,
-    });
+    obj.set_glow(GlowConfig { color: Color(pr, pg, pb, 60), width: 18.0 });
     obj
 }

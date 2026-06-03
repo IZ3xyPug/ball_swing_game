@@ -5,7 +5,6 @@ use quartz::*;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
-use crate::images::solid;
 use crate::state::*;
 use super::bootstrap::hook_asteroid_anim_for_spawn;
 
@@ -321,7 +320,7 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let y_max = 1200.0;
     let y_center = (y_min + y_max) * 0.5;
     let y_half_range = (y_max - y_min) * 0.5;
-    let mut ty_base = y_center + y_liss * y_half_range * 0.92;
+    let ty_base = y_center + y_liss * y_half_range * 0.92;
 
     // ── Player proximity avoidance: dynamic steering away when threatened ──
     let pdx = cur_x - px;
@@ -726,11 +725,7 @@ fn tick_boss_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if let Some(obj) = c.get_game_object_mut("boss_hp_bar") {
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (BOSS_HP_BAR_W, BOSS_HP_BAR_H), 0.0),
-            image: img.into(),
-            color: None,
-        });
+        obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (BOSS_HP_BAR_W, BOSS_HP_BAR_H), 0.0), image: img.into(), color: None });
         obj.visible = fill > 0.0;
     }
 }

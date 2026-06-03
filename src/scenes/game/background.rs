@@ -2,7 +2,6 @@ use quartz::*;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
-use crate::gameplay::zone_index_for_distance;
 use crate::state::*;
 
 /// Update background gradient when zone, vivid state, or gravity direction changes.
@@ -12,38 +11,17 @@ pub fn tick_background(
     prev_bg_theme: &mut Option<(bool, usize, bool, bool, bool)>,
     bg_scale_smooth: &mut f32,
     bg_zone_start: &image::RgbaImage,
-    bg_zone_purple: &image::RgbaImage,
-    bg_zone_black: &image::RgbaImage,
     bg_zone_start_vivid: &image::RgbaImage,
-    bg_zone_purple_vivid: &image::RgbaImage,
-    bg_zone_black_vivid: &image::RgbaImage,
     bg_zone_start_flip: &image::RgbaImage,
-    bg_zone_purple_flip: &image::RgbaImage,
-    bg_zone_black_flip: &image::RgbaImage,
     bg_zone_start_vivid_flip: &image::RgbaImage,
-    bg_zone_purple_vivid_flip: &image::RgbaImage,
-    bg_zone_black_vivid_flip: &image::RgbaImage,
-    _bg_zone_start_space: &image::RgbaImage,
-    _bg_zone_purple_space: &image::RgbaImage,
-    _bg_zone_black_space: &image::RgbaImage,
-    _bg_zone_start_vivid_space: &image::RgbaImage,
-    _bg_zone_purple_vivid_space: &image::RgbaImage,
-    _bg_zone_black_vivid_space: &image::RgbaImage,
-    _bg_zone_start_space_flip: &image::RgbaImage,
-    _bg_zone_purple_space_flip: &image::RgbaImage,
-    _bg_zone_black_space_flip: &image::RgbaImage,
-    _bg_zone_start_vivid_space_flip: &image::RgbaImage,
-    _bg_zone_purple_vivid_space_flip: &image::RgbaImage,
-    _bg_zone_black_vivid_space_flip: &image::RgbaImage,
 ) {
     let s = st.lock().unwrap();
-    let _zone_idx = zone_index_for_distance(s.distance);
     let dark = s.dark_mode;
     let flipped = s.gravity_dir < 0.0;
     let py = s.py;
     let in_space_mode = s.in_space_mode;
     drop(s);
-    let vivid = matches!(c.get_var("bg_vivid"), Some(Value::Bool(true)));
+    let vivid = c.get_bool("bg_vivid");
 
     // Parallax panels (bg_space, bg_stars_b) are fully managed by the parallax block.
     if in_space_mode {
@@ -120,13 +98,9 @@ pub fn tick_background(
 
     if in_space_mode {
         // Space: bg gets a solid near-black image.
-        let dark_img = image::RgbaImage::from_pixel(1, 1, image::Rgba([5, 5, 15, 255]));
+        let dark_img = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 1, 6, 255]));
         if let Some(obj) = c.get_game_object_mut("bg") {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-                image: dark_img.into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: dark_img.into(), color: None });
         }
     } else {
         // Normal zone: aurora gradient background.
@@ -143,11 +117,7 @@ pub fn tick_background(
         };
         if let Some(obj) = c.get_game_object_mut("bg") {
             obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
-                image: image_data.into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: image_data.into(), color: None });
         }
     }
 

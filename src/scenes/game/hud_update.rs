@@ -5,7 +5,6 @@ use crate::achievements::*;
 use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
 use crate::hud::*;
-use crate::images::*;
 use crate::state::*;
 
 pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -27,8 +26,10 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Quantize for dirty checks (sign-aware so display refreshes on flip)
     let q_dist_fill = (dist_fill * 1000.0) as u32;
-    let q_py        = display_py as i32;
-    let q_px        = px as i32;
+    // Quantize to 5-pixel resolution — x/y meters only need to refresh when
+    // the displayed value visibly changes, not every single tick.
+    let q_py        = (display_py / 5.0) as i32 * 5;
+    let q_px        = (px / 5.0) as i32 * 5;
 
     let _dirty_dist    = q_dist_fill     != s.hud_last_dist_fill;
     let dirty_coins    = coins           != s.hud_last_coins;
@@ -103,7 +104,6 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.hud_last_px           = q_px;
     s.hud_last_score        = score;
     s.hud_last_coin_alpha   = coin_alpha;
-    let in_space = s.in_space_mode;
     drop(s);
 
     // Distance progress bar — removed from in-game HUD
@@ -116,11 +116,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         obj.position = (26.0, 24.0);
         obj.visible = coin_alpha > 0;
         if let Some(img) = update_coin_img {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (640.0, 168.0), 0.0),
-                image: img.into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (640.0, 168.0), 0.0), image: img.into(), color: None });
         }
     }
     // Animated catcoingold icon — show when coin counter is visible, no tint (avoids white box).
@@ -133,11 +129,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         obj.visible = true;
         obj.position = (VW - 450.0, 40.0);
         if dirty_score {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0),
-                image: score_counter_img(score).into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (420.0, 98.0), 0.0), image: score_counter_img(score).into(), color: None });
         }
     }
 
@@ -154,11 +146,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         obj.visible = true;
         obj.position = (30.0, 344.0);
         if dirty_py {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
-                image: y_counter_img(display_py).into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0), image: y_counter_img(display_py).into(), color: None });
         }
     }
 
@@ -167,11 +155,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         obj.visible = true;
         obj.position = (30.0, 442.0);
         if dirty_px {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0),
-                image: x_counter_img(px).into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (420.0, 86.0), 0.0), image: x_counter_img(px).into(), color: None });
         }
     }
 
@@ -181,34 +165,17 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if let Some(obj) = c.get_game_object_mut("score_x2_timer") { obj.visible = false; }
 
     // Ability icons to the left of the scoreboard.
-    if let Some(obj) = c.get_game_object_mut("flip_icon") {
-        obj.visible = flip_timer > 0;
-    }
-    if dirty_zero_g {
-        if let Some(obj) = c.get_game_object_mut("zero_g_icon") {
-            if zero_g_timer > 0 {
+    for (id, dirty, timer, prev_timer, fps) in [
+        ("flip_icon",     dirty_flip,     flip_timer,     prev_flip_timer,     12.0_f32),
+        ("zero_g_icon",   dirty_zero_g,   zero_g_timer,   prev_zero_g_timer,    8.0_f32),
+        ("score_x2_icon", dirty_score_x2, score_x2_timer, prev_score_x2_timer, 12.0_f32),
+    ] {
+        if !dirty { continue; }
+        if let Some(obj) = c.get_game_object_mut(id) {
+            if timer > 0 {
                 obj.visible = true;
-                if prev_zero_g_timer == 0 {
-                    if let Some(anim) = &mut obj.animated_sprite {
-                        anim.reset();
-                        anim.set_fps(8.0);
-                    }
-                }
-            } else {
-                obj.visible = false;
-                if let Some(anim) = &mut obj.animated_sprite { anim.set_fps(0.001); }
-            }
-        }
-    }
-    if dirty_score_x2 {
-        if let Some(obj) = c.get_game_object_mut("score_x2_icon") {
-            if score_x2_timer > 0 {
-                obj.visible = true;
-                if prev_score_x2_timer == 0 {
-                    if let Some(anim) = &mut obj.animated_sprite {
-                        anim.reset();
-                        anim.set_fps(12.0);
-                    }
+                if prev_timer == 0 {
+                    if let Some(anim) = &mut obj.animated_sprite { anim.reset(); anim.set_fps(fps); }
                 }
             } else {
                 obj.visible = false;
@@ -276,27 +243,5 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Zero-G overlay: kept invisible (ZeroG effect shown via ability icon only).
     if let Some(obj) = c.get_game_object_mut("zero_g_overlay") {
         obj.visible = false;
-    }
-
-    // Space rip overlay: looping background effect for the full flip duration.
-    // Layer 3 keeps it behind all gameplay objects.
-    if dirty_flip {
-        if let Some(obj) = c.get_game_object_mut("space_rip_overlay") {
-            if flip_timer > 0 {
-                obj.visible = true;
-                if prev_flip_timer == 0 {
-                    // Rising edge: start the loop from frame 0.
-                    if let Some(anim) = &mut obj.animated_sprite {
-                        anim.reset();
-                        anim.set_fps(16.0);
-                    }
-                }
-            } else {
-                obj.visible = false;
-                if let Some(anim) = &mut obj.animated_sprite {
-                    anim.set_fps(0.001);
-                }
-            }
-        }
     }
 }

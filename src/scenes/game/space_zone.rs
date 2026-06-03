@@ -19,9 +19,12 @@ use std::thread;
 
 use crate::constants::*;
 use crate::images::*;
-use crate::objects::*;
 use crate::state::*;
 use super::helpers::*;
+
+fn sv(c: &mut Canvas, name: &str, v: bool) {
+    if let Some(obj) = c.get_game_object_mut(name) { obj.visible = v; }
+}
 
 static BLACKHOLE1_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
 static WORMHOLE2_TEMPLATE:  OnceLock<AnimatedSprite> = OnceLock::new();
@@ -50,36 +53,6 @@ const SPACE_COIN_KIND_CAT: u8 = 0;
 const SPACE_COIN_KIND_CAT_BLUE: u8 = 1;
 const SPACE_COIN_KIND_CAT_RED: u8 = 2;
 
-fn catcoin_anim_bytes(kind: u8) -> &'static [u8] {
-    match kind {
-        _ => include_bytes!("../../../assets/catcoingold.gif"),
-    }
-}
-
-fn catcoin_image_bytes(kind: u8) -> &'static [u8] {
-    match kind {
-        _ => include_bytes!("../../../assets/catcoingold.gif"),
-    }
-}
-
-fn cached_space_coin_static(kind: u8, radius: f32) -> Image {
-    static CACHE: OnceLock<Mutex<HashMap<(u8, u32), Image>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    let d = (radius * 2.0).max(2.0).round() as u32;
-    let key = (kind, d);
-
-    {
-        let guard = cache.lock().unwrap();
-        if let Some(existing) = guard.get(&key) {
-            return existing.clone();
-        }
-    }
-
-    let built = load_image_sized(catcoin_image_bytes(kind), d as f32, d as f32);
-    cache.lock().unwrap().insert(key, built.clone());
-    built
-}
 
 fn cached_space_coin_anim(kind: u8, radius: f32) -> Option<AnimatedSprite> {
     static CACHE: OnceLock<Mutex<HashMap<(u8, u32), Option<AnimatedSprite>>>> = OnceLock::new();
@@ -95,7 +68,7 @@ fn cached_space_coin_anim(kind: u8, radius: f32) -> Option<AnimatedSprite> {
         }
     }
 
-    let built = AnimatedSprite::new(catcoin_anim_bytes(kind), (d as f32, d as f32), SPACE_COIN_ANIM_FPS).ok();
+    let built = AnimatedSprite::new(include_bytes!("../../../assets/catcoingold.gif"), (d as f32, d as f32), SPACE_COIN_ANIM_FPS).ok();
     cache.lock().unwrap().insert(key, built.clone());
     built
 }
@@ -179,50 +152,6 @@ fn reset_coin_anim_frame(obj: &mut GameObject, frame: usize) {
         let max_frame = anim.frame_count().saturating_sub(1);
         anim.set_frame(frame.min(max_frame));
     }
-}
-
-fn current_space_coin_kind(obj: &GameObject) -> Option<u8> {
-    if obj.tags.iter().any(|t| t == "space_catcoin_red") {
-        Some(SPACE_COIN_KIND_CAT_RED)
-    } else if obj.tags.iter().any(|t| t == "space_catcoin_blue") {
-        Some(SPACE_COIN_KIND_CAT_BLUE)
-    } else if obj.tags.iter().any(|t| t == "space_catcoin") {
-        Some(SPACE_COIN_KIND_CAT)
-    } else {
-        None
-    }
-}
-
-fn apply_space_coin_visual(obj: &mut GameObject, kind: u8, radius: f32) {
-    let prev_kind = current_space_coin_kind(obj);
-    let kind_changed = prev_kind != Some(kind);
-
-    obj.tags.retain(|t| t != "space_catcoin" && t != "space_catcoin_blue" && t != "space_catcoin_red");
-    let tag = match kind {
-        SPACE_COIN_KIND_CAT_BLUE => "space_catcoin_blue",
-        SPACE_COIN_KIND_CAT_RED => "space_catcoin_red",
-        _ => "space_catcoin",
-    };
-    obj.tags.push(tag.to_string());
-
-    // Match the working lower-area coin setup: static image first.
-    obj.set_image(cached_space_coin_static(kind, radius));
-
-    if let Some(anim) = cached_space_coin_anim(kind, radius) {
-        if kind_changed || obj.animated_sprite.is_none() {
-            obj.set_animation(anim);
-        }
-        if let Some(a) = obj.animated_sprite.as_mut() {
-            a.set_frame(0);
-        }
-    } else {
-        obj.animated_sprite = None;
-    }
-
-    obj.set_glow(GlowConfig {
-        color: Color(0, 0, 0, 0),
-        width: 0.0,
-    });
 }
 
 fn score_for_space_coin_obj(obj: &GameObject) -> u32 {
@@ -362,7 +291,7 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 
     tick_space_camera(c, st);
     tick_space_oxygen(c, st);
-    tick_space_gwells(c, st, frame);
+    tick_space_gwells(c, st);
     tick_space_blackhole_teleport(c, st);
     tick_space_left_boundary_teleport(c, st);
     tick_space_spawning(c, st, frame);
@@ -380,20 +309,6 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 }
 
 // ── Entry / Exit ─────────────────────────────────────────────────────────────
-
-// ── Momentum settle ─────────────────────────────────────────────────────
-// Fires exactly once per space visit. When the player reaches SPACE_SETTLE_Y
-// (the depth where the catch planet lives) their momentum is zeroed so they
-// float into the gravity well cleanly instead of rocketing through it.
-fn tick_space_settle(st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    if s.space_settle_done { return; }
-    if s.py <= SPACE_SETTLE_Y {
-        s.vx = 0.0;
-        s.vy = 0.0;
-        s.space_settle_done = true;
-    }
-}
 
 fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
@@ -485,22 +400,11 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         );
     }
 
-    // Show welcome text
-    if let Some(obj) = c.get_game_object_mut("space_welcome_text") {
-        obj.visible = true;
-    }
-
-    // Show oxygen bar, hide distance bar
-    if let Some(obj) = c.get_game_object_mut("dist_bar") {
-        obj.visible = false;
-    }
+    sv(c, "space_welcome_text", true);
+    sv(c, "dist_bar", false);
     if let Some(obj) = c.get_game_object_mut("oxygen_bar") {
         obj.visible = true;
-        obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (OXYGEN_BAR_W, OXYGEN_BAR_H), 0.0),
-            image: oxygen_bar_img(1.0, OXYGEN_BAR_W as u32, OXYGEN_BAR_H as u32).into(),
-            color: None,
-        });
+        obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (OXYGEN_BAR_W, OXYGEN_BAR_H), 0.0), image: oxygen_bar_img(1.0, OXYGEN_BAR_W as u32, OXYGEN_BAR_H as u32).into(), color: None });
     }
 
     // Signal background module to switch to deep-space look
@@ -576,79 +480,6 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
-// ── Entry catch planet ─────────────────────────────────────────────────────────
-// Spawns one planet just above the entry threshold when the player enters space.
-// The engine's handle_planet_landings + gravity_well do the rest — no custom
-// collision code needed.
-fn spawn_catch_planet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    let Some(id) = s.space_planet_free.pop() else { return; };
-    let px        = s.px;
-    let color_idx = (s.seed >> 3) as usize;
-    // Large planet guarantees a wide gravity catchment area.
-    // The engine's gravity_influence_mult (3×) extends the field to
-    // visual_r * 3 = 460*3 = 1380px from center.
-    // Planet center placed at SPACE_SETTLE_Y.
-    // Player at SPACE_ENTRY_Y = -(VH*0.35) ≈ -756.
-    // Distance from entry to settle = (VH*1.1 - VH*0.35) = VH*0.75 ≈ 1620px.
-    // 1620 > 1380: player enters the gravity well before they reach the settle
-    // depth and is being pulled while the momentum zero fires at SPACE_SETTLE_Y.
-    let visual_r  = SPACE_PLANET_RADIUS_LG_MAX;  // 460 — largest available
-    let gravity_r = visual_r * SPACE_PLANET_GRAV_R_MULT;
-    let x = px;   // directly above entry X — always above the player
-    let y = SPACE_SETTLE_Y;
-    s.space_planet_live.push(id.clone());
-    s.space_planet_data.push((id.clone(), gravity_r, SPACE_PLANET_GRAV_STRENGTH));
-    // Advance the spawner rightmost past this planet so it doesn't double-spawn here.
-    if s.space_planet_rightmost < x { s.space_planet_rightmost = x; }
-    // Pre-populate some hook points in a band around the catch planet so the
-    // player has immediate grapple options when they arrive.
-    let hook_ids: Vec<String> = (0..4).filter_map(|_| s.space_hook_free.pop()).collect();
-    drop(s);
-
-    let (pr, pg, pb) = C_SPACE_PLANET[color_idx % C_SPACE_PLANET.len()];
-    // Body-only image: visual_r for both params, no ring padding
-    let img = planet_img_cached(visual_r, visual_r, pr, pg, pb);
-    let d   = visual_r * 2.0;
-    if let Some(obj) = c.get_game_object_mut(&id) {
-        obj.position      = (x - visual_r, y - visual_r);
-        obj.size          = (d, d);
-        obj.planet_radius  = Some(visual_r); // engine gravity + landing snap
-        obj.collision_mode = CollisionMode::Solid(CollisionShape::Circle { radius: visual_r }); // solid surface at visual radius
-        obj.visible        = true;
-        obj.set_image(Image {
-            shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-            image: img,
-            color: None,
-        });
-        obj.set_glow(GlowConfig { color: Color(pr, pg, pb, 110), width: 28.0 });
-    }
-
-    // Place hooks evenly spaced to the left, right, above, and below the catch planet.
-    // Offsets keep them just outside the visual surface so they're reachable.
-    let offsets: [(f32, f32); 4] = [
-        (-(visual_r + 320.0), 0.0),     // left
-        ( (visual_r + 320.0), 0.0),     // right
-        (0.0, -(visual_r + 320.0)),     // above
-        (0.0,   visual_r + 320.0 ),     // below
-    ];
-    let mut s = st.lock().unwrap();
-    for (hook_id, (ox, oy)) in hook_ids.into_iter().zip(offsets.iter()) {
-        let hx = x + ox;
-        let hy = y + oy;
-        s.space_hook_live.push(hook_id.clone());
-        if s.space_hook_rightmost < hx { s.space_hook_rightmost = hx; }
-        drop(s);
-        if let Some(obj) = c.get_game_object_mut(&hook_id) {
-            obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
-            obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
-            obj.visible  = true;
-            if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
-        }
-        s = st.lock().unwrap();
-    }
-}
-
 pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
     {
         let mut s = st.lock().unwrap();
@@ -660,26 +491,13 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
         s.space_orbit_speed = 0.0;
     }
 
-    // Hide solar ceiling
-    if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
-        obj.visible = false;
-    }
+    sv(c, "solar_ceiling", false);
 
     // Hide all space objects and return them to pools
     cull_all_space_objects(c, st);
-
-    // Hide welcome text
-    if let Some(obj) = c.get_game_object_mut("space_welcome_text") {
-        obj.visible = false;
-    }
-
-    // Show distance bar, hide oxygen bar
-    if let Some(obj) = c.get_game_object_mut("dist_bar") {
-        obj.visible = true;
-    }
-    if let Some(obj) = c.get_game_object_mut("oxygen_bar") {
-        obj.visible = false;
-    }
+    sv(c, "space_welcome_text", false);
+    sv(c, "dist_bar", true);
+    sv(c, "oxygen_bar", false);
 
     // Restore camera: screen is fully covered by the exit flash — teleport everything
     // back to valid world-space values instantly. tick_zoom takes over next tick.
@@ -780,9 +598,7 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
                 obj.momentum = (0.0, 0.0);
                 obj.gravity  = 0.0;
             }
-            if let Some(obj) = c.get_game_object_mut("rope") {
-                obj.visible = false;
-            }
+            sv(c, "rope", false);
 
             // Snap camera to normal zone, then activate stasis
             if let Some(cam) = c.camera_mut() {
@@ -822,7 +638,7 @@ fn tick_solar_pending(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let pending_arc = st.lock().unwrap().solar_anim_pending.clone();
     if let Some(arc) = pending_arc {
         if let Ok(mut guard) = arc.try_lock() {
-            if let Some(mut anim) = guard.take() {
+            if let Some(anim) = guard.take() {
                 if let Some(obj) = c.get_game_object_mut("solar_ceiling") {
                     obj.size = (VW, SPACE_SOLAR_H);
                     obj.set_image(anim.get_current_image());
@@ -916,11 +732,7 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         st.lock().unwrap().hud_last_oxygen = q_oxy;
         let fill = oxygen as f32 / SPACE_OXYGEN_TICKS as f32;
         if let Some(obj) = c.get_game_object_mut("oxygen_bar") {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (OXYGEN_BAR_W, OXYGEN_BAR_H), 0.0),
-                image: oxygen_bar_img(fill, OXYGEN_BAR_W as u32, OXYGEN_BAR_H as u32).into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (OXYGEN_BAR_W, OXYGEN_BAR_H), 0.0), image: oxygen_bar_img(fill, OXYGEN_BAR_W as u32, OXYGEN_BAR_H as u32).into(), color: None });
         }
 
         // Low oxygen flash warning
@@ -941,12 +753,8 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         c.set_var("last_coins", coins.max(0));
         c.set_var("died_to_oxygen", true);
         c.set_var("died_to_sun", false);
-        if let Some(obj) = c.get_game_object_mut("player") {
-            obj.visible = false;
-        }
-        if let Some(obj) = c.get_game_object_mut("rope") {
-            obj.visible = false;
-        }
+        sv(c, "player", false);
+        sv(c, "rope", false);
         play_death_sound(c);
         c.load_scene("gameover");
         return;
@@ -964,11 +772,7 @@ fn tick_space_welcome_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_welcome_ticks
     };
 
-    if ticks == 0 {
-        if let Some(obj) = c.get_game_object_mut("space_welcome_text") {
-            obj.visible = false;
-        }
-    }
+    if ticks == 0 { sv(c, "space_welcome_text", false); }
 }
 
 // ── Planet orbit capture (space mode) ───────────────────────────────────────
@@ -1402,11 +1206,7 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.planet_radius  = Some(visual_r);
             obj.collision_mode = CollisionMode::Solid(CollisionShape::Circle { radius: visual_r }); // match current visual size
             obj.visible        = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                image: img,
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: img, color: None });
             obj.set_glow(GlowConfig { color: Color(pr, pg, pb, 55), width: 18.0 });
         }
 
@@ -1611,7 +1411,7 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Gravity well tick (space zone) ───────────────────────────────────────────
 
-fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
+fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let mut toggle_ids: Vec<(String, bool)> = Vec::new();
     let marker_ids: Vec<String> = s.space_bh_teleport_fx.iter().map(|(id, _, _)| id.clone()).collect();
@@ -1634,8 +1434,6 @@ fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 
     for (id, now_active) in &toggle_ids {
         if let Some(obj) = c.get_game_object_mut(id) {
-            let visual_r = obj.size.0 * 0.5;
-            let d = visual_r * 2.0;
             let gravity_r = bh_data
                 .iter()
                 .find(|(bid, _, _)| bid == id)
@@ -1947,11 +1745,7 @@ fn tick_space_left_boundary_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.size = (d, d);
             obj.planet_radius = None;
             obj.visible = true;
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-                image: gwell_ring_cached(visual_r, C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, GWELL_RING_COUNT, 220.0),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: gwell_ring_cached(visual_r, C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, GWELL_RING_COUNT, 220.0), color: None });
         }
     }
 
@@ -2117,20 +1911,21 @@ fn cull_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for name in to_remove { s.space_planet_free.push(name); }
 }
 
-fn cull_space_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
-    let to_remove: Vec<String> = s.space_coin_live.iter()
-        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + SPACE_COIN_R * 2.0 < cutoff).unwrap_or(true))
+fn cull_space_coin_pool(c: &mut Canvas, live: &mut Vec<String>, free: &mut Vec<String>, coin_r: f32, cutoff: f32) {
+    let to_remove: Vec<String> = live.iter()
+        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + coin_r * 2.0 < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) {
-            obj.visible = false;
-            obj.position = (-9500.0, -9500.0);
-        }
+        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
     }
-    s.space_coin_live.retain(|n| !to_remove.contains(n));
-    for name in to_remove { s.space_coin_free.push(name); }
+    live.retain(|n| !to_remove.contains(n));
+    for name in to_remove { free.push(name); }
+}
+
+fn cull_space_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut guard = st.lock().unwrap(); let cutoff = guard.px - VW * 1.5;
+    let s: &mut State = &mut *guard;
+    cull_space_coin_pool(c, &mut s.space_coin_live, &mut s.space_coin_free, SPACE_COIN_R, cutoff);
 }
 
 fn cull_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -2140,11 +1935,7 @@ fn cull_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         .filter(|n| c.get_game_object(n).map(|o| o.position.0 + o.size.0 < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) {
-            obj.visible = false;
-            obj.planet_radius = None;
-            obj.position = (-12000.0, -12000.0);
-        }
+        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.planet_radius = None; obj.position = (-12000.0, -12000.0); }
     }
     s.space_blackhole_live.retain(|n| !to_remove.contains(n));
     s.space_blackhole_data.retain(|(n, _, _)| !to_remove.contains(n));
@@ -2154,55 +1945,25 @@ fn cull_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 fn cull_space_red_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
-    let to_remove: Vec<String> = s.space_red_coin_live.iter()
-        .filter(|n| c.get_game_object(n)
-            .map(|o| o.position.0 + SPACE_RED_COIN_R * 2.0 < cutoff)
-            .unwrap_or(true))
-        .cloned().collect();
-    for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) {
-            obj.visible   = false;
-            obj.position  = (-9500.0, -9500.0);
-        }
-    }
-    s.space_red_coin_live.retain(|n| !to_remove.contains(n));
-    for name in to_remove { s.space_red_coin_free.push(name); }
+    let mut guard = st.lock().unwrap(); let cutoff = guard.px - VW * 1.5;
+    let s: &mut State = &mut *guard;
+    cull_space_coin_pool(c, &mut s.space_red_coin_live, &mut s.space_red_coin_free, SPACE_RED_COIN_R, cutoff);
 }
 
 fn cull_space_blue_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    let cutoff = s.px - VW * 1.5;
-    let to_remove: Vec<String> = s.space_blue_coin_live.iter()
-        .filter(|n| c.get_game_object(n)
-            .map(|o| o.position.0 + SPACE_RED_COIN_R * 2.0 < cutoff)
-            .unwrap_or(true))
-        .cloned().collect();
-    for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) {
-            obj.visible   = false;
-            obj.position  = (-9500.0, -9500.0);
-        }
-    }
-    s.space_blue_coin_live.retain(|n| !to_remove.contains(n));
-    for name in to_remove { s.space_blue_coin_free.push(name); }
+    let mut guard = st.lock().unwrap(); let cutoff = guard.px - VW * 1.5;
+    let s: &mut State = &mut *guard;
+    cull_space_coin_pool(c, &mut s.space_blue_coin_live, &mut s.space_blue_coin_free, SPACE_RED_COIN_R, cutoff);
 }
 
 fn cull_space_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let cutoff = s.px - VW * 2.0;
     let to_remove: Vec<String> = s.space_asteroid_live.iter()
-        .filter(|n| c.get_game_object(n)
-            .map(|o| o.position.0 + o.size.0 < cutoff)
-            .unwrap_or(true))
+        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + o.size.0 < cutoff).unwrap_or(true))
         .cloned().collect();
     for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) {
-            obj.visible  = false;
-            obj.momentum = (0.0, 0.0);
-            obj.position = (-12000.0, -12000.0);
-        }
+        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.momentum = (0.0, 0.0); obj.position = (-12000.0, -12000.0); }
     }
     s.space_asteroid_live.retain(|n| !to_remove.contains(n));
     for name in to_remove { s.space_asteroid_free.push(name); }
@@ -2212,70 +1973,43 @@ fn cull_space_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 fn cull_all_space_objects(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
 
-    let hooks: Vec<String> = s.space_hook_live.drain(..).collect();
-    for n in &hooks {
-        if let Some(obj) = c.get_game_object_mut(n) { obj.visible = false; obj.position = (-9000.0, -9000.0); }
-        s.space_hook_free.push(n.clone());
+    for n in s.space_hook_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.position = (-9000.0, -9000.0); }
+        s.space_hook_free.push(n);
     }
-
-    let planets: Vec<String> = s.space_planet_live.drain(..).collect();
-    for n in &planets {
-        if let Some(obj) = c.get_game_object_mut(n) {
-            obj.visible = false;
-            obj.planet_radius = None;
-            obj.position = (-12000.0, -12000.0);
-        }
-        s.space_planet_free.push(n.clone());
+    for n in s.space_planet_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.planet_radius = None; obj.position = (-12000.0, -12000.0); }
+        s.space_planet_free.push(n);
     }
     s.space_planet_data.clear();
 
-    let coins: Vec<String> = s.space_coin_live.drain(..).collect();
-    for n in &coins {
-        if let Some(obj) = c.get_game_object_mut(n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
-        s.space_coin_free.push(n.clone());
+    for n in s.space_coin_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
+        s.space_coin_free.push(n);
     }
-
-    let bhs: Vec<String> = s.space_blackhole_live.drain(..).collect();
-    for n in &bhs {
-        if let Some(obj) = c.get_game_object_mut(n) {
-            obj.visible = false;
-            obj.planet_radius = None;
-            obj.position = (-12000.0, -12000.0);
-        }
-        s.space_blackhole_free.push(n.clone());
+    for n in s.space_blackhole_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.planet_radius = None; obj.position = (-12000.0, -12000.0); }
+        s.space_blackhole_free.push(n);
     }
     s.space_blackhole_data.clear();
     s.space_gwell_timers.clear();
     s.space_bh_teleport_fx.clear();
 
-    let red_coins: Vec<String> = s.space_red_coin_live.drain(..).collect();
-    for n in &red_coins {
-        if let Some(obj) = c.get_game_object_mut(n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
-        s.space_red_coin_free.push(n.clone());
+    for n in s.space_red_coin_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
+        s.space_red_coin_free.push(n);
     }
-
-    let blue_coins: Vec<String> = s.space_blue_coin_live.drain(..).collect();
-    for n in &blue_coins {
-        if let Some(obj) = c.get_game_object_mut(n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
-        s.space_blue_coin_free.push(n.clone());
+    for n in s.space_blue_coin_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.position = (-9500.0, -9500.0); }
+        s.space_blue_coin_free.push(n);
     }
-
-    let asteroids: Vec<String> = s.space_asteroid_live.drain(..).collect();
-    for n in &asteroids {
-        if let Some(obj) = c.get_game_object_mut(n) {
-            obj.visible  = false;
-            obj.momentum = (0.0, 0.0);
-            obj.position = (-12000.0, -12000.0);
-        }
-        s.space_asteroid_free.push(n.clone());
+    for n in s.space_asteroid_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.momentum = (0.0, 0.0); obj.position = (-12000.0, -12000.0); }
+        s.space_asteroid_free.push(n);
     }
-    // Return spent coins to free pool (can respawn on next space visit)
-    let spent: Vec<String> = s.space_coin_spent.drain(..).collect();
-    for n in spent { s.space_coin_free.push(n); }
-    let spent_blue: Vec<String> = s.space_blue_coin_spent.drain(..).collect();
-    for n in spent_blue { s.space_blue_coin_free.push(n); }
-    let spent_red: Vec<String> = s.space_red_coin_spent.drain(..).collect();
-    for n in spent_red { s.space_red_coin_free.push(n); }
+    for n in s.space_coin_spent.drain(..).collect::<Vec<_>>()     { s.space_coin_free.push(n); }
+    for n in s.space_blue_coin_spent.drain(..).collect::<Vec<_>>() { s.space_blue_coin_free.push(n); }
+    for n in s.space_red_coin_spent.drain(..).collect::<Vec<_>>()  { s.space_red_coin_free.push(n); }
 }
 
 // ── Space coin collection ─────────────────────────────────────────────────────
@@ -2312,21 +2046,8 @@ fn tick_space_coin_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let collect_r = PLAYER_R + SPACE_COIN_R + 10.0;
     let live = s.space_coin_live.clone();
-    let mut collected: Vec<String> = Vec::new();
-
-    for name in &live {
-        if let Some(obj) = c.get_game_object(name) {
-            let cx = obj.position.0 + SPACE_COIN_R;
-            let cy = obj.position.1 + SPACE_COIN_R;
-            let dx = s.px - cx;
-            let dy = s.py - cy;
-            if dx * dx + dy * dy < collect_r * collect_r {
-                collected.push(name.clone());
-            }
-        }
-    }
+    let collected = find_collected_pickups(c, &live, SPACE_COIN_R * 2.0, SPACE_COIN_R * 2.0);
 
     let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
     for name in &collected {
@@ -2361,21 +2082,8 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // ── Red coin collection ───────────────────────────────────────────────────
     {
         let mut s = st.lock().unwrap();
-        let collect_r = PLAYER_R + SPACE_RED_COIN_R + 10.0;
-
         let blue_live = s.space_blue_coin_live.clone();
-        let mut blue_collected: Vec<String> = Vec::new();
-        for name in &blue_live {
-            if let Some(obj) = c.get_game_object(name) {
-                let cx = obj.position.0 + SPACE_RED_COIN_R;
-                let cy = obj.position.1 + SPACE_RED_COIN_R;
-                let dx = s.px - cx;
-                let dy = s.py - cy;
-                if dx * dx + dy * dy < collect_r * collect_r {
-                    blue_collected.push(name.clone());
-                }
-            }
-        }
+        let blue_collected = find_collected_pickups(c, &blue_live, SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
 
         let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
         for name in &blue_collected {
@@ -2389,18 +2097,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
 
         let live = s.space_red_coin_live.clone();
-        let mut red_collected: Vec<String> = Vec::new();
-        for name in &live {
-            if let Some(obj) = c.get_game_object(name) {
-                let cx = obj.position.0 + SPACE_RED_COIN_R;
-                let cy = obj.position.1 + SPACE_RED_COIN_R;
-                let dx = s.px - cx;
-                let dy = s.py - cy;
-                if dx * dx + dy * dy < collect_r * collect_r {
-                    red_collected.push(name.clone());
-                }
-            }
-        }
+        let red_collected = find_collected_pickups(c, &live, SPACE_RED_COIN_R * 2.0, SPACE_RED_COIN_R * 2.0);
         for name in &red_collected {
             let add = c
                 .get_game_object(name)

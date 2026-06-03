@@ -22,11 +22,7 @@ pub fn make_gravity_well(
     GameObject::build(id)
         .size(d, d)
         .position(x - visual_r, y - visual_r)
-        .image(Image {
-            shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-            image: ring_img,
-            color: None,
-        })
+        .image(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: ring_img, color: None })
         .tag("gwell")
         .gravity_well(radius, strength)
         .build(ctx)

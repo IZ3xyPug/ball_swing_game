@@ -1,10 +1,22 @@
 use crate::constants::*;
 use crate::images::circle_cached;
-use quartz::{Canvas, GameObject, Image, ShapeType, SoundOptions, Value};
+use crate::objects::ui_text_spec;
+use quartz::{Canvas, Color, Font, GameObject, Image, ShapeType, SoundOptions, Value};
 use quartz::AnimatedSprite;
 use std::sync::OnceLock;
 use std::io::Cursor;
 use image::AnimationDecoder;
+
+/// Find objects in `live` within pickup range of the player.
+/// collect_r = PLAYER_R + min(obj_w, obj_h)/2 + 10. Uses the engine's `objects_in_radius` API.
+pub fn find_collected_pickups(c: &Canvas, live: &[String], obj_w: f32, obj_h: f32) -> Vec<String> {
+    let player = match c.get_game_object("player") { Some(p) => p, None => return vec![] };
+    let collect_r = PLAYER_R + (obj_w.min(obj_h)) * 0.5 + 10.0;
+    c.objects_in_radius(player, collect_r).into_iter()
+        .filter(|o| live.contains(&o.id))
+        .map(|o| o.id.clone())
+        .collect()
+}
 
 /// Play the currently-selected death sound. Call before any load_scene("gameover*").
 /// death_sound_mode: 0 = man_game_over (default), 1 = arcade_game_over.
@@ -34,11 +46,7 @@ pub fn sfx_vol(c: &Canvas, base: f32) -> f32 {
 /// Hook image using circle_cached — keeps hooks in the same
 /// render batch as other Rectangle objects to avoid z-order artifacts.
 pub fn hook_img(r: u8, g: u8, b: u8) -> Image {
-    Image {
-        shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-        image: circle_cached(HOOK_R as u32, r, g, b),
-        color: None,
-    }
+    Image { shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0), image: circle_cached(HOOK_R as u32, r, g, b), color: None }
 }
 
 /// Cached decoded + resized GIF frames (decoded once, cloned cheaply on each spawn).
@@ -126,24 +134,6 @@ pub fn zero_g_overlay_anim() -> AnimatedSprite {
     let frames = ZERO_G_OVERLAY_FRAMES.get_or_init(decode_zero_g_overlay_frames).clone();
     let mut anim = AnimatedSprite::from_frames(frames, size, 16.0);
     anim.set_fps(0.001); // frozen until activated
-    anim
-}
-
-// ── Space rip overlay ──────────────────────────────────────────────────────
-// Display size: 512×1024 virtual px (portrait, matches space_rip.gif 1:2 ratio).
-// AnimatedSprite::new resizes each frame with fit-contain so the image fills
-// correctly — no distortion / no full-screen stretch.
-pub const SPACE_RIP_W: f32 = 512.0;
-pub const SPACE_RIP_H: f32 = 1024.0;
-
-pub fn space_rip_overlay_anim() -> AnimatedSprite {
-    let bytes = include_bytes!("../../../assets/space_rip.gif");
-    let mut anim = AnimatedSprite::new(bytes, (SPACE_RIP_W, SPACE_RIP_H), 16.0)
-        .unwrap_or_else(|_| {
-            let fallback = vec![image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 0]))];
-            AnimatedSprite::from_frames(fallback, (SPACE_RIP_W, SPACE_RIP_H), 16.0)
-        });
-    anim.set_fps(0.001); // frozen until activated by hud_update
     anim
 }
 
@@ -287,22 +277,6 @@ pub fn circle_overlaps_rounded_rect(
     signed_dist <= circle_r
 }
 
-pub fn pad_for_zone(zone_idx: usize) -> (u8, u8, u8) {
-    match zone_idx {
-        1 => C_PAD_ZONE1,
-        2 => C_PAD_ZONE2,
-        _ => C_PAD,
-    }
-}
-
-pub fn pad_hit_for_zone(zone_idx: usize) -> (u8, u8, u8) {
-    match zone_idx {
-        1 => C_PAD_HIT_ZONE1,
-        2 => C_PAD_HIT_ZONE2,
-        _ => C_PAD_HIT,
-    }
-}
-
 pub fn spinner_for_zone(zone_idx: usize) -> (u8, u8, u8) {
     match zone_idx {
         1 => C_SPINNER_ZONE1,
@@ -338,11 +312,7 @@ macro_rules! warn_img_accessor {
         pub fn $fn_name() -> Image {
             $lock_name.get_or_init(|| {
                 let rgba = load_warn_rgba($bytes);
-                Image {
-                    shape: ShapeType::Rectangle(0.0, (COMET_WARN_W, COMET_WARN_H), 0.0),
-                    image: rgba,
-                    color: None,
-                }
+                Image { shape: ShapeType::Rectangle(0.0, (COMET_WARN_W, COMET_WARN_H), 0.0), image: rgba, color: None }
             }).clone()
         }
     };
@@ -368,3 +338,84 @@ warn_img_accessor!(
     WARN_IMG_LIGHT_EXPLODE,
     include_bytes!("../../../assets/exclamation_light_explode.webp")
 );
+
+// ── Shared volume / audio helpers (used by menu.rs + build_scene.rs) ─────────
+
+pub fn volume_value(c: &Canvas, var: &str, default: f32) -> f32 {
+    match c.get_var(var) {
+        Some(Value::F32(v)) => v.clamp(0.0, 1.0),
+        _ => default,
+    }
+}
+
+pub fn set_volume_value(c: &mut Canvas, var: &str, v: f32) {
+    c.set_var(var, v.clamp(0.0, 1.0));
+}
+
+pub fn music_volume(c: &Canvas, base: f32) -> f32 {
+    let master = volume_value(c, "vol_master", 1.0);
+    let music  = volume_value(c, "vol_music",  1.0);
+    (base * master * music).clamp(0.0, 1.0)
+}
+
+/// Returns true when the game is either engine-paused or has the game_paused var set.
+#[inline]
+pub fn is_game_paused(c: &Canvas) -> bool {
+    c.is_paused() || matches!(c.get_var("game_paused"), Some(Value::Bool(true)))
+}
+
+/// UI font — parsed from font.ttf once, cloned cheaply on all subsequent calls.
+pub fn ui_font() -> Option<Font> {
+    static CACHED: OnceLock<Font> = OnceLock::new();
+    CACHED.get_or_init(||
+        Font::from_bytes(include_bytes!("../../../assets/font.ttf"))
+            .expect("font.ttf must be valid")
+    ).clone().into()
+}
+
+// ── Shared volume slider / label helpers ─────────────────────────────────────
+// Settings panels in both the game scene and menu settings scene share identical
+// slider geometry and label formatting. These helpers live here to avoid the
+// duplication.
+
+/// Position 3 volume slider thumbs given their object names.
+/// Geometry matches both the game settings panel and the menu settings panel.
+pub fn position_volume_sliders(c: &mut Canvas, thumb_names: [&str; 3]) {
+    const TRACK_W: f32 = 1400.0;
+    const THUMB_W: f32 = 60.0;
+    const THUMB_H: f32 = 80.0;
+    const TRACK_H: f32 = 24.0;
+    const TRACK_X: f32 = (VW - TRACK_W) / 2.0;
+    const Y: [f32; 3] = [820.0, 1120.0, 1420.0];
+    const VARS: [&str; 3] = ["vol_master", "vol_music", "vol_sound"];
+    for i in 0..3 {
+        let vol = volume_value(c, VARS[i], 1.0);
+        let thumb_x = TRACK_X + vol * (TRACK_W - THUMB_W);
+        let thumb_y = Y[i] - (THUMB_H - TRACK_H) / 2.0;
+        if let Some(obj) = c.get_game_object_mut(thumb_names[i]) {
+            obj.position = (thumb_x, thumb_y);
+        }
+    }
+}
+
+/// Update 3 volume percentage labels given their object names.
+pub fn update_volume_labels(c: &mut Canvas, label_names: [&str; 3]) {
+    let master = volume_value(c, "vol_master", 1.0);
+    let music  = volume_value(c, "vol_music",  1.0);
+    let sound  = volume_value(c, "vol_sound",  1.0);
+    let labels = [
+        format!("MASTER VOLUME   {:>3}%", (master * 100.0).round() as i32),
+        format!("MUSIC VOLUME    {:>3}%",  (music  * 100.0).round() as i32),
+        format!("SOUND VOLUME    {:>3}%",  (sound  * 100.0).round() as i32),
+    ];
+    if let Some(font) = ui_font() {
+        let s = c.virtual_scale();
+        for i in 0..3 {
+            if let Some(obj) = c.get_game_object_mut(label_names[i]) {
+                obj.set_drawable(Box::new(ui_text_spec(
+                    &labels[i], &font, 38.0 * s, Color(235, 245, 255, 255), 1500.0 * s,
+                )));
+            }
+        }
+    }
+}

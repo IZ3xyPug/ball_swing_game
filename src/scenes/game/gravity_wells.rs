@@ -21,7 +21,7 @@ fn gwelloff_template() -> AnimatedSprite {
 }
 
 /// Tick the gravity-well on/off cycle and visual pulse.
-pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
+pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, _frame: u32) {
     let mut s = st.lock().unwrap();
     let mut toggle_ids: Vec<(String, bool)> = Vec::new();
 

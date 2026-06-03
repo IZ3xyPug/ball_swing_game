@@ -337,25 +337,25 @@ pub fn get_cat_card_cache() -> &'static Vec<std::sync::Arc<image::RgbaImage>> {
 
 // ── Category screen helpers ─────────────────────────────────────────────────
 
+fn set_visible(c: &mut Canvas, name: &str, v: bool) {
+    if let Some(obj) = c.get_game_object_mut(name) { obj.visible = v; }
+}
+
 /// Switch to the category selection screen (called from init_shop and shop_back).
 pub fn show_categories(c: &mut Canvas) {
     c.set_var("shop_screen", 0i32);
 
-    // Show category objects
     for i in 0..NUM_CATS {
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_btn_{i}"))   { obj.visible = true; }
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_label_{i}")) { obj.visible = true; }
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_sub_{i}"))   { obj.visible = true; }
+        set_visible(c, &format!("shop_cat_btn_{i}"), true);
+        set_visible(c, &format!("shop_cat_label_{i}"), true);
+        set_visible(c, &format!("shop_cat_sub_{i}"), true);
     }
-
-    // Hide carousel objects
-    if let Some(obj) = c.get_game_object_mut("shop_card_strip")  { obj.visible = false; }
-    if let Some(obj) = c.get_game_object_mut("shop_instr_text")  { obj.visible = false; }
-    if let Some(obj) = c.get_game_object_mut("shop_select_btn")  { obj.visible = false; }
-    if let Some(obj) = c.get_game_object_mut("shop_select_text") { obj.visible = false; }
+    for name in ["shop_card_strip", "shop_instr_text", "shop_select_btn", "shop_select_text"] {
+        set_visible(c, name, false);
+    }
     for s in 0..NUM_SLOTS {
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_{s}"))       { obj.visible = false; }
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_label_{s}")) { obj.visible = false; }
+        set_visible(c, &format!("shop_slot_{s}"), false);
+        set_visible(c, &format!("shop_slot_label_{s}"), false);
     }
 
     // Update title and back button text
@@ -382,20 +382,18 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
 
     // Always hide category objects
     for i in 0..NUM_CATS {
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_btn_{i}"))   { obj.visible = false; }
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_label_{i}")) { obj.visible = false; }
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_sub_{i}"))   { obj.visible = false; }
+        set_visible(c, &format!("shop_cat_btn_{i}"), false);
+        set_visible(c, &format!("shop_cat_label_{i}"), false);
+        set_visible(c, &format!("shop_cat_sub_{i}"), false);
     }
 
     if cat == 4 {
         // Purchasable — no carousel yet, show empty placeholder screen
-        if let Some(obj) = c.get_game_object_mut("shop_card_strip")  { obj.visible = false; }
-        if let Some(obj) = c.get_game_object_mut("shop_instr_text")  { obj.visible = true; }
-        if let Some(obj) = c.get_game_object_mut("shop_select_btn")  { obj.visible = false; }
-        if let Some(obj) = c.get_game_object_mut("shop_select_text") { obj.visible = false; }
+        for name in ["shop_card_strip", "shop_select_btn", "shop_select_text"] { set_visible(c, name, false); }
+        set_visible(c, "shop_instr_text", true);
         for s in 0..NUM_SLOTS {
-            if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_{s}"))       { obj.visible = false; }
-            if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_label_{s}")) { obj.visible = false; }
+            set_visible(c, &format!("shop_slot_{s}"), false);
+            set_visible(c, &format!("shop_slot_label_{s}"), false);
         }
         if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
             let s = c.virtual_scale();
@@ -420,13 +418,12 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
     }
 
     // Normal carousel categories (0-3)
-    if let Some(obj) = c.get_game_object_mut("shop_card_strip")  { obj.visible = true; }
-    if let Some(obj) = c.get_game_object_mut("shop_instr_text")  { obj.visible = true; }
-    if let Some(obj) = c.get_game_object_mut("shop_select_btn")  { obj.visible = true; }
-    if let Some(obj) = c.get_game_object_mut("shop_select_text") { obj.visible = true; }
+    for name in ["shop_card_strip", "shop_instr_text", "shop_select_btn", "shop_select_text"] {
+        set_visible(c, name, true);
+    }
     for s in 0..NUM_SLOTS {
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_{s}"))       { obj.visible = true; }
-        if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_label_{s}")) { obj.visible = true; }
+        set_visible(c, &format!("shop_slot_{s}"), true);
+        set_visible(c, &format!("shop_slot_label_{s}"), true);
     }
 
     // Reset carousel state
@@ -513,11 +510,7 @@ pub fn update_all_slot_images(c: &mut Canvas, selected: usize, cat: i32) {
             std::sync::Arc::new(shop_card_img(r, g, b, s == SLOT_CENTER))
         };
         if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_{s}")) {
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (w, h), 0.0),
-                image: img,
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: img, color: None });
             // Keep canonical card bounds to avoid any visual size drift during rapid swaps.
             obj.size = (w, h);
             obj.update_image_shape();
@@ -672,11 +665,9 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
     let bg_w = VW + 800.0;
     let bg_h = VH;
 
-    let bg = GameObject::new_rect(
-        ctx, "shop_bg".into(),
+    let bg = GameObject::new_rect(ctx, "shop_bg".into(),
         Some(bright_background(bg_w, bg_h)),
-        (bg_w, bg_h), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-    );
+        (bg_w, bg_h), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     // Carousel card strip (hidden until a category is chosen)
     let strip_h = (CARD_H + 200) as u32;
@@ -688,16 +679,11 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         }}
         draw_rect(&mut img, 0, 0, sw, 3, [60, 100, 160, 180]);
         draw_rect(&mut img, 0, strip_h - 3, sw, 3, [60, 100, 160, 180]);
-        let mut obj = GameObject::new_rect(
-            ctx, "shop_card_strip".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (sw as f32, strip_h as f32), 0.0),
-                image: img.into(), color: None,
-            }),
+        let mut obj = GameObject::new_rect(ctx, "shop_card_strip".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (sw as f32, strip_h as f32), 0.0), image: img.into(), color: None }),
             (sw as f32, strip_h as f32),
             (-400.0, CARD_CENTER_Y - CARD_H as f32 / 2.0 - 100.0),
-            vec![], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.visible = false;
         obj
     };
@@ -726,16 +712,11 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
             let border = px < 3 || px >= bw - 3 || py < 3 || py >= bh - 3;
             img.put_pixel(px, py, image::Rgba([40, 160, 90, if border { 255 } else { 200 }]));
         }}
-        let mut obj = GameObject::new_rect(
-            ctx, "shop_select_btn".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (bw as f32, bh as f32), 0.0),
-                image: img.into(), color: None,
-            }),
+        let mut obj = GameObject::new_rect(ctx, "shop_select_btn".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (bw as f32, bh as f32), 0.0), image: img.into(), color: None }),
             (bw as f32, bh as f32),
             (VW / 2.0 - bw as f32 / 2.0, strip_bottom_y + 30.0),
-            vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+            vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.visible = false;
         obj
     };
@@ -753,16 +734,11 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
             let border = px < 3 || px >= bw - 3 || py < 3 || py >= bh - 3;
             img.put_pixel(px, py, image::Rgba([40, 70, 120, if border { 255 } else { 190 }]));
         }}
-        GameObject::new_rect(
-            ctx, "shop_back_btn".into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (bw as f32, bh as f32), 0.0),
-                image: img.into(), color: None,
-            }),
+        GameObject::new_rect(ctx, "shop_back_btn".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (bw as f32, bh as f32), 0.0), image: img.into(), color: None }),
             (bw as f32, bh as f32),
             (120.0, VH - 220.0),
-            vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        )
+            vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
     };
     let back_text_obj = GameObject::build("shop_back_text")
         .size(380.0, 110.0)
@@ -790,12 +766,10 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         let char_idx = slot_char(0, s);
         let img = cache[char_idx][if s == SLOT_CENTER { 1 } else { 0 }].clone();
         let slot_x = VW / 2.0 - w / 2.0 + (s as f32 - SLOT_CENTER as f32) * CARD_SPACING;
-        let mut slot = GameObject::new_rect(
-            ctx, format!("shop_slot_{s}").into(),
+        let mut slot = GameObject::new_rect(ctx, format!("shop_slot_{s}").into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: img, color: None }),
             (w, h), (slot_x, card_y),
-            vec!["shop_card".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+            vec!["shop_card".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         slot.visible = false;
         let mut label = GameObject::build(format!("shop_slot_label_{s}"))
             .size(w, 80.0)
@@ -812,15 +786,10 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
     for i in 0..NUM_CATS {
         let (cx, cy, cw, ch) = cat_card_rect(i);
         let cat_img = cat_cache[i].clone();
-        let mut cat_btn = GameObject::new_rect(
-            ctx, format!("shop_cat_btn_{i}").into(),
-            Some(Image {
-                shape: ShapeType::Rectangle(0.0, (cw, ch), 0.0),
-                image: cat_img, color: None,
-            }),
+        let mut cat_btn = GameObject::new_rect(ctx, format!("shop_cat_btn_{i}").into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (cw, ch), 0.0), image: cat_img, color: None }),
             (cw, ch), (cx, cy),
-            vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
+            vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         cat_btn.visible = false; // shown by init_shop → show_categories
 
         // Name label: positioned in the center-right area of the card

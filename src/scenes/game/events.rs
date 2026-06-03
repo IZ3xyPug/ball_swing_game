@@ -37,7 +37,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         c.run(Action::Hide { target: Target::name("rope") });
 
         if !prev.is_empty() {
-            let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+            let asteroid_mode = c.get_bool("asteroid_hooks_on");
             if let Some(obj) = c.get_game_object_mut(&prev) {
                 if is_special_hook_obj(obj) {
                     // Pause the green artifact gif at frame 0.
@@ -116,7 +116,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             None
         };
 
-        if let Some((hook_id, hx, hy, player_d2, _cursor_d2, is_special_hook, is_extended_hook)) = nearest {
+        if let Some((hook_id, hx, hy, player_d2, _cursor_d2, is_special_hook, _is_extended_hook)) = nearest {
             let rope_len = player_d2.sqrt().clamp(ROPE_LEN_MIN, ROPE_LEN_MAX);
 
             // Capture incoming velocity before it's redirected by the grab impulse.
@@ -143,7 +143,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 obj.gravity = 0.0;
             }
 
-            let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+            let asteroid_mode = c.get_bool("asteroid_hooks_on");
             let mut artifact_grab_info: Option<(i32, String)> = None;
             // If a countdown for a different hook is still running, freeze it now
             // before starting a new one, to prevent it looping indefinitely.
@@ -179,6 +179,12 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                         artifact_grab_info = Some((ticks.max(1), hook_id.clone()));
                     }
                     obj.clear_glow();
+                    // Transfer player momentum to the grabbed asteroid hook.
+                    // Size-normalise so smaller hooks react more visibly.
+                    let size_norm = SPACE_ASTEROID_SIZE_MIN / obj.size.0.max(SPACE_ASTEROID_SIZE_MIN);
+                    let factor = ASTEROID_HOOK_IMPULSE_FACTOR * size_norm;
+                    obj.momentum.0 += pvx * factor;
+                    obj.momentum.1 += pvy * factor;
                 } else {
                     let (r, g, b) = hook_on_for_obj(obj, zone_idx);
                     obj.set_image(hook_img(r, g, b));

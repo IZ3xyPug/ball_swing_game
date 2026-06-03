@@ -111,86 +111,76 @@ fn cull_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for name in &to_remove {
         if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3500.0, -3500.0); obj.rotation_momentum = 0.0; }
     }
-    if !to_remove.is_empty() {
-        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-        s.spinner_live.retain(|n| !rm.contains(n.as_str()));
-        s.spinner_origins.retain(|(id, _, _, _, _)| !rm.contains(id.as_str()));
-        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-        for name in to_remove { s.spinner_free.push(name); }
+    if to_remove.is_empty() { return; }
+    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+    s.spinner_live.retain(|n| !rm.contains(n.as_str()));
+    s.spinner_origins.retain(|(id, _, _, _, _)| !rm.contains(id.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+    for name in to_remove { s.spinner_free.push(name); }
+}
+
+/// Cull a simple pickup pool (flip/score_x2/zero_g style).
+/// Parks culled objects at `(park, park)`, retains live and spawn_animations, pushes to free.
+fn cull_pickup_simple(
+    c: &mut Canvas,
+    live: &mut Vec<String>,
+    free: &mut Vec<String>,
+    spawn_animations: &mut Vec<SpawnAnim>,
+    obj_w: f32, park: f32, cutoff: f32,
+) {
+    if live.is_empty() { return; }
+    let to_remove: Vec<String> = live.iter()
+        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + obj_w < cutoff).unwrap_or(true))
+        .cloned().collect();
+    for name in &to_remove {
+        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (park, park); }
     }
+    if to_remove.is_empty() { return; }
+    let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
+    live.retain(|n| !rm.contains(n.as_str()));
+    spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+    for name in to_remove { free.push(name); }
 }
 
 fn cull_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    if s.coin_live.is_empty() { return; }
     let cutoff = s.px - VW * 3.0;
-    let to_remove: Vec<String> = s.coin_live.iter()
-        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + COIN_R * 2.0 < cutoff).unwrap_or(true))
-        .cloned().collect();
-    for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3700.0, -3700.0); }
-    }
-    if !to_remove.is_empty() {
-        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-        s.coin_live.retain(|n| !rm.contains(n.as_str()));
-        s.coin_magnet_locked.retain(|n| !rm.contains(n.as_str()));
-        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-        for name in to_remove { s.coin_free.push(name); }
-    }
+    let removed = {
+        let to_remove: Vec<String> = s.coin_live.iter()
+            .filter(|n| c.get_game_object(n).map(|o| o.position.0 + COIN_R * 2.0 < cutoff).unwrap_or(true))
+            .cloned().collect();
+        for name in &to_remove {
+            if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3700.0, -3700.0); }
+        }
+        to_remove
+    };
+    if removed.is_empty() { return; }
+    let rm: HashSet<&str> = removed.iter().map(|n| n.as_str()).collect();
+    s.coin_live.retain(|n| !rm.contains(n.as_str()));
+    s.coin_magnet_locked.retain(|n| !rm.contains(n.as_str()));
+    s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
+    for name in removed { s.coin_free.push(name); }
 }
 
 fn cull_flips(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    if s.flip_live.is_empty() { return; }
-    let cutoff = s.px - VW * 3.0;
-    let to_remove: Vec<String> = s.flip_live.iter()
-        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + FLIP_W < cutoff).unwrap_or(true))
-        .cloned().collect();
-    for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3800.0, -3800.0); }
-    }
-    if !to_remove.is_empty() {
-        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-        s.flip_live.retain(|n| !rm.contains(n.as_str()));
-        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-        for name in to_remove { s.flip_free.push(name); }
-    }
+    let mut guard = st.lock().unwrap();
+    let cutoff = guard.px - VW * 3.0;
+    let s: &mut State = &mut *guard;
+    cull_pickup_simple(c, &mut s.flip_live, &mut s.flip_free, &mut s.spawn_animations, FLIP_W, -3800.0, cutoff);
 }
 
 fn cull_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    if s.score_x2_live.is_empty() { return; }
-    let cutoff = s.px - VW * 3.0;
-    let to_remove: Vec<String> = s.score_x2_live.iter()
-        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + SCORE_X2_W < cutoff).unwrap_or(true))
-        .cloned().collect();
-    for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3850.0, -3850.0); }
-    }
-    if !to_remove.is_empty() {
-        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-        s.score_x2_live.retain(|n| !rm.contains(n.as_str()));
-        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-        for name in to_remove { s.score_x2_free.push(name); }
-    }
+    let mut guard = st.lock().unwrap();
+    let cutoff = guard.px - VW * 3.0;
+    let s: &mut State = &mut *guard;
+    cull_pickup_simple(c, &mut s.score_x2_live, &mut s.score_x2_free, &mut s.spawn_animations, SCORE_X2_W, -3850.0, cutoff);
 }
 
 fn cull_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    if s.zero_g_live.is_empty() { return; }
-    let cutoff = s.px - VW * 3.0;
-    let to_remove: Vec<String> = s.zero_g_live.iter()
-        .filter(|n| c.get_game_object(n).map(|o| o.position.0 + ZERO_G_W < cutoff).unwrap_or(true))
-        .cloned().collect();
-    for name in &to_remove {
-        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; obj.position = (-3875.0, -3875.0); }
-    }
-    if !to_remove.is_empty() {
-        let rm: HashSet<&str> = to_remove.iter().map(|n| n.as_str()).collect();
-        s.zero_g_live.retain(|n| !rm.contains(n.as_str()));
-        s.spawn_animations.retain(|a| !rm.contains(a.id.as_str()));
-        for name in to_remove { s.zero_g_free.push(name); }
-    }
+    let mut guard = st.lock().unwrap();
+    let cutoff = guard.px - VW * 3.0;
+    let s: &mut State = &mut *guard;
+    cull_pickup_simple(c, &mut s.zero_g_live, &mut s.zero_g_free, &mut s.spawn_animations, ZERO_G_W, -3875.0, cutoff);
 }
 
 fn cull_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {

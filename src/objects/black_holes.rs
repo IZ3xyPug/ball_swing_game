@@ -24,19 +24,12 @@ pub fn make_black_hole(
     let mut obj = GameObject::build(id)
         .size(d, d)
         .position(x - radius, y - radius)
-        .image(Image {
-            shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-            image: img,
-            color: None,
-        })
+        .image(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: img, color: None })
         .tag("space_blackhole")
         .gravity_well(radius, SPACE_BLACKHOLE_GRAV_STRENGTH)
         .build(ctx);
 
     // Barely-visible dark purple glow to hint at presence
-    obj.set_glow(GlowConfig {
-        color: Color(40, 10, 60, 45),
-        width: 20.0,
-    });
+    obj.set_glow(GlowConfig { color: Color(40, 10, 60, 45), width: 20.0 });
     obj
 }

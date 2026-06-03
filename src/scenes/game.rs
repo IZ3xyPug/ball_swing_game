@@ -1,4 +1,4 @@
-mod helpers;
+pub mod helpers;
 mod bootstrap;
 mod events;
 mod physics;

@@ -105,7 +105,7 @@ fn tick_pad_impact_animation(
 // ── Artifact hook one-shot animation ─────────────────────────────────────────────────────
 
 fn tick_hook_artifact_anim(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     if !asteroid_mode { return; }
 
     let mut ticks = c.get_i32("hook_artifact_play_ticks");
@@ -134,7 +134,7 @@ fn tick_hook_artifact_anim(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
 // ── Proximity intro animation (frames 0→4 then freeze) ───────────────────────────────────
 
 fn tick_hook_proximity_anim(c: &mut Canvas) {
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     if !asteroid_mode { return; }
     let prox_id = match c.get_var("hook_prox_id") {
         Some(Value::Str(s)) if !s.is_empty() => s,
@@ -170,7 +170,7 @@ fn tick_glow_flashes(c: &mut Canvas, st: &Arc<Mutex<State>>, _tech_bounce_img: &
     s.glow_flashes.retain(|(_, t)| *t > 0);
     drop(s);
 
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     for name in &expired {
         if let Some(obj) = c.get_game_object_mut(name) {
             if obj.tags.iter().any(|t| t == "hook") {
@@ -208,10 +208,9 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
 
     // Extend hook reach in boss arena for asteroid interaction
     let reach_mult = if boss_active { 1.45 } else { 1.0 };
-    let max_r2 = (ROPE_LEN_MAX * reach_mult) * (ROPE_LEN_MAX * reach_mult);
+    let max_dist2 = (ROPE_LEN_MAX * reach_mult) * (ROPE_LEN_MAX * reach_mult);
     let mut best_id: Option<String> = None;
     let mut best_dist = f32::INFINITY;
-    let max_dist2 = (ROPE_LEN_MAX * reach_mult) * (ROPE_LEN_MAX * reach_mult);
     for hid in &hooks {
         if let Some(obj) = c.get_game_object(hid) {
             let hcx = obj.position.0 + obj.size.0 * 0.5;
@@ -227,7 +226,7 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
     }
 
     let nearest = best_id.unwrap_or_default();
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     // After release, if still near the same hook, restart the proximity intro animation.
     if just_released && asteroid_mode && nearest == *prev_nearest && !nearest.is_empty() {
         if let Some(obj) = c.get_game_object_mut(&nearest) {
@@ -310,7 +309,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     *prev_zone = zone_idx;
 
     let pad_img = if gravity_dir < 0.0 { tech_bounce_img_flipped } else { tech_bounce_img };
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     for hid in &hooks {
         if let Some(obj) = c.get_game_object_mut(hid) {
             if asteroid_mode && !is_special_hook_obj(obj) {
@@ -330,11 +329,7 @@ fn tick_zone_palette(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_zone: &mut usi
     for sid in &spinners {
         if let Some(obj) = c.get_game_object_mut(sid) {
             let (r, g, b) = spinner_for_zone(zone_idx);
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (SPINNER_W, SPINNER_H), 0.0),
-                image: spinner_cached(SPINNER_W as u32, SPINNER_H as u32, r, g, b),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (SPINNER_W, SPINNER_H), 0.0), image: spinner_cached(SPINNER_W as u32, SPINNER_H as u32, r, g, b), color: None });
         }
     }
 }
@@ -347,50 +342,43 @@ fn tick_dark_mode(c: &mut Canvas, _st: &Arc<Mutex<State>>, prev_dark: &mut bool)
     let _ = (c, prev_dark);
 }
 
-// ── Spinner vertical movers ─────────────────────────────────────────────────
+// ── Spinner vertical movers / Pad horizontal movers ─────────────────────────
 
-fn tick_spinner_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
-    let s = st.lock().unwrap();
-    let origins = s.spinner_origins.clone();
-    // Collect IDs of objects still in a spawn animation (dormant or mid-drop).
-    let animating: std::collections::HashSet<String> = s.spawn_animations.iter()
-        .map(|a| a.id.clone())
-        .collect();
-    drop(s);
-
-    for (id, origin_y, amp, speed, phase) in &origins {
+fn tick_axis_movers(
+    c: &mut Canvas,
+    origins: &[(String, f32, f32, f32, f32)],
+    animating: &std::collections::HashSet<String>,
+    frame: u32,
+    use_y: bool,
+) {
+    for (id, origin, amp, speed, phase) in origins {
         if *amp == 0.0 { continue; }
         if animating.contains(id) { continue; } // don't fight spawn anim
         let t = *phase + *speed * (frame as f32 / 60.0);
         let offset = amp * t.sin();
         if let Some(obj) = c.get_game_object_mut(id) {
-            obj.position.1 = origin_y + offset;
+            if use_y { obj.position.1 = origin + offset; }
+            else     { obj.position.0 = origin + offset; }
         }
     }
 }
 
-// ── Pad horizontal movers ───────────────────────────────────────────────────
+fn tick_spinner_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
+    let s = st.lock().unwrap();
+    let origins = s.spinner_origins.clone();
+    let animating: std::collections::HashSet<String> = s.spawn_animations.iter()
+        .map(|a| a.id.clone()).collect();
+    drop(s);
+    tick_axis_movers(c, &origins, &animating, frame, true);
+}
 
 fn tick_pad_movers(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     let s = st.lock().unwrap();
     let origins = s.pad_origins.clone();
-    // Collect IDs of objects still in a spawn animation (dormant or mid-drop).
     let animating: std::collections::HashSet<String> = s.spawn_animations.iter()
-        .map(|a| a.id.clone())
-        .collect();
+        .map(|a| a.id.clone()).collect();
     drop(s);
-
-    for (id, origin_x, amp, speed, phase) in &origins {
-        if *amp == 0.0 { continue; }
-        if animating.contains(id) { continue; } // don't fight spawn anim
-        // speed is stored as a small angular rate (radians per ~60 frames).
-        // Divide frame by 60 to get a smooth time base so sin() changes gradually.
-        let t = *phase + *speed * (frame as f32 / 60.0);
-        let offset = amp * t.sin();
-        if let Some(obj) = c.get_game_object_mut(id) {
-            obj.position.0 = origin_x + offset;
-        }
-    }
+    tick_axis_movers(c, &origins, &animating, frame, false);
 }
 
 fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -504,6 +492,18 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Debug radius visualizer (hold X = 1× radius, hold C = 2× radius) ───────
 
+fn add_debug_ring(c: &mut Canvas, cx: f32, cy: f32, r_pixels: u32, rgb: (u8, u8, u8), idx: usize) {
+    let rf = r_pixels as f32;
+    let img = ring_outline_img(r_pixels, rgb.0, rgb.1, rgb.2);
+    let mut go = GameObject::build(format!("dbg_ring_{idx}"))
+        .position(cx - rf, cy - rf)
+        .size(rf * 2.0, rf * 2.0)
+        .layer(9990)
+        .finish();
+    go.set_image(Image { shape: ShapeType::Rectangle(0.0, (rf * 2.0, rf * 2.0), 0.0), image: Arc::new(img), color: None });
+    c.add_game_object(format!("dbg_ring_{idx}"), go);
+}
+
 fn tick_debug_radii(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Clear previous frame's debug rings.
     let prev_count = match c.get_var("debug_ring_count") {
@@ -537,19 +537,7 @@ fn tick_debug_radii(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     for (cx, cy) in spinner_data {
         let r = (SPINNER_W * 0.5 * multiplier) as u32;
-        let rf = r as f32;
-        let img = ring_outline_img(r, 255, 230, 0);
-        let mut go = GameObject::build(format!("dbg_ring_{idx}"))
-            .position(cx - rf, cy - rf)
-            .size(rf * 2.0, rf * 2.0)
-            .layer(9990)
-            .finish();
-        go.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (rf * 2.0, rf * 2.0), 0.0),
-            image: Arc::new(img),
-            color: None,
-        });
-        c.add_game_object(format!("dbg_ring_{idx}"), go);
+        add_debug_ring(c, cx, cy, r, (255, 230, 0), idx);
         idx += 1;
     }
 
@@ -564,19 +552,7 @@ fn tick_debug_radii(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     for (cx, cy, planet_r) in gwell_data {
         let r = (planet_r * multiplier) as u32;
-        let rf = r as f32;
-        let img = ring_outline_img(r, 0, 200, 255);
-        let mut go = GameObject::build(format!("dbg_ring_{idx}"))
-            .position(cx - rf, cy - rf)
-            .size(rf * 2.0, rf * 2.0)
-            .layer(9990)
-            .finish();
-        go.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (rf * 2.0, rf * 2.0), 0.0),
-            image: Arc::new(img),
-            color: None,
-        });
-        c.add_game_object(format!("dbg_ring_{idx}"), go);
+        add_debug_ring(c, cx, cy, r, (0, 200, 255), idx);
         idx += 1;
     }
 

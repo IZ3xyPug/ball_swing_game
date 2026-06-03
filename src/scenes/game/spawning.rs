@@ -421,7 +421,7 @@ fn find_safe_hook_position(c: &Canvas, s: &State, base_x: f32, base_y: f32) -> O
 
 fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Read asteroid mode once from canvas before locking State.
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     let mut last_special_x = c.get_var("special_hook_last_x").and_then(|v| {
         if let Value::F32(x) = v {
             Some(x)
@@ -755,7 +755,6 @@ fn spawn_pads(
             restore_rotation_momentum: 0.0,
         });
 
-        let flipped = s.gravity_dir < 0.0;
         let zone_idx = zone_index_for_distance(s.distance);
         let _ = zone_idx; // reserved for future zone-tinted pads
         let s_gravity_dir = s.gravity_dir;
@@ -773,7 +772,6 @@ fn spawn_pads(
         ensure_pad_dynamic_outline(c, &id);
         let thr_id = pad_thruster_id(&id);
         if let Some(thr) = c.get_game_object_mut(&thr_id) {
-            let thruster_embed = PAD_THRUSTER_HIDE_TOP + PAD_THRUSTER_RAISE_Y;
             thr.position.0 = x + (PAD_W - PAD_THRUSTER_W) * 0.5;
             thr.position.1 = (y + drop_offset) + PAD_H - PAD_THRUSTER_HIDE_TOP - PAD_THRUSTER_RAISE_Y;
             thr.visible = false;
@@ -841,11 +839,7 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (x, y - SPAWN_ANIM_DROP); // start above screen (off-screen)
             obj.visible = true; // stay visible so physics bridge applies rotation_momentum
             obj.rotation_momentum = rot_speed; // spin immediately even before drop anim
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (SPINNER_W, SPINNER_H), 0.0),
-                image: spinner_cached(SPINNER_W as u32, SPINNER_H as u32, r, g, b),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (SPINNER_W, SPINNER_H), 0.0), image: spinner_cached(SPINNER_W as u32, SPINNER_H as u32, r, g, b), color: None });
         }
 
         s = st.lock().unwrap();
@@ -1035,44 +1029,25 @@ fn spawn_coins(
 
 fn spawn_flips(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let mut flips_spawned = 0usize;
-    while flips_spawned < FLIPS_SPAWN_BUDGET_PER_TICK
+    let mut spawned = 0usize;
+    while spawned < FLIPS_SPAWN_BUDGET_PER_TICK
         && s.flip_rightmost < s.px + GEN_AHEAD
         && !s.flip_free.is_empty()
     {
         let gap = lcg_range(&mut s.seed, FLIP_GAP_MIN, FLIP_GAP_MAX);
-        let x = (s.flip_rightmost + gap)
-            .max(s.score_x2_rightmost + 3000.0)
-            .max(s.zero_g_rightmost + 3000.0);
+        let x = (s.flip_rightmost + gap).max(s.score_x2_rightmost + 3000.0).max(s.zero_g_rightmost + 3000.0);
         let raw_y = lcg_range(&mut s.seed, -750.0, 850.0);
         let y = if s.gravity_dir < 0.0 { VH - raw_y - FLIP_H } else { raw_y };
         let Some(id) = s.flip_free.pop() else { break; };
-        s.flip_live.push(id.clone());
-        s.flip_rightmost = x;
-        flips_spawned += 1;
+        s.flip_live.push(id.clone()); s.flip_rightmost = x; spawned += 1;
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
         let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
-        s.spawn_animations.push(SpawnAnim {
-            id: id.clone(),
-            target_x: x, target_y: y,
-            start_y: y - SPAWN_ANIM_DROP,
-            start_rot, target_rot: 0.0,
-            elapsed: 0, total: anim_ticks,
-            restore_platform: false, started: false,
-            restore_rotation_momentum: 0.0,
-        });
+        s.spawn_animations.push(SpawnAnim { id: id.clone(), target_x: x, target_y: y, start_y: y - SPAWN_ANIM_DROP, start_rot, target_rot: 0.0, elapsed: 0, total: anim_ticks, restore_platform: false, started: false, restore_rotation_momentum: 0.0 });
         drop(s);
-
-        if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x, y - SPAWN_ANIM_DROP);
-            obj.visible = false;
-        }
-
+        if let Some(obj) = c.get_game_object_mut(&id) { obj.position = (x, y - SPAWN_ANIM_DROP); obj.visible = false; }
         s = st.lock().unwrap();
     }
 }
-
-// ── Score x2 ──────────────────────────────────────────────────────────────────
 
 fn spawn_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
@@ -1082,38 +1057,19 @@ fn spawn_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.score_x2_free.is_empty()
     {
         let gap = lcg_range(&mut s.seed, SCORE_X2_GAP_MIN, SCORE_X2_GAP_MAX);
-        let x = (s.score_x2_rightmost + gap)
-            .max(s.flip_rightmost + 3000.0)
-            .max(s.zero_g_rightmost + 3000.0);
+        let x = (s.score_x2_rightmost + gap).max(s.flip_rightmost + 3000.0).max(s.zero_g_rightmost + 3000.0);
         let raw_y = lcg_range(&mut s.seed, -750.0, 850.0);
         let y = if s.gravity_dir < 0.0 { VH - raw_y - SCORE_X2_H } else { raw_y };
         let Some(id) = s.score_x2_free.pop() else { break; };
-        s.score_x2_live.push(id.clone());
-        s.score_x2_rightmost = x;
-        spawned += 1;
+        s.score_x2_live.push(id.clone()); s.score_x2_rightmost = x; spawned += 1;
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
         let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
-        s.spawn_animations.push(SpawnAnim {
-            id: id.clone(),
-            target_x: x, target_y: y,
-            start_y: y - SPAWN_ANIM_DROP,
-            start_rot, target_rot: 0.0,
-            elapsed: 0, total: anim_ticks,
-            restore_platform: false, started: false,
-            restore_rotation_momentum: 0.0,
-        });
+        s.spawn_animations.push(SpawnAnim { id: id.clone(), target_x: x, target_y: y, start_y: y - SPAWN_ANIM_DROP, start_rot, target_rot: 0.0, elapsed: 0, total: anim_ticks, restore_platform: false, started: false, restore_rotation_momentum: 0.0 });
         drop(s);
-
-        if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x, y - SPAWN_ANIM_DROP);
-            obj.visible = false;
-        }
-
+        if let Some(obj) = c.get_game_object_mut(&id) { obj.position = (x, y - SPAWN_ANIM_DROP); obj.visible = false; }
         s = st.lock().unwrap();
     }
 }
-
-// ── Zero-g ────────────────────────────────────────────────────────────────────
 
 fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
@@ -1123,33 +1079,16 @@ fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.zero_g_free.is_empty()
     {
         let gap = lcg_range(&mut s.seed, ZERO_G_GAP_MIN, ZERO_G_GAP_MAX);
-        let x = (s.zero_g_rightmost + gap)
-            .max(s.flip_rightmost + 3000.0)
-            .max(s.score_x2_rightmost + 3000.0);
+        let x = (s.zero_g_rightmost + gap).max(s.flip_rightmost + 3000.0).max(s.score_x2_rightmost + 3000.0);
         let raw_y = lcg_range(&mut s.seed, -750.0, 850.0);
         let y = if s.gravity_dir < 0.0 { VH - raw_y - ZERO_G_H } else { raw_y };
         let Some(id) = s.zero_g_free.pop() else { break; };
-        s.zero_g_live.push(id.clone());
-        s.zero_g_rightmost = x;
-        spawned += 1;
+        s.zero_g_live.push(id.clone()); s.zero_g_rightmost = x; spawned += 1;
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
         let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
-        s.spawn_animations.push(SpawnAnim {
-            id: id.clone(),
-            target_x: x, target_y: y,
-            start_y: y - SPAWN_ANIM_DROP,
-            start_rot, target_rot: 0.0,
-            elapsed: 0, total: anim_ticks,
-            restore_platform: false, started: false,
-            restore_rotation_momentum: 0.0,
-        });
+        s.spawn_animations.push(SpawnAnim { id: id.clone(), target_x: x, target_y: y, start_y: y - SPAWN_ANIM_DROP, start_rot, target_rot: 0.0, elapsed: 0, total: anim_ticks, restore_platform: false, started: false, restore_rotation_momentum: 0.0 });
         drop(s);
-
-        if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.position = (x, y - SPAWN_ANIM_DROP);
-            obj.visible = false;
-        }
-
+        if let Some(obj) = c.get_game_object_mut(&id) { obj.position = (x, y - SPAWN_ANIM_DROP); obj.visible = false; }
         s = st.lock().unwrap();
     }
 }
@@ -1157,8 +1096,6 @@ fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Gates ─────────────────────────────────────────────────────────────────────
 
 fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    // Read asteroid mode before locking State (canvas borrow + state lock can't coexist).
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
     let mut s = st.lock().unwrap();
     let mut spawned = 0usize;
     while spawned < GATES_SPAWN_BUDGET_PER_TICK
@@ -1236,7 +1173,7 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
             }
             if let Some((hook_id, hx, hy)) = hook_spawn {
-                let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+                let asteroid_mode = c.get_bool("asteroid_hooks_on");
                 if let Some(obj) = c.get_game_object_mut(hook_id) {
                     obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
                     if asteroid_mode {
@@ -1278,16 +1215,6 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let gap = lcg_range(&mut s.seed, GWELL_GAP_MIN, GWELL_GAP_MAX);
         let x = s.gwell_rightmost + gap;
 
-    #[inline]
-    fn turret_phase_for_x(x: f32) -> u8 {
-        if x >= TURRET_PHASE_3_X {
-            3
-        } else if x >= TURRET_PHASE_2_X {
-            2
-        } else {
-            1
-        }
-    }
         // Dual Y-band: 0–500 (top) or 1000–1500 (bottom).
         let y = if lcg(&mut s.seed) < 0.5 {
             lcg_range(&mut s.seed, 0.0, 500.0)
@@ -1334,17 +1261,6 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Turrets ───────────────────────────────────────────────────────────────────
 
-#[inline]
-fn turret_phase_for_x(x: f32) -> u8 {
-    if x >= TURRET_PHASE_3_X {
-        3
-    } else if x >= TURRET_PHASE_2_X {
-        2
-    } else {
-        1
-    }
-}
-
 fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     // Turrets appear in all zones (phases 1/2/3 based on world X position).
@@ -1388,11 +1304,7 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (x - half, y - half - SPAWN_ANIM_DROP);
             obj.size = (TURRET_FULL_SIZE, TURRET_FULL_SIZE);
             obj.visible = false;
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (TURRET_FULL_SIZE, TURRET_FULL_SIZE), 0.0),
-                image: sprite.into(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (TURRET_FULL_SIZE, TURRET_FULL_SIZE), 0.0), image: sprite.into(), color: None });
         }
 
         s = st.lock().unwrap();

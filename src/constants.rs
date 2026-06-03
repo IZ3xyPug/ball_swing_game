@@ -257,8 +257,11 @@ pub const FLIP_POOL_SIZE:    usize = 16;
 /// X gap between gravity-flip pickups (px). Increase = rarer flips.
 pub const FLIP_GAP_MIN:      f32 = 14000.0;
 pub const FLIP_GAP_MAX:      f32 = 24000.0;
-pub const FLIP_W:            f32 = 110.0;
-pub const FLIP_H:            f32 = 110.0;
+pub const FLIP_W:            f32 = 480.0;
+pub const FLIP_H:            f32 = 480.0;
+/// Decode size for the space_rip animation — kept small so GPU upscales cheaply.
+pub const FLIP_ANIM_W:       f32 = 160.0;
+pub const FLIP_ANIM_H:       f32 = 160.0;
 /// How long a gravity flip lasts (ticks). 300 = 5 s at 60 fps.
 pub const FLIP_DURATION:     u32 = 300;
 
@@ -867,6 +870,10 @@ pub const SPACE_ASTEROID_VY_MAX: f32 =  2.0;
 // Fraction of the player's incoming velocity transferred to an asteroid on hook.
 // Scaled by (SIZE_MIN / actual_size) so smaller asteroids receive more impulse.
 pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.28;
+
+/// Scales the player's closing speed into an asteroid body-hit impulse.
+/// impulse = base 1.5 + closing_speed * factor (capped at 22.0 px/frame).
+pub const ASTEROID_PLAYER_BODY_IMPULSE_FACTOR: f32 = 0.30;
 
 // Stasis orbit (shared between entry/exit stasis and game-start stasis)
 pub const STASIS_ORBIT_R:     f32 = 240.0;

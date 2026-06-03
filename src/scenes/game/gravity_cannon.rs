@@ -60,11 +60,7 @@ fn set_cannon_frame(c: &mut Canvas, id: &str, frame_idx: usize) {
     if let Some(frame) = frames.get(idx) {
         if let Some(obj) = c.get_game_object_mut(id) {
             obj.animated_sprite = None;
-            obj.set_image(Image {
-                shape: ShapeType::Rectangle(0.0, (GRAVITYCANNON_W, GRAVITYCANNON_H), 0.0),
-                image: frame.clone(),
-                color: None,
-            });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (GRAVITYCANNON_W, GRAVITYCANNON_H), 0.0), image: frame.clone(), color: None });
         }
     }
 }

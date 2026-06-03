@@ -26,7 +26,7 @@ pub fn tick_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 /// Zero out momentum on all live hooks every tick so they are completely immovable.
 fn tick_freeze_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     if !asteroid_mode { return; }
     let live_hooks = st.lock().unwrap().live_hooks.clone();
     for name in &live_hooks {
@@ -63,7 +63,7 @@ fn apply_unhook(c: &mut Canvas, ops: &UnhookOps) {
     }
     // Restore hook to base colour (or asteroid skin if mode is on).
     if !ops.prev_hook.is_empty() {
-        let asteroid_mode = matches!(c.get_var("asteroid_hooks_on"), Some(Value::Bool(true)));
+        let asteroid_mode = c.get_bool("asteroid_hooks_on");
         if let Some(hobj) = c.get_game_object_mut(&ops.prev_hook) {
             if asteroid_mode {
                 if let Some(sprite) = &mut hobj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
@@ -316,10 +316,7 @@ pub fn tick_rocket_pad_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         // Glowing highlight on the pad
         if let Some(obj) = c.get_game_object_mut(pad_name) {
-            obj.set_glow(GlowConfig {
-                color: Color(C_ROCKET_PAD.0, C_ROCKET_PAD.1, C_ROCKET_PAD.2, 240),
-                width: 18.0,
-            });
+            obj.set_glow(GlowConfig { color: Color(C_ROCKET_PAD.0, C_ROCKET_PAD.1, C_ROCKET_PAD.2, 240), width: 18.0 });
         }
     }
 }
@@ -387,9 +384,11 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
             if let Some(obj) = c.get_game_object_mut(&name) {
                 obj.rotation_momentum += spin_impulse;
-                // Nudge the asteroid away from the player on impact.
-                obj.momentum.0 += -nx * 1.5;
-                obj.momentum.1 += -ny * 1.5;
+                // Nudge the asteroid away from the player — magnitude scales with how
+                // fast the player was closing in, so a fast hit sends it flying.
+                let body_impulse = (1.5 + closing_speed * ASTEROID_PLAYER_BODY_IMPULSE_FACTOR).min(22.0);
+                obj.momentum.0 += -nx * body_impulse;
+                obj.momentum.1 += -ny * body_impulse;
             }
 
             s = st.lock().unwrap();

@@ -3,7 +3,6 @@
 // `use crate::objects::*` and `use crate::objects::foo` call-sites continue
 // to compile without any changes.
 
-mod hooks;
 mod pads;
 mod spinners;
 mod coins;
@@ -18,7 +17,6 @@ mod planets;
 mod black_holes;
 mod gravity_cannon;
 
-pub use hooks::*;
 pub use pads::*;
 pub use spinners::*;
 pub use coins::*;

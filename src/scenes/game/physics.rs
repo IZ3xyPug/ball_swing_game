@@ -301,11 +301,7 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         rope_obj.position = (rope_mid_x - rope_beam * 0.5, rope_mid_y - rope_draw_len * 0.5);
         rope_obj.rotation = rope_ang + 90.0;
         rope_obj.visible = true;
-        rope_obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (rope_beam, rope_draw_len), 0.0),
-            image: rope_img,
-            color: None,
-        });
+        rope_obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (rope_beam, rope_draw_len), 0.0), image: rope_img, color: None });
     }
 }
 

@@ -1,6 +1,5 @@
 use crate::constants::*;
 use crate::images::*;
-use std::sync::OnceLock;
 
 pub fn coin_counter_img(count: u32) -> image::RgbaImage {
     let w = 640;

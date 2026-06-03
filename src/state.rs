@@ -124,7 +124,6 @@ pub struct State {
     pub pending:     VecDeque<HookSpec>,
     pub live_hooks:  Vec<String>,
     pub pool_free:   Vec<String>,
-    pub gen_y:       f32,  // kept for API compatibility; unused by level_gen
     pub rightmost_x: f32,
     /// Tracks how far ahead features have been generated (may be well ahead of
     /// rightmost_x).  Passed in/out of gen_hook_batch so features are not
@@ -214,8 +213,6 @@ pub struct State {
     // ── HUD dirty-tracking ──────────────────────────────────────────────
     pub hud_last_dist_fill:     u32,   // dist_fill * 1000 as u32
     pub hud_last_coins:         u32,
-    pub hud_last_momentum:      u32,   // momentum * 10 as u32
-    pub hud_last_gravity_flip:  bool,
     pub hud_last_py:            i32,
     pub hud_last_px:            i32,
     pub hud_last_flip_timer:    u32,
