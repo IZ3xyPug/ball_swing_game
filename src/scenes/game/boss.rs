@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::state::*;
+use crate::images::circle_cached;
 use super::bootstrap::hook_asteroid_anim_for_spawn;
 
 pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -202,6 +203,11 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         // Spawn boss-zone asteroids immediately on entry.
         place_boss_asteroids(c, &boss_asteroid_ids);
+        // Spawn climbable tether nodes across the arena so the player can
+        // swing up to reach the upper-sky boss.
+        spawn_arena_tether_nodes(c, st);
+        // Warp the player into the arena with a wormhole-style flash.
+        warp_player_into_arena(c, st);
         return;
     }
 
@@ -292,6 +298,90 @@ fn place_boss_asteroids(c: &mut Canvas, asteroid_ids: &[String]) {
                 obj.set_animation(anim_ref.clone());
             }
         }
+    }
+}
+
+/// Spawn a small grid of climbable grab nodes spanning the arena X and the
+/// upper-sky boss Y band (+300 down to −3600), so the player can swing up to
+/// reach the boss at y ≈ −2500.
+fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let zone_w = BOSS_ZONE_X2 - BOSS_ZONE_X1;
+    let cols = 4;
+    let rows = 5;
+    let total = cols * rows;
+    for i in 0..total {
+        let Some(id) = s.pool_free.pop() else { break; };
+        let col = i % cols;
+        let row = i / cols;
+        let frac = row as f32 / (rows - 1).max(1) as f32;
+        let hy = 300.0 - frac * 3900.0; // +300 … −3600
+        let hx = BOSS_ZONE_X1 + zone_w * (0.5 + (col as f32 - (cols as f32 - 1.0) * 0.5) * 0.22);
+        s.live_hooks.push(id.clone());
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.visible = true;
+            obj.position = (hx - HOOK_R, hy - HOOK_R);
+            obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+            obj.gravity = 0.0;
+            obj.momentum = (0.0, 0.0);
+            obj.rotation_momentum = 0.0;
+            obj.collision_mode = CollisionMode::NonPlatform;
+            obj.tags.retain(|t| t != "arena_node");
+            obj.tags.push("arena_node".into());
+            if !obj.tags.iter().any(|t| t == "hook") {
+                obj.tags.push("hook".into());
+            }
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                image: circle_cached(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2),
+                color: None,
+            });
+            obj.clear_glow();
+            obj.clear_highlight();
+        } else {
+            s.live_hooks.retain(|n| n != &id);
+            s.pool_free.push(id);
+        }
+    }
+}
+
+/// Warp the player into the boss arena (wormhole-style flash) at the bottom of
+/// the tether grid, so the fight is entered cleanly rather than the player
+/// having to climb from the normal zone.
+fn warp_player_into_arena(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let warp_x = BOSS_ARENA_CENTER_X;
+    let warp_y = 200.0;
+    {
+        let mut s = st.lock().unwrap();
+        s.px = warp_x;
+        s.py = warp_y;
+        s.vx = 0.0;
+        s.vy = 0.0;
+        s.hooked = false;
+        s.active_hook = String::new();
+        s.hook_x = warp_x;
+        s.hook_y = warp_y;
+        s.rope_len = RESPAWN_ORBIT_R;
+        s.cannon_captured = false;
+        s.in_space_mode = false;
+    }
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.position = (warp_x - PLAYER_R, warp_y - PLAYER_R);
+        obj.momentum = (0.0, 0.0);
+        obj.gravity = GRAVITY * BOSS_GRAVITY_SCALE;
+        obj.visible = true;
+    }
+    c.run(Action::Hide { target: Target::name("rope") });
+    c.set_var("rope_visible_at_pause", false);
+    if let Some(cam) = c.camera_mut() {
+        cam.flash_with(
+            Color(160, 160, 255, 130),
+            0.40,
+            FlashMode::Pulse,
+            FlashEase::Sharp,
+            0.9,
+            0.0,
+        );
     }
 }
 

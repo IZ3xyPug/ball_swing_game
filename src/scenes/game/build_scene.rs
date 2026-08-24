@@ -282,6 +282,27 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.enable_crystalline();
             canvas.set_var("crystalline_ready", true);
 
+            // ── Lighting (enables darkness attacks + shadows) ────────────
+            // The engine side is wired; turning it on here makes set_ambient /
+            // darkness phases actually render, and lights the player during
+            // darkness. Default ambient is full-bright, so normal play is
+            // unchanged.
+            if !canvas.has_lighting() {
+                canvas.enable_lighting(LightingConfig::default());
+                canvas.add_light(LightSource::new(
+                    "__player_light",
+                    (0.0, 0.0),
+                    Color(210, 220, 255, 255),
+                    1100.0,
+                    0.8,
+                ));
+                canvas.attach_light("__player_light", "player", (0.0, 0.0));
+                // Large world objects cast shadows during darkness phases.
+                canvas.set_shadow_caster("player", true);
+                canvas.set_shadow_caster("boss", true);
+                canvas.set_shadow_caster("danger_floor", true);
+            }
+
             // ── Terrain collision plugin (dynamic outline support) ──────
             let terrain_collision_registered = matches!(
                 canvas.get_var("terrain_collision_registered"),
@@ -1592,7 +1613,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Asteroid-hook Y clamp ─────────────────────────────
                     // Prevent asteroid-mode hooks from drifting above y = -600.
-                    if c.get_bool("asteroid_hooks_on") {
+                    // Skipped in boss mode so arena tether nodes can reach the
+                    // upper-sky boss band.
+                    if c.get_bool("asteroid_hooks_on") && !st.lock().unwrap().boss_active {
                         let live = st.lock().unwrap().live_hooks.clone();
                         for hid in &live {
                             if let Some(obj) = c.get_game_object_mut(hid) {

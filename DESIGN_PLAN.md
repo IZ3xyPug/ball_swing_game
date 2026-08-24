@@ -30,11 +30,24 @@
   the left-boundary rescue teleport on the right side so the special space zone
   stays bounded (generous `SPACE_RIGHT_BOUNDARY_MARGIN`), preventing a player from
   drifting into unmapped/boss territory while exploring.
+- **Lighting + shadows wired into the game** (`build_scene.rs` on_enter) — calls
+  `enable_lighting`, adds an attached player light, and marks the player / boss /
+  danger floor as shadow casters. Default ambient is full-bright so normal play is
+  unchanged; it makes darkness attacks and shadows actually render.
+- **Mega-shader plumbing** (`scenes/game/fx.rs`) — `register_mega_shader` and
+  `push_mega_fx` helpers wrapping the engine's `register_shader_source` /
+  `push_mega_sprite`. WGSL shaders are authored separately (see the engine's
+  `renderer/mega_shader/common_effects.wgsl` as a reference).
+- **Boss arena tether nodes + wormhole warp** (`boss.rs`) — on boss entry the
+  arena spawns a grid of climbable grab nodes spanning the boss Y band, and the
+  player is warped into the arena (wormhole-style flash) so the fight is entered
+  cleanly. This makes the upper-sky boss reachable without superhuman swinging.
 
 > **Not yet implemented / not validated:** the boss weakpoint *damage* path is not
-> observed in the sim — the naive bot reaches the arena (bossIn) but can't climb
-> to the boss at y = −2500 to land a buffed weakpoint hit, so `bossHP` stays at
-> max. Full validation needs a warped/aggressive bot.
+> confirmed in the sim — the bot still reaches the boss threshold only
+> inconsistently (it oscillates), so `bossHP` stays at max most runs. The warp
+> currently uses a camera flash; a wormhole-gif overlay can be layered onto
+> `warp_player_into_arena`. Full weakpoint validation needs a deterministic warp.
 
 ---
 
