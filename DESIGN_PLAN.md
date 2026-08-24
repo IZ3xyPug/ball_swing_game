@@ -62,6 +62,16 @@
   out of oxygen in space now **ejects the player back to the surface with the
   coins they collected** instead of a hard death (`space_extract`). This makes the
   special space zone a bank-vs-greed risk/reward loop rather than a death trap.
+- **Space oxygen pickups** (`space_zone.rs`, `bootstrap.rs`, `images.rs`) — oxygen
+  canisters (`oxygencanister.png`, cached via `OnceLock`) spawn in space and
+  restore oxygen on contact. Pooled objects, spawned/collected like the other
+  space pickups.
+- **Roguelike upgrade nodes** (`upgrades.rs`, `bootstrap.rs`, `constants.rs`,
+  `state.rs`, `build_scene.rs`) — purple ring nodes spawn in the normal zone;
+  touching one with enough coins buys a boost. **Extra heart** (permanent, cost
+  `2500 × 2.0^owned` via `META_EXTRA_HEARTS_VAR`), **controlled breathing**
+  (`oxygen_drain_scale`), and a **momentum-cap** upgrade. Purchases apply
+  immediately; heart boosts persist across runs for the session.
 
 > **Weakpoint fight validated.** `--boss-warp` reliably warps the bot into the
 > arena, and `--boss-weakpoint-check` confirms a buffed weakpoint hit drops

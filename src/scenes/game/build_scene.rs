@@ -120,6 +120,7 @@ use super::gravity_wells;
 use super::turrets;
 use super::gravity_cannon;
 use super::boss;
+use super::upgrades;
 use super::helpers::*;
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
 const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
@@ -259,6 +260,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         rocket_pad_free, space_planet_free, space_hook_free,
         space_coin_free, space_blue_coin_free, space_bh_free,
         space_asteroid_free, space_red_coin_free, cannon_free,
+        space_oxygen_pickup_free, upgrade_free,
         boss_bolt_free, boss_asteroid_ids, comet_free, warn_free,
     } = pools;
 
@@ -721,6 +723,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             let coin_spawn_anim = coin_anim_template.clone();
             let coin_spawn_image = coin_static_sprite.clone();
 
+            // Permanent meta-progression earned via upgrade nodes.
+            let meta_extra_hearts = match canvas.get_var(META_EXTRA_HEARTS_VAR) {
+                Some(Value::I32(v)) => v.max(0),
+                _ => 0,
+            };
+            let start_max_hearts = crate::constants::MAX_HEARTS + meta_extra_hearts;
+
             let fresh_state = State {
                 px: start_px, py: start_py,
                 vx: 0.0, vy: 0.0,
@@ -807,6 +816,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_asteroid_free:      space_asteroid_free.clone(),
                 space_asteroid_rightmost: SPAWN_X,
 
+                space_oxygen_pickup_live:      Vec::new(),
+                space_oxygen_pickup_free:      space_oxygen_pickup_free.clone(),
+                space_oxygen_pickup_rightmost: SPAWN_X,
+
                 hud_last_oxygen:          u32::MAX,
 
                 space_stasis_active:    false, space_stasis_hook_id:   String::new(),
@@ -850,8 +863,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 comet_warn_live:   Vec::new(), warn_free:         warn_free.clone(),
                 comet_spawn_timer: COMET_SPAWN_INTERVAL,
 
-                hearts:            crate::constants::MAX_HEARTS,
-                max_hearts:        crate::constants::MAX_HEARTS,
+                hearts:            start_max_hearts,
+                max_hearts:        start_max_hearts,
                 checkpoint_x:      start_hook.0,
                 checkpoint_y:      start_hook.1,
                 checkpoint_block:  0,
@@ -860,6 +873,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 player_buff:       0,
                 buff_timer:        0,
                 buff_hit_flash:    0,
+                upgrade_live:      Vec::new(),
+                upgrade_free:      upgrade_free.clone(),
+                upgrade_rightmost: SPAWN_X + VW * 1.4,
+                oxygen_drain_scale: 1.0,
+                oxygen_drain_accum: 0.0,
+                upgrade_momentum_bonus: false,
                 flare_cooldown:    FLARE_INTERVAL,
                 flare_warn:        0,
                 flare_active:      false,
@@ -1668,6 +1687,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     gravity_cannon::tick_cannons(c, &st);
                     // ── Boss fight ────────────────────────────────────────
                     boss::tick_boss(c, &st);
+
+                    // ── Roguelike upgrade nodes (spend coins) ──────────────
+                    upgrades::tick_upgrades(c, &st);
 
                     // ── Space zone ────────────────────────────────────────
                     super::space_zone::tick_space_zone(c, &st, frame_counter);

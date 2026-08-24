@@ -359,8 +359,8 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         } else {
             let cap = if s.in_space_mode {
                 SPACE_MOMENTUM_CAP
-            } else if s.buff_timer > 0 {
-                BUFF_MOMENTUM_CAP
+            } else if s.buff_timer > 0 || s.upgrade_momentum_bonus {
+                BUFF_MOMENTUM_CAP.max(UPGRADE_MOMENTUM_CAP)
             } else {
                 MOMENTUM_CAP
             };

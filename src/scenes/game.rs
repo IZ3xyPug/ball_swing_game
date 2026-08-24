@@ -15,6 +15,7 @@ mod gravity_cannon;
 mod boss;
 mod hearts;
 mod fx;
+mod upgrades;
 pub mod space_zone;
 mod build_scene;
 

@@ -941,6 +941,23 @@ fn draw_heart(img: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, c: (u8
     }
 }
 
+/// Cached static render of `oxygencanister.png` at a fixed display size. Loaded
+/// once and reused across all space oxygen pickups (no per-object decode).
+static OXYGEN_CANISTER: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+pub fn oxygen_canister_img() -> Arc<image::RgbaImage> {
+    OXYGEN_CANISTER.get_or_init(|| {
+        let bytes: &[u8] = include_bytes!("../assets/oxygencanister.png");
+        match image::load_from_memory(bytes) {
+            Ok(img) => {
+                let img = img.to_rgba8();
+                let scaled = image::imageops::resize(&img, 176, 176, image::imageops::FilterType::Triangle);
+                Arc::new(scaled)
+            }
+            Err(_) => Arc::new(image::RgbaImage::from_pixel(176, 176, image::Rgba([120, 220, 255, 255]))),
+        }
+    }).clone()
+}
+
 /// Frame 0 of techbouncernew.gif processed with the **exact same** pipeline as
 /// `decode_tech_bounce_frames_stretched` (union crop bounds across all frames,
 /// then crop+scale+top-anchor to PAD_W×PAD_H).  This is the definitive

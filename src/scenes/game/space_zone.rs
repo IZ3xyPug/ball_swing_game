@@ -298,6 +298,8 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     tick_space_right_boundary_teleport(c, st);
     tick_space_spawning(c, st, frame);
     tick_space_culling(c, st);
+    spawn_space_oxygen_pickups(c, st);
+    tick_space_oxygen_pickups(c, st);
     tick_space_coin_magnet(c, st);
     tick_space_coin_collect(c, st);
     tick_space_welcome_text(c, st);
@@ -336,6 +338,7 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_coin_rightmost      = px - VW * 0.5;
         s.space_blackhole_rightmost = px - VW * 2.0;
         s.space_asteroid_rightmost  = px - VW * 0.5;
+        s.space_oxygen_pickup_rightmost = px - VW * 0.5;
 
         // Freeze background scale for parallax starfield effect
         s.space_entry_bg_scale = 1.0; // will be refined below after drop
@@ -718,7 +721,13 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             return;
         }
         if s.space_oxygen > 0 {
-            s.space_oxygen -= 1;
+            // "Controlled breathing" scales the drain below 1.0 (slower).
+            s.oxygen_drain_accum += s.oxygen_drain_scale;
+            let drain = s.oxygen_drain_accum.floor() as u32;
+            if drain > 0 {
+                s.oxygen_drain_accum -= drain as f32;
+                s.space_oxygen = s.space_oxygen.saturating_sub(drain);
+            }
             (s.space_oxygen, false)
         } else {
             // Oxygen empty: tick the grace/return delay
@@ -1341,6 +1350,90 @@ fn spawn_space_coins(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         s = st.lock().unwrap();
         s.space_coin_live.extend(ids.into_iter());
+    }
+}
+
+// ── Space oxygen pickups (extend the oxygen meter) ────────────────────────────
+
+fn spawn_space_oxygen_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let mut spawned = 0usize;
+    while spawned < SPACE_OXYGEN_PICKUP_SPAWN_BUDGET
+        && !s.space_oxygen_pickup_free.is_empty()
+        && s.space_oxygen_pickup_rightmost < s.px + GEN_AHEAD
+    {
+        let gap = lcg_range(&mut s.seed, SPACE_OXYGEN_PICKUP_GAP_MIN, SPACE_OXYGEN_PICKUP_GAP_MAX);
+        let x = s.space_oxygen_pickup_rightmost + gap;
+        let y = lcg_range(&mut s.seed, SPACE_OXYGEN_PICKUP_Y_MIN, SPACE_OXYGEN_PICKUP_Y_MAX);
+        let Some(id) = s.space_oxygen_pickup_free.pop() else { break; };
+        s.space_oxygen_pickup_live.push(id.clone());
+        if x > s.space_oxygen_pickup_rightmost {
+            s.space_oxygen_pickup_rightmost = x;
+        }
+        spawned += 1;
+        drop(s);
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            let r = SPACE_OXYGEN_PICKUP_R;
+            obj.position = (x - r, y - r);
+            obj.size = (r * 2.0, r * 2.0);
+            obj.visible = true;
+            obj.gravity = 0.0;
+            obj.momentum = (0.0, 0.0);
+        }
+        s = st.lock().unwrap();
+    }
+}
+
+fn tick_space_oxygen_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (px, py) = {
+        let s = st.lock().unwrap();
+        (s.px, s.py)
+    };
+    let live: Vec<String> = st.lock().unwrap().space_oxygen_pickup_live.clone();
+    if live.is_empty() {
+        return;
+    }
+    let mut collect: Vec<String> = Vec::new();
+    let mut cull: Vec<String> = Vec::new();
+    let cutoff = px - VW * 3.0;
+    for id in &live {
+        let Some(obj) = c.get_game_object(id) else { continue; };
+        if !obj.visible {
+            cull.push(id.clone());
+            continue;
+        }
+        let cx = obj.position.0 + obj.size.0 * 0.5;
+        let cy = obj.position.1 + obj.size.1 * 0.5;
+        let rr = PLAYER_R + SPACE_OXYGEN_PICKUP_R;
+        if (cx - px) * (cx - px) + (cy - py) * (cy - py) < rr * rr {
+            collect.push(id.clone());
+        } else if obj.position.0 + obj.size.0 < cutoff {
+            cull.push(id.clone());
+        }
+    }
+    if collect.is_empty() && cull.is_empty() {
+        return;
+    }
+
+    let mut s = st.lock().unwrap();
+    for id in &collect {
+        s.space_oxygen = (s.space_oxygen + SPACE_OXYGEN_PICKUP_AMOUNT).min(SPACE_OXYGEN_TICKS);
+        s.space_oxygen_pickup_live.retain(|n| n != id);
+        s.space_oxygen_pickup_free.push(id.clone());
+    }
+    for id in &cull {
+        s.space_oxygen_pickup_live.retain(|n| n != id);
+        s.space_oxygen_pickup_free.push(id.clone());
+    }
+    drop(s);
+
+    for id in collect.iter().chain(cull.iter()) {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = false;
+        }
+    }
+    if !collect.is_empty() {
+        c.play_sound_with(ASSET_COIN_SFX_1, SoundOptions::new().volume(sfx_vol(c, 0.4)));
     }
 }
 

@@ -92,6 +92,8 @@ pub struct PoolSets {
     pub space_bh_free:     Vec<String>,
     pub space_asteroid_free: Vec<String>,
     pub space_red_coin_free: Vec<String>,
+    pub space_oxygen_pickup_free: Vec<String>,
+    pub upgrade_free: Vec<String>,
     // ── Gravity cannon pool
     pub cannon_free:       Vec<String>,
     // ── Boss fight
@@ -872,6 +874,45 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     );
     for (id, obj) in src_objs { scene = scene.with_object(id, obj); }
 
+    // ── Space oxygen canister pool ────────────────────────────────────────
+    let mut space_oxygen_pickup_free: Vec<String> = Vec::new();
+    {
+        let d = SPACE_OXYGEN_PICKUP_R * 2.0;
+        let img = oxygen_canister_img();
+        for i in 0..SPACE_OXYGEN_PICKUP_POOL_SIZE {
+            let id = format!("space_oxygen_pickup_{i}");
+            let mut obj = GameObject::new_rect(ctx, id.clone(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0), image: img.clone(), color: None }),
+                (d, d), (-6300.0, -6300.0),
+                vec!["space_oxygen_pickup".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.gravity = 0.0;
+            obj.visible = false;
+            obj.layer = LAYER_SPACE_ASTEROID;
+            space_oxygen_pickup_free.push(id.clone());
+            scene = scene.with_object(id, obj);
+        }
+    }
+
+    // ── Roguelike upgrade node pool ────────────────────────────────────────
+    let mut upgrade_free: Vec<String> = Vec::new();
+    {
+        let d = UPGRADE_R * 2.0;
+        let img = ring_outline_img(UPGRADE_R as u32, C_UPGRADE.0, C_UPGRADE.1, C_UPGRADE.2);
+        for i in 0..UPGRADE_POOL_SIZE {
+            let id = format!("upgrade_node_{i}");
+            let mut obj = GameObject::new_rect(ctx, id.clone(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: img.clone().into(), color: None }),
+                (d, d), (-6000.0, -6000.0),
+                vec!["upgrade_node".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.gravity = 0.0;
+            obj.visible = false;
+            obj.layer = 40;
+            obj.set_glow(GlowConfig { color: Color(C_UPGRADE.0, C_UPGRADE.1, C_UPGRADE.2, 200), width: 18.0 });
+            upgrade_free.push(id.clone());
+            scene = scene.with_object(id, obj);
+        }
+    }
+
     // ── Solar ceiling ─────────────────────────────────────────────────────
     // Placeholder object only — AnimatedSprite is decoded lazily on first
     // enter_space() to avoid a multi-second freeze at game startup.
@@ -1198,6 +1239,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         rocket_pad_free, space_planet_free, space_hook_free,
         space_coin_free, space_blue_coin_free, space_bh_free,
         space_asteroid_free, space_red_coin_free, cannon_free,
+        space_oxygen_pickup_free, upgrade_free,
         boss_bolt_free, boss_asteroid_ids, comet_free, warn_free,
     };
 

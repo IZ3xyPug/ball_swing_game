@@ -278,6 +278,11 @@ pub struct State {
     pub space_asteroid_free:     Vec<String>,
     pub space_asteroid_rightmost: f32,
 
+    // Space oxygen pickups (extend the oxygen meter)
+    pub space_oxygen_pickup_live:      Vec<String>,
+    pub space_oxygen_pickup_free:      Vec<String>,
+    pub space_oxygen_pickup_rightmost: f32,
+
     // HUD dirty for oxygen
     pub hud_last_oxygen:         u32,
 
@@ -411,6 +416,16 @@ pub struct State {
     pub buff_timer: u32,
     /// True for a short window right after a buffed weakpoint hit (hit feedback).
     pub buff_hit_flash: u32,
+    // ── Roguelike upgrade nodes ──────────────────────────────────────────────
+    pub upgrade_live:       Vec<String>,
+    pub upgrade_free:       Vec<String>,
+    pub upgrade_rightmost:  f32,
+    /// Oxygen drain multiplier (1.0 normally; < 1.0 with "controlled breathing").
+    pub oxygen_drain_scale: f32,
+    /// Fractional accumulator so scaled oxygen drain can be non-integer.
+    pub oxygen_drain_accum: f32,
+    /// Owned momentum-cap upgrade.
+    pub upgrade_momentum_bonus: bool,
     /// Solar flare hazard: ticks until the next flare.
     pub flare_cooldown: u32,
     /// Remaining telegraph ticks before a flare erupts.

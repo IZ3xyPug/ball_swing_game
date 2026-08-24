@@ -788,6 +788,36 @@ pub const SPACE_SUN_BONUS_CLUSTER_SPACING: f32 = 96.0;
 pub const SPACE_SUN_BONUS_CLUSTER_RING_R: f32 = 170.0;
 pub const SPACE_SUN_BONUS_RED_CHANCE: f32 = 0.18;
 
+// Space oxygen pickups (extend the oxygen meter)
+pub const SPACE_OXYGEN_PICKUP_POOL_SIZE: usize = 24;
+pub const SPACE_OXYGEN_PICKUP_GAP_MIN: f32 = 2600.0;
+pub const SPACE_OXYGEN_PICKUP_GAP_MAX: f32 = 5200.0;
+pub const SPACE_OXYGEN_PICKUP_R: f32 = 88.0;
+/// Ticks of oxygen a canister restores (10 s at 60 fps).
+pub const SPACE_OXYGEN_PICKUP_AMOUNT: u32 = 600;
+pub const SPACE_OXYGEN_PICKUP_SPAWN_BUDGET: usize = 1;
+pub const SPACE_OXYGEN_PICKUP_Y_MIN: f32 = -(VH * 3.6);
+pub const SPACE_OXYGEN_PICKUP_Y_MAX: f32 = -(VH * 0.9);
+
+// ── Roguelike upgrade nodes (spend coins for boosts) ──────────────────────────
+pub const UPGRADE_POOL_SIZE: usize = 12;
+pub const UPGRADE_GAP_MIN: f32 = 15000.0;
+pub const UPGRADE_GAP_MAX: f32 = 26000.0;
+pub const UPGRADE_R: f32 = 96.0;
+pub const UPGRADE_SPAWN_BUDGET_PER_TICK: usize = 1;
+/// Permanent extra-heart purchase: base cost × growth^(extra_hearts already owned).
+pub const UPGRADE_HEART_BASE_COST: u32 = 2500;
+pub const UPGRADE_HEART_GROWTH: f32 = 2.0;
+pub const UPGRADE_BREATH_COST: u32 = 1500;
+pub const UPGRADE_MOMENTUM_COST: u32 = 2000;
+/// "Controlled breathing" — oxygen drains at this fraction of normal.
+pub const UPGRADE_BREATH_DRAIN_SCALE: f32 = 0.72;
+/// Momentum cap while the momentum upgrade is owned.
+pub const UPGRADE_MOMENTUM_CAP: f32 = 70.0;
+pub const C_UPGRADE: (u8, u8, u8) = (200, 120, 255);
+/// Game var holding how many permanent extra hearts are owned.
+pub const META_EXTRA_HEARTS_VAR: &str = "meta_extra_hearts";
+
 // Black hole parameters
 pub const SPACE_BLACKHOLE_GAP_MIN:       f32 = 5000.0;
 pub const SPACE_BLACKHOLE_GAP_MAX:       f32 = 9000.0;
