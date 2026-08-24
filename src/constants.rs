@@ -617,6 +617,24 @@ pub const BUFF_MOMENTUM_CAP: f32 = 84.0;
 /// Buff node base colour (cyan — placeholder).
 pub const C_BUFF_HOOK: (u8, u8, u8) = (110, 230, 255);
 
+// ── Solar flare hazard + shielded nodes ──────────────────────────────────────
+/// Probability that a freshly-spawned grab node is a shielded node (protects
+/// against solar flares).
+pub const SHIELD_HOOK_SPAWN_CHANCE: f32 = 0.03;
+/// Tag on shielded nodes.
+pub const SHIELD_HOOK_TAG: &str = "shield_node";
+/// Shielded node colour (gold — placeholder).
+pub const C_SHIELD_HOOK: (u8, u8, u8) = (255, 215, 90);
+/// Ticks between solar flares (40 s at 60 fps).
+pub const FLARE_INTERVAL: u32 = 2400;
+/// Ticks of telegraph warning before a flare erupts (2 s).
+pub const FLARE_WARN_TICKS: u32 = 120;
+/// Ticks the flare is "active" (1 s) — during this window an unshielded player
+/// loses a heart.
+pub const FLARE_ACTIVE_TICKS: u32 = 60;
+/// Player must be within this radius of a shielded node during a flare.
+pub const FLARE_SHIELD_RADIUS: f32 = 520.0;
+
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 650;
 
@@ -651,6 +669,12 @@ pub const SPACE_LEFT_BOUNDARY_MARGIN: f32 = VW * 0.95;
 /// Target X range (relative to entry anchor) for left-boundary rescue teleport.
 pub const SPACE_LEFT_TELEPORT_X_MIN: f32 = VW * 0.45;
 pub const SPACE_LEFT_TELEPORT_X_MAX: f32 = VW * 1.05;
+/// Right edge of the explorable space zone. A wormhole wraps the player back
+/// before this so the special space zone stays bounded (and never drifts into
+/// boss territory). Generous to keep space feeling enormous.
+pub const SPACE_RIGHT_BOUNDARY_MARGIN: f32 = VW * 6.0;
+pub const SPACE_RIGHT_TELEPORT_X_MIN: f32 = VW * 0.45;
+pub const SPACE_RIGHT_TELEPORT_X_MAX: f32 = VW * 1.05;
 /// Global gravity scale while in space — effectively zero. Planet and
 /// black hole gravity wells supply all meaningful attraction in space.
 pub const SPACE_GRAVITY_SCALE:     f32 = 0.002;

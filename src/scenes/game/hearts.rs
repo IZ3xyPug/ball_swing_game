@@ -18,6 +18,80 @@ pub fn tick_hearts(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     checkpoint_save(c, st);
     hearts_hud_update(c, st);
     tick_buff(c, st);
+    tick_solar_flare(c, st);
+}
+
+/// Solar flare hazard: telegraphed, then erupts. If the player isn't within
+/// `FLARE_SHIELD_RADIUS` of a shielded node on the eruption frame, they lose a
+/// heart. Repeated flares run on a cooldown.
+pub fn tick_solar_flare(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (in_space, boss, god) = {
+        let s = st.lock().unwrap();
+        (s.in_space_mode, s.boss_active, s.god_mode)
+    };
+    if in_space || boss || god {
+        c.set_var("flare_warning", false);
+        c.set_var("flare_active", false);
+        return;
+    }
+
+    let mut s = st.lock().unwrap();
+    if s.flare_warn > 0 {
+        s.flare_warn = s.flare_warn.saturating_sub(1);
+        if s.flare_warn == 0 {
+            // Eruption frame: cost a heart if not near a shielded node.
+            let px = s.px;
+            let py = s.py;
+            let shield_hooks: Vec<String> = s.live_hooks.clone();
+            s.flare_active = true;
+            s.flare_active_ticks = FLARE_ACTIVE_TICKS;
+            drop(s);
+
+            let protected = shield_hooks.iter().any(|id| {
+                c.get_game_object(id)
+                    .map(|o| {
+                        let hx = o.position.0 + o.size.0 * 0.5;
+                        let hy = o.position.1 + o.size.1 * 0.5;
+                        (hx - px) * (hx - px) + (hy - py) * (hy - py)
+                            < FLARE_SHIELD_RADIUS * FLARE_SHIELD_RADIUS
+                    })
+                    .unwrap_or(false)
+            });
+            if !protected {
+                lose_heart(c, st);
+            }
+            c.set_var("flare_active", true);
+            c.set_var("flare_warning", false);
+            return;
+        }
+        let warn = s.flare_warn > 0;
+        drop(s);
+        c.set_var("flare_warning", warn);
+        return;
+    }
+
+    if s.flare_active {
+        s.flare_active_ticks = s.flare_active_ticks.saturating_sub(1);
+        if s.flare_active_ticks == 0 {
+            s.flare_active = false;
+            s.flare_cooldown = FLARE_INTERVAL;
+        }
+        let active = s.flare_active;
+        drop(s);
+        c.set_var("flare_active", active);
+        c.set_var("flare_warning", false);
+        return;
+    }
+
+    s.flare_cooldown = s.flare_cooldown.saturating_sub(1);
+    if s.flare_cooldown == 0 {
+        s.flare_warn = FLARE_WARN_TICKS;
+        s.flare_cooldown = FLARE_INTERVAL;
+    }
+    let warn = s.flare_warn > 0;
+    drop(s);
+    c.set_var("flare_warning", warn);
+    c.set_var("flare_active", false);
 }
 
 /// Tick down an active buff and clear it (and the player glow) when it expires.

@@ -393,4 +393,12 @@ pub struct State {
     pub buff_timer: u32,
     /// True for a short window right after a buffed weakpoint hit (hit feedback).
     pub buff_hit_flash: u32,
+    /// Solar flare hazard: ticks until the next flare.
+    pub flare_cooldown: u32,
+    /// Remaining telegraph ticks before a flare erupts.
+    pub flare_warn: u32,
+    /// True while a flare is actively erupting (damage window).
+    pub flare_active: bool,
+    /// Remaining ticks of the active flare window.
+    pub flare_active_ticks: u32,
 }

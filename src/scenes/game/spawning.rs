@@ -594,6 +594,25 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             c.set_var("buff_hook_last_x", Value::F32(hx));
         }
 
+        let rolled_shield = lcg(&mut s.seed) < SHIELD_HOOK_SPAWN_CHANCE;
+        let last_shield_x = c.get_var("shield_hook_last_x").and_then(|v| {
+            if let Value::F32(x) = v {
+                Some(x)
+            } else if let Value::F64(x) = v {
+                Some(x as f32)
+            } else {
+                None
+            }
+        });
+        let has_shield_gap = last_shield_x
+            .map(|prev_x| (hx - prev_x).abs() >= BUFF_HOOK_MIN_X_GAP)
+            .unwrap_or(true);
+        let is_shield_hook = rolled_shield && has_shield_gap && !is_special_hook
+            && !is_extended_hook && !is_buff_hook;
+        if is_shield_hook {
+            c.set_var("shield_hook_last_x", Value::F32(hx));
+        }
+
         let hook_half = if asteroid_mode || is_special_hook {
             HOOK_ARTIFACT_R
         } else {
@@ -655,25 +674,33 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.momentum = (0.0, 0.0);
                 obj.rotation_momentum = 0.0;
                 obj.collision_mode = CollisionMode::NonPlatform;
+            } else if is_buff_hook {
+                // Cyan buff tether node — grants a timed buff on grab.
+                obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+                obj.tags.retain(|t| t != BUFF_HOOK_TAG);
+                obj.tags.push(BUFF_HOOK_TAG.into());
+                obj.animated_sprite = None;
+                obj.set_image(hook_img(C_BUFF_HOOK.0, C_BUFF_HOOK.1, C_BUFF_HOOK.2));
+                obj.collision_mode = CollisionMode::NonPlatform;
+                obj.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 18.0 });
+            } else if is_shield_hook {
+                // Gold shielded node — protects against solar flares.
+                obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+                obj.tags.retain(|t| t != SHIELD_HOOK_TAG);
+                obj.tags.push(SHIELD_HOOK_TAG.into());
+                obj.animated_sprite = None;
+                obj.set_image(hook_img(C_SHIELD_HOOK.0, C_SHIELD_HOOK.1, C_SHIELD_HOOK.2));
+                obj.collision_mode = CollisionMode::NonPlatform;
+                obj.set_glow(GlowConfig { color: Color(255, 215, 90, 220), width: 14.0 });
             } else {
                 obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-                if is_buff_hook {
-                    // Cyan buff tether node — grants a timed buff on grab.
-                    obj.tags.retain(|t| t != BUFF_HOOK_TAG);
-                    obj.tags.push(BUFF_HOOK_TAG.into());
-                    obj.animated_sprite = None;
-                    obj.set_image(hook_img(C_BUFF_HOOK.0, C_BUFF_HOOK.1, C_BUFF_HOOK.2));
-                    obj.collision_mode = CollisionMode::NonPlatform;
-                    obj.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 18.0 });
-                } else {
-                    if is_extended_hook {
-                        obj.tags.push(EXTENDED_HOOK_TAG.into());
-                    }
-                    obj.animated_sprite = None;
-                    let (r, g, b) = hook_base_for_obj(obj, zone_idx);
-                    obj.set_image(hook_img(r, g, b));
-                    obj.collision_mode = CollisionMode::NonPlatform;
+                if is_extended_hook {
+                    obj.tags.push(EXTENDED_HOOK_TAG.into());
                 }
+                obj.animated_sprite = None;
+                let (r, g, b) = hook_base_for_obj(obj, zone_idx);
+                obj.set_image(hook_img(r, g, b));
+                obj.collision_mode = CollisionMode::NonPlatform;
             }
             obj.clear_highlight();
         }

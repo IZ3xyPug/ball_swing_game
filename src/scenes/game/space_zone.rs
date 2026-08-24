@@ -294,6 +294,7 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     tick_space_gwells(c, st);
     tick_space_blackhole_teleport(c, st);
     tick_space_left_boundary_teleport(c, st);
+    tick_space_right_boundary_teleport(c, st);
     tick_space_spawning(c, st, frame);
     tick_space_culling(c, st);
     tick_space_coin_magnet(c, st);
@@ -1721,6 +1722,120 @@ fn tick_space_left_boundary_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let visible_h = VH;
         let cam_x = tx - visible_w * 0.5;
         let cam_y = safe_y - visible_h * 0.5 - SPACE_CAM_Y_LEAD;
+        s.space_cam_y = cam_y;
+
+        let marker_spawn = if let Some(mid) = s.space_blackhole_free.pop() {
+            let core_r = lcg_range(&mut s.seed, SPACE_BLACKHOLE_RADIUS_MIN, SPACE_BLACKHOLE_RADIUS_MAX);
+            s.space_blackhole_live.push(mid.clone());
+            s.space_blackhole_data.push((mid.clone(), core_r, SPACE_BLACKHOLE_GRAV_STRENGTH));
+            s.space_gwell_timers.push((mid.clone(), SPACE_BLACKHOLE_TELEPORT_DORMANT_TICKS, false));
+            s.space_bh_teleport_fx.push((mid.clone(), SPACE_BLACKHOLE_TELEPORT_BLUE_TICKS, 0));
+            Some((mid, core_r))
+        } else {
+            None
+        };
+
+        (s.px, s.py, out_vx, out_vy, cam_x, cam_y, marker_spawn)
+    };
+
+    if let Some((marker_id, core_r)) = marker_spawn {
+        let visual_r = blackhole_visual_r(core_r);
+        let d = visual_r * 2.0;
+        if let Some(obj) = c.get_game_object_mut(&marker_id) {
+            obj.position = (tx - visual_r, ty - visual_r);
+            obj.size = (d, d);
+            obj.planet_radius = None;
+            obj.visible = true;
+            obj.set_image(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: gwell_ring_cached(visual_r, C_GWELL_TELEPORT.0, C_GWELL_TELEPORT.1, C_GWELL_TELEPORT.2, GWELL_RING_COUNT, 220.0), color: None });
+        }
+    }
+
+    if let Some(player) = c.get_game_object_mut("player") {
+        player.position = (tx - PLAYER_R, ty - PLAYER_R);
+        player.momentum = (nvx, nvy);
+        player.visible = true;
+    }
+    if let Some(cam) = c.camera_mut() {
+        cam.position.0 = cam_x;
+        cam.position.1 = cam_y;
+        cam.flash_with(
+            Color(140, 210, 255, 120),
+            0.30,
+            FlashMode::Pulse,
+            FlashEase::Sharp,
+            0.92,
+            0.0,
+        );
+    }
+}
+
+/// Right-edge wormhole wrap mirroring the left-boundary teleport. Keeps the
+/// special space zone bounded so a player can't drift into unmapped/boss
+/// territory while exploring, while still allowing a huge explorable area.
+fn tick_space_right_boundary_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let cam_left = c.camera().map(|cam| cam.position.0).unwrap_or(f32::NEG_INFINITY);
+    let (hooked, stasis, px, entry_px) = {
+        let s = st.lock().unwrap();
+        (s.hooked, s.space_stasis_active, s.px, s.space_entry_px)
+    };
+    if hooked || stasis {
+        return;
+    }
+
+    let right_limit = entry_px + SPACE_RIGHT_BOUNDARY_MARGIN;
+    let cam_right = cam_left + VW;
+    let fully_off_right = px - PLAYER_R > cam_right;
+    if px <= right_limit || !fully_off_right {
+        return;
+    }
+
+    let (tx, ty, nvx, nvy, cam_x, cam_y, marker_spawn) = {
+        let mut s = st.lock().unwrap();
+        let kill_y = solar_kill_y(&s);
+        let y_min = kill_y + SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_SUN;
+        let y_max = SPACE_RETURN_Y - SPACE_BLACKHOLE_TELEPORT_SAFE_FROM_RETURN;
+
+        let tx = entry_px + lcg_range(&mut s.seed, SPACE_RIGHT_TELEPORT_X_MIN, SPACE_RIGHT_TELEPORT_X_MAX);
+        let safe_y = if y_max > y_min {
+            lcg_range(&mut s.seed, y_min, y_max)
+        } else {
+            (y_min + y_max) * 0.5
+        };
+
+        s.px = tx;
+        s.py = safe_y;
+        s.space_orbit_locked_planet.clear();
+        s.space_orbit_speed = 0.0;
+
+        let mut out_vx = s.vx;
+        let mut out_vy = s.vy;
+        let speed = (out_vx * out_vx + out_vy * out_vy).sqrt().clamp(8.0, 18.0);
+        let mut best: Option<(f32, f32, f32)> = None;
+        for pid in &s.space_planet_live {
+            let Some(p) = c.get_game_object(pid) else { continue; };
+            if !p.visible {
+                continue;
+            }
+            let pcx = p.position.0 + p.size.0 * 0.5;
+            let pcy = p.position.1 + p.size.1 * 0.5;
+            let dx = pcx - s.px;
+            let dy = pcy - s.py;
+            let d2 = dx * dx + dy * dy;
+            match best {
+                Some((bd2, _, _)) if d2 >= bd2 => {}
+                _ => best = Some((d2, dx, dy)),
+            }
+        }
+        if let Some((_d2, dx, dy)) = best {
+            let mag = (dx * dx + dy * dy).sqrt().max(0.001);
+            out_vx = dx / mag * speed;
+            out_vy = dy / mag * speed;
+            s.vx = out_vx;
+            s.vy = out_vy;
+        }
+
+        let cam_x = tx - VW * 0.5;
+        let cam_y = safe_y - VH * 0.5 - SPACE_CAM_Y_LEAD;
         s.space_cam_y = cam_y;
 
         let marker_spawn = if let Some(mid) = s.space_blackhole_free.pop() {

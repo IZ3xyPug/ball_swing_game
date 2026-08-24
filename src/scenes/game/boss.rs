@@ -767,6 +767,7 @@ fn tick_boss_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if !s.boss_active { return; }
 
     let hp    = s.boss_hp;
+    c.set_var("boss_hp", Value::I32(hp));
     let dirty = hp != s.hud_last_boss_hp;
     if !dirty { return; }
     s.hud_last_boss_hp = hp;

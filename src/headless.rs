@@ -51,6 +51,7 @@ pub struct EpisodeReport {
     pub zone: usize,
     pub boss_entered: bool,
     pub boss_killed: bool,
+    pub boss_hp_seen: i32,
     pub hearts_lost: i64,
     pub hearts_end: i32,
     pub panicked: Option<String>,
@@ -145,18 +146,45 @@ fn observe(c: &Canvas) -> Option<Obs> {
 }
 
 // ── Auto-swing policy ─────────────────────────────────────────────────────────
-// If free, grab the nearest reachable hook. If hooked, let go once we're moving
-// forward fast enough (or after a stall safety). Returns true = hold space.
+// Return (hold-space, target-hook). When free, steer toward the best ahead hook
+// (via mouse-targeted grab) so the bot chains forward instead of oscillating.
+// When hooked, release once we're moving forward fast enough (or after a stall).
 
-fn want_hold(o: &Obs, hooked_ticks: u32) -> bool {
+fn decide(o: &Obs, hooked_ticks: u32, force_fall: bool, frames: u64) -> (bool, Option<(f32, f32)>) {
+    if force_fall && frames >= FALL_TEST_FRAME {
+        // Force a fall so we exercise the heart-loss / respawn path.
+        return (false, None);
+    }
     if o.hooked {
         let speed = (o.vx * o.vx + o.vy * o.vy).sqrt();
         let release = (o.vx > AI_RELEASE_VX && speed > AI_RELEASE_SPEED)
             || hooked_ticks >= AI_FORCE_RELEASE_TICKS;
-        !release
-    } else {
-        !o.hooks.is_empty()
+        return (!release, None);
     }
+    match pick_best_target(o) {
+        Some((hx, hy)) => (true, Some((hx, hy))),
+        None => (false, None),
+    }
+}
+
+/// Pick the hook that best advances the run: within reach, minimising distance
+/// while preferring forward progress (ahead of the player scores lower).
+fn pick_best_target(o: &Obs) -> Option<(f32, f32)> {
+    let mut best: Option<(f32, f32, f32)> = None; // (score, hx, hy)
+    for &(hx, hy) in &o.hooks {
+        let dx = hx - o.px;
+        let dy = hy - o.py;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > AI_REACH {
+            continue;
+        }
+        let forward = dx.max(0.0);
+        let score = dist - forward * 1.5;
+        if best.map_or(true, |(s, _, _)| score < s) {
+            best = Some((score, hx, hy));
+        }
+    }
+    best.map(|(_, hx, hy)| (hx, hy))
 }
 
 // ── Input injection ───────────────────────────────────────────────────────────
@@ -184,6 +212,9 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeRep
     if boss_mode {
         canvas.set_var("boss_mode_active", true);
     }
+    // Use mouse-targeted grabbing so the bot can steer toward ahead hooks
+    // instead of always grabbing the nearest (which causes oscillation).
+    canvas.set_var("grab_from_mouse", true);
 
     // Press space to resume from "HOLD SPACE TO BEGIN" and stay held so the
     // first gameplay frame is a fresh rising edge → immediate first grab.
@@ -200,6 +231,7 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeRep
     let mut coins = 0i32;
     let mut boss_entered = false;
     let mut boss_killed = false;
+    let mut boss_hp_seen = crate::constants::BOSS_MAX_HP;
     let mut death_scene: Option<String> = None;
 
     while frames < max_frames {
@@ -213,10 +245,10 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeRep
             hooked_ticks = 0;
         }
 
-        let mut hold = want_hold(&o, hooked_ticks);
-        if force_fall && frames >= FALL_TEST_FRAME {
-            // Force a fall so we exercise the heart-loss / respawn path.
-            hold = false;
+        let (hold, target) = decide(&o, hooked_ticks, force_fall, frames);
+        if let Some((tx, ty)) = target {
+            canvas.set_var("mouse_grab_x", Value::F32(tx));
+            canvas.set_var("mouse_grab_y", Value::F32(ty));
         }
         if hold != space_held {
             let state = if hold { KeyboardState::Pressed } else { KeyboardState::Released };
@@ -268,6 +300,10 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeRep
         if canvas.get_bool("boss_mode_cleared") {
             boss_killed = true;
         }
+        let bh = get_i32_or(&canvas, "boss_hp", crate::constants::BOSS_MAX_HP);
+        if bh < boss_hp_seen {
+            boss_hp_seen = bh;
+        }
 
         coins = get_i32_or(&canvas, TOTAL_COINS_COLLECTED_VAR, 0);
     }
@@ -289,6 +325,7 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeRep
         zone: zone_for_distance(max_dist),
         boss_entered,
         boss_killed,
+        boss_hp_seen,
         hearts_lost,
         hearts_end,
         panicked: None,
@@ -323,6 +360,7 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool) ->
                 zone: 0,
                 boss_entered: false,
                 boss_killed: false,
+                boss_hp_seen: crate::constants::BOSS_MAX_HP,
                 hearts_lost: 0,
                 hearts_end: 0,
                 panicked: Some(msg),
@@ -359,7 +397,7 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool) ->
 
         // Progress line.
         println!(
-            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}  heartsLost={}  heartsEnd={}",
+            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}  bossHP={}  heartsLost={}  heartsEnd={}",
             episode_idx,
             ep.frames,
             ep.max_dist,
@@ -371,6 +409,7 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool) ->
             ep.space_entered,
             ep.boss_entered,
             ep.boss_killed,
+            ep.boss_hp_seen,
             ep.hearts_lost,
             ep.hearts_end,
         );

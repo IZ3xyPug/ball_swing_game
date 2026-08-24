@@ -834,6 +834,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 player_buff:       0,
                 buff_timer:        0,
                 buff_hit_flash:    0,
+                flare_cooldown:    FLARE_INTERVAL,
+                flare_warn:        0,
+                flare_active:      false,
+                flare_active_ticks: 0,
             };
 
             // Reuse persistent Arc across respawns.
@@ -1877,7 +1881,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // Solar death: set by tick_space_zone when player reaches solar ceiling.
                     let died_to_sun = c.get_bool("died_to_sun");
                     let died_to_oxygen = c.get_bool("died_to_oxygen");
-                    let dead_now = !s.god_mode && (died_to_sun || died_to_oxygen || (s.gravity_dir > 0.0
+                    let dead_now = !s.god_mode && (died_to_sun || died_to_oxygen || s.hearts <= 0
+                        || (s.gravity_dir > 0.0
                         && s.py > VH + 150.0)
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {

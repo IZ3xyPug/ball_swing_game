@@ -22,9 +22,19 @@
 - **Boss darkness telegraph** (`boss.rs`) — periodic dark phase via the quartz
   lighting system (`set_ambient`), telegraphed and cleared on boss kill. No-op
   until `enable_lighting` is on.
+- **Solar flare hazard** (`constants.rs`, `state.rs`, `hearts.rs`, `spawning.rs`) —
+  telegraphed flares on a cooldown; an unshielded player (not within
+  `FLARE_SHIELD_RADIUS` of a gold `shield_node`) loses a heart on eruption.
+  Reaching `hearts <= 0` now ends the run regardless of cause.
+- **Space right-boundary wormhole** (`space_zone.rs`, `constants.rs`) — mirrors
+  the left-boundary rescue teleport on the right side so the special space zone
+  stays bounded (generous `SPACE_RIGHT_BOUNDARY_MARGIN`), preventing a player from
+  drifting into unmapped/boss territory while exploring.
 
-> **Not yet implemented:** solar flares + shielded nodes (Stage 3), and a
-> boss-reach test in the sim (the naive bot doesn't reach the 20 000 px threshold).
+> **Not yet implemented / not validated:** the boss weakpoint *damage* path is not
+> observed in the sim — the naive bot reaches the arena (bossIn) but can't climb
+> to the boss at y = −2500 to land a buffed weakpoint hit, so `bossHP` stays at
+> max. Full validation needs a warped/aggressive bot.
 
 ---
 
@@ -345,3 +355,97 @@ Each is small, reuses existing systems, and validates the thesis early.
 
 Once we decide these, the next step is to implement item 1 (hearts + checkpoint)
 and re-run the headless sim to compare distances/deaths before/after.
+
+---
+
+## 11. Space zone follow-ups (exploration, density, and boss separation)
+
+Follow-up ideas for the regular space zone (reached via the special rocket pads):
+
+- **Large, bounded explorable area.** The right-boundary wormhole (implemented)
+  caps how far right a space player can drift. Tune `SPACE_RIGHT_BOUNDARY_MARGIN`
+  so the zone *feels* enormous (it's currently `VW * 6.0`) while never letting a
+  player drift into unmapped or boss territory. The left boundary already caps the
+  other side. Since space and boss mode are mutually exclusive in code
+  (`tick_boss_zone_entry` returns if `in_space_mode`), a space player can't
+  actually spawn a boss — the boundary is about keeping the explorable region
+  bounded and readable, not hard-enforcing mode separation.
+- **Density vs. ease.** Current space coin gaps are `SPACE_COIN_GAP_MIN/MAX =
+  1400/2600`, with coin spawns largely via formations and planet-guided trails.
+  To avoid "too sparse" without making pickups trivially abundant, bias the drop
+  table toward **formations / guarded trails** (planet-guide red coins, sun-bonus
+  clusters) rather than plain single coins. That keeps density visually rich while
+  making the payout a *positioning* reward (risk), not a freebie. These are
+  constants/weights to tune, not new systems.
+- **Extraction loop** (from §5) remains the core reason to stay: bank vs. greed on
+  oxygen. Oxygen pickups set the "how long do we gamble" dial.
+
+## 12. Last boss — barrier, generators, and the bait-and-bail
+
+This is a strong capstone because it forces the player to *use the arena's worst
+hazard (the sun) against the boss* instead of just avoiding it.
+
+**The arena (an upper-sky space arena):**
+- A **protective barrier** spans the sun-facing edge below the arena. While it's
+  up, neither the player nor the boss can fall into the sun (it also prevents the
+  player's normal fall-death from reaching the kill zone here).
+- **Generators** (say 3) power the barrier, placed around the arena. Each is a
+  small destructible node. The barrier only drops once all are disabled.
+
+**How you break the generators (pick one or mix):**
+- *Dodge & destroy* — swing between generators, breaking them with buffed weakpoint
+  hits, while the boss attacks.
+- *Lure* — draw the boss's telegraphed attack (e.g. its dive/shock) into a
+  generator, so the **boss breaks its own shield**. This teaches reading its
+  patterns and is the more interesting option. Encourage it by making generators
+  take reduced/no damage from the player but full damage from boss attacks.
+
+**The bait-and-bail (final kill):**
+- Once the barrier is down, the boss can be lured toward the sun edge. Its final
+  (or a "desperation") attack is a big telegraph. The player **baits** the boss to
+  aim/commit its attack at the player near the edge, then **swings away at the
+  last second**, letting the boss's own momentum carry it into the sun. This is the
+  high-risk, high-skill finisher and it uses the swing (the game's core) as the
+  "dodge" the boss can't follow.
+
+**Implementation sketch (fits existing `boss.rs`):**
+- Add to `State`: `boss_barrier_up: bool`, `boss_generators: Vec<String>`,
+  `boss_generator_hp: Vec<i32>`, `boss_generator_style: u8`. Reuse the boss
+  arena-clear/repopulate pattern for spawning generators on entry.
+- The sun-kill check in `tick_boss` is bypassed while `boss_barrier_up` is true;
+  the barrier is a platform that clamps the player's `py` above the kill line.
+- A boss "dive" pattern (already plausible from the movement steering) aims at a
+  predicted player position; when the dive lands near a generator, destroy it.
+- The final bait-and-bail: when all generators are down, the boss gets a
+  "desperation" lunge with a long telegraph; landing the player's escape while the
+  boss crosses the now-open sun line triggers the kill.
+
+**DECISION NEEDED**
+- Generators: `2` vs `3`, and whether they take player damage at all.
+- Lure mechanic: is the boss's attack the only way to break a generator, or can
+  the player also break it? (Recommend: player hits do reduced damage, boss attacks
+  do full — so luring is faster and the intended path.)
+- How long the barrier takes to drop and whether the sun becomes "dangerous to the
+  boss but always safe to the player" after a shield-down grace.
+
+## 13. Do space boss battles still need oxygen pickups?
+
+**Recommendation: suspend the oxygen timer during space boss battles.** A boss is a
+focused engagement that already demands dodging, buffing, and aim; layering a
+separate "you must leave or die" timer on top double-punishes and forces the player
+to abandon the fight. Options:
+
+1. **Pause the drain** while `boss_active` in space — simplest and cleanest. Keep
+   the oxygen bar visible but frozen with a "DANGER — OXYGEN SUSPENDED" indicator.
+2. **Provide oxygen pickups inside the arena** if you want resource pressure to
+   persist (raid-style). Place a few around the arena so "extend the fight" is a
+   positioning choice, not a hard deadline.
+3. **Refill on boss entry** (room starts full) — the weakest option; it just
+   converts the timer into a gate and removes tension.
+
+Recommend **option 1** for the first implementation, revisit **option 2** if the
+final boss is meant to be a long, resource-tight gauntlet.
+
+**DECISION NEEDED**
+- Which option (1 vs 2) for space bosses, and whether the normal-space extraction
+  loop (bank vs. greed) should be suspended or paused during a boss.
