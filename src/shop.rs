@@ -1,5 +1,6 @@
 use quartz::*;
-use std::sync::OnceLock;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
 use crate::constants::*;
 use crate::images::*;
 use crate::objects::ui_text_spec;
@@ -552,6 +553,7 @@ pub fn init_shop(canvas: &mut Canvas) {
     canvas.set_var("shop_scroll_held_ticks", 0i32);
     canvas.set_var("shop_screen",            0i32);
     canvas.set_var("shop_active_category",  -1i32);
+    canvas.set_var("shop_preview_angle",     0.0f32);
 
     // Pre-warm caches
     get_card_cache();
@@ -648,6 +650,124 @@ pub fn tick_shop(c: &mut Canvas) {
     } else if offset.abs() > 0.01 {
         c.set_var("shop_slide_offset", 0.0f32);
         update_slot_positions(c, 0.0);
+    }
+}
+
+// ── Live item preview (orbit + trail) ────────────────────────────────────────
+
+/// Centre of the shop preview pane.
+fn preview_center() -> (f32, f32) { (VW * 0.5, 250.0) }
+
+/// Recent ball positions used to draw the trail streak.
+static PREVIEW_TAIL: OnceLock<Mutex<VecDeque<(f32, f32)>>> = OnceLock::new();
+
+fn bg_preview_img(idx: usize) -> Arc<image::RgbaImage> {
+    static CACHE: OnceLock<Vec<Arc<image::RgbaImage>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        (0..SHOP_BG_COLORS.len()).map(|i| {
+            let (r, g, b) = SHOP_BG_COLORS[i];
+            let w = 700u32;
+            let h = 260u32;
+            let mut img = image::RgbaImage::new(w, h);
+            for py in 0..h {
+                let t = py as f32 / h as f32;
+                let rr = (10.0 + (r as f32 - 10.0) * t) as u8;
+                let gg = (18.0 + (g as f32 - 18.0) * t) as u8;
+                let bb = (30.0 + (b as f32 - 30.0) * t) as u8;
+                for px in 0..w {
+                    img.put_pixel(px, py, image::Rgba([rr, gg, bb, 255]));
+                }
+            }
+            Arc::new(img)
+        }).collect()
+    });
+    cache[idx.min(cache.len().saturating_sub(1))].clone()
+}
+
+/// Per-frame shop preview: an orbiting ball with the selected character/trail
+/// colour, plus a background preview for the background category.
+pub fn tick_shop_preview(c: &mut Canvas) {
+    if !matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) { return; }
+    let cat = c.get_i32("shop_active_category");
+    let sel = c.get_i32("shop_selected").max(0) as usize;
+    if c.get_i32("shop_screen") != 1 || cat == 4 {
+        set_visible(c, "shop_preview_panel", false);
+        set_visible(c, "shop_preview_ball", false);
+        set_visible(c, "shop_preview_trail", false);
+        set_visible(c, "shop_preview_bg", false);
+        return;
+    }
+    set_visible(c, "shop_preview_panel", true);
+
+    // Advance the orbit.
+    let angle = c.get_f32("shop_preview_angle") + 0.045;
+    c.set_var("shop_preview_angle", angle);
+    let (pcx, pcy) = preview_center();
+    let orbit_r = 110.0;
+    let bx = pcx + orbit_r * angle.cos();
+    let by = pcy + orbit_r * angle.sin();
+
+    let (ball_rgb, trail_rgb) = match cat {
+        0 => (SHOP_CHARS[sel.min(SHOP_CHARS.len() - 1)], (235, 235, 255)),
+        1 => {
+            let c2 = SHOP_ROPE_COLORS[sel.min(SHOP_ROPE_COLORS.len() - 1)];
+            (c2, c2)
+        }
+        3 => ((235, 235, 235), SHOP_TRAIL_COLORS[sel.min(SHOP_TRAIL_COLORS.len() - 1)]),
+        _ => ((235, 235, 235), (255, 255, 255)),
+    };
+
+    // Orbit ball with the selected colour.
+    if let Some(obj) = c.get_game_object_mut("shop_preview_ball") {
+        let d = 110.0;
+        obj.position = (bx - d * 0.5, by - d * 0.5);
+        obj.set_image(Image {
+            shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+            image: circle_cached((d * 0.5) as u32, ball_rgb.0, ball_rgb.1, ball_rgb.2),
+            color: None,
+        });
+        obj.visible = true;
+    }
+
+    // Tail streak drawn as fading dots.
+    let points = {
+        let tail = PREVIEW_TAIL.get_or_init(|| Mutex::new(VecDeque::new()));
+        let mut t = tail.lock().unwrap();
+        t.push_back((bx, by));
+        while t.len() > 12 {
+            t.pop_front();
+        }
+        t.iter().cloned().collect::<Vec<_>>()
+    };
+    if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
+        let w = 600u32;
+        let h = 300u32;
+        let mut img = image::RgbaImage::new(w, h);
+        for (i, p) in points.iter().enumerate() {
+            let px = ((p.0 - pcx) + w as f32 * 0.5) as i32;
+            let py = ((p.1 - pcy) + h as f32 * 0.5) as i32;
+            let alpha = (55.0 + i as f32 / points.len().max(1) as f32 * 200.0) as u8;
+            let half = 4u32;
+            draw_rect(&mut img, (px - half as i32).max(0) as u32, (py - half as i32).max(0) as u32,
+                half * 2, half * 2, [trail_rgb.0, trail_rgb.1, trail_rgb.2, alpha]);
+        }
+        obj.position = (pcx - w as f32 * 0.5, pcy - h as f32 * 0.5);
+        obj.size = (w as f32, h as f32);
+        obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None });
+        obj.visible = true;
+    }
+
+    // Background category: show a scaled background preview.
+    if cat == 2 {
+        set_visible(c, "shop_preview_bg", true);
+        if let Some(obj) = c.get_game_object_mut("shop_preview_bg") {
+            let (bw, bh) = (700.0, 260.0);
+            obj.size = (bw, bh);
+            obj.position = (pcx - bw * 0.5, pcy - bh * 0.5);
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: bg_preview_img(sel), color: None });
+        }
+    } else {
+        set_visible(c, "shop_preview_bg", false);
     }
 }
 
@@ -761,6 +881,41 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         .with_object("shop_select_text", select_text_obj)
         .with_object("shop_back_btn",    back_btn)
         .with_object("shop_back_text",   back_text_obj);
+
+    // ── Live item preview (orbit ball + trail + background preview) ─────────
+    {
+        let (pcx, pcy) = preview_center();
+        let panel_w = 1300.0f32;
+        let panel_h = 300.0f32;
+        let mut preview_panel = GameObject::new_rect(ctx, "shop_preview_panel".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (panel_w, panel_h), 0.0), image: solid(16, 28, 46, 205).into(), color: None }),
+            (panel_w, panel_h), (pcx - panel_w * 0.5, pcy - panel_h * 0.5),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        preview_panel.visible = false;
+
+        let bd = 110.0f32;
+        let mut preview_ball = GameObject::new_rect(ctx, "shop_preview_ball".into(),
+            Some(Image { shape: ShapeType::Ellipse(0.0, (bd, bd), 0.0), image: circle_cached((bd * 0.5) as u32, 235, 235, 235), color: None }),
+            (bd, bd), (pcx - bd * 0.5, pcy - bd * 0.5),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        preview_ball.visible = false;
+
+        let mut preview_trail = GameObject::new_rect(ctx, "shop_preview_trail".into(),
+            None::<Image>, (600.0, 300.0), (pcx - 300.0, pcy - 150.0),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        preview_trail.visible = false;
+
+        let mut preview_bg = GameObject::new_rect(ctx, "shop_preview_bg".into(),
+            None::<Image>, (700.0, 260.0), (pcx - 350.0, pcy - 130.0),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        preview_bg.visible = false;
+
+        scene = scene
+            .with_object("shop_preview_panel", preview_panel)
+            .with_object("shop_preview_ball",  preview_ball)
+            .with_object("shop_preview_trail", preview_trail)
+            .with_object("shop_preview_bg",    preview_bg);
+    }
 
     for s in 0..NUM_SLOTS {
         let char_idx = slot_char(0, s);

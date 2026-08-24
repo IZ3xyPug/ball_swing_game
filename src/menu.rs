@@ -766,6 +766,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     // ── Shop carousel tick ──────────────────────────────
                     if c.get_bool("menu_in_shop") {
                         shop::tick_shop(c);
+                        shop::tick_shop_preview(c);
                     }
 
                     // ── Menu BGM alternation ───────────────────────────
