@@ -26,10 +26,11 @@ fn gwellon_template() -> AnimatedSprite {
 }
 
 /// Returns animation duration in ticks, scaled down at higher player speeds.
-/// Base: SPAWN_ANIM_TICKS at normal pace. Halves at MOMENTUM_CAP.
+/// Base: SPAWN_ANIM_TICKS at normal pace. Halves at `cap` (the player's max
+/// momentum — which buffs/upgrades can raise above MOMENTUM_CAP).
 #[inline]
-fn spawn_anim_ticks_for_speed(vx: f32) -> u32 {
-    let speed_t = (vx.abs() / MOMENTUM_CAP).min(1.0);
+fn spawn_anim_ticks_for_speed(vx: f32, cap: f32) -> u32 {
+    let speed_t = (vx.abs() / cap.max(1.0)).min(1.0);
     // Lerp from SPAWN_ANIM_TICKS down to SPAWN_ANIM_TICKS/2 as speed goes 0→cap.
     let ticks = SPAWN_ANIM_TICKS as f32 * (1.0 - speed_t * 0.5);
     (ticks as u32).max(10)
@@ -65,7 +66,8 @@ pub fn tick_spawn_animations(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Speed adds a small extra lookahead on top so fast players stay ahead.
     let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.1);
     let visible_half_w = (VW as f32 * 0.5) / zoom;
-    let speed_t = (s.vx.abs() / MOMENTUM_CAP).min(1.0);
+    let cap = crate::gameplay::player_max_momentum(&s);
+    let speed_t = (s.vx.abs() / cap.max(1.0)).min(1.0);
     let trigger_ahead = visible_half_w + VW as f32 * speed_t * 0.3;
     let trigger_x = s.px + trigger_ahead;
     for anim in s.spawn_animations.iter_mut() {
@@ -636,7 +638,7 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             };
             (ty, ty - SPAWN_ANIM_DROP)      // enter from above screen
         };
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         s.spawn_animations.push(SpawnAnim {
             id: id.clone(),
             target_x, target_y,
@@ -797,7 +799,7 @@ fn spawn_pads(
 
         // Drop-in animation: pad sweeps in from above (normal) or below (flipped).
         let start_rot = lcg_range(&mut s.seed, -40.0, 40.0);
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         let drop_sign: f32 = if s.gravity_dir < 0.0 { -1.0 } else { 1.0 };
         s.spawn_animations.push(SpawnAnim {
             id: id.clone(),
@@ -875,7 +877,7 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         // Drop-in animation: spinner falls in from above while spinning.
         let start_rot = lcg_range(&mut s.seed, -120.0, 120.0);
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         s.spawn_animations.push(SpawnAnim {
             id: id.clone(),
             target_x: x, target_y: y,
@@ -1095,7 +1097,7 @@ fn spawn_flips(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let y = if s.gravity_dir < 0.0 { VH - raw_y - FLIP_H } else { raw_y };
         let Some(id) = s.flip_free.pop() else { break; };
         s.flip_live.push(id.clone()); s.flip_rightmost = x; spawned += 1;
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
         s.spawn_animations.push(SpawnAnim { id: id.clone(), target_x: x, target_y: y, start_y: y - SPAWN_ANIM_DROP, start_rot, target_rot: 0.0, elapsed: 0, total: anim_ticks, restore_platform: false, started: false, restore_rotation_momentum: 0.0 });
         drop(s);
@@ -1117,7 +1119,7 @@ fn spawn_score_x2(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let y = if s.gravity_dir < 0.0 { VH - raw_y - SCORE_X2_H } else { raw_y };
         let Some(id) = s.score_x2_free.pop() else { break; };
         s.score_x2_live.push(id.clone()); s.score_x2_rightmost = x; spawned += 1;
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
         s.spawn_animations.push(SpawnAnim { id: id.clone(), target_x: x, target_y: y, start_y: y - SPAWN_ANIM_DROP, start_rot, target_rot: 0.0, elapsed: 0, total: anim_ticks, restore_platform: false, started: false, restore_rotation_momentum: 0.0 });
         drop(s);
@@ -1139,7 +1141,7 @@ fn spawn_zero_g(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let y = if s.gravity_dir < 0.0 { VH - raw_y - ZERO_G_H } else { raw_y };
         let Some(id) = s.zero_g_free.pop() else { break; };
         s.zero_g_live.push(id.clone()); s.zero_g_rightmost = x; spawned += 1;
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         let start_rot = lcg_range(&mut s.seed, -60.0, 60.0);
         s.spawn_animations.push(SpawnAnim { id: id.clone(), target_x: x, target_y: y, start_y: y - SPAWN_ANIM_DROP, start_rot, target_rot: 0.0, elapsed: 0, total: anim_ticks, restore_platform: false, started: false, restore_rotation_momentum: 0.0 });
         drop(s);
@@ -1286,7 +1288,7 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.gwell_rightmost = x;
         s.gwell_timers.push((id.clone(), GWELL_ON_TICKS, true)); // starts active
         spawned += 1;
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         let start_rot = lcg_range(&mut s.seed, -90.0, 90.0);
         s.spawn_animations.push(SpawnAnim {
             id: id.clone(),
@@ -1333,7 +1335,7 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.turret_rightmost = x;
         s.turret_timers.push((id.clone(), TURRET_SHOOT_INTERVAL_FAST));
         spawned += 1;
-        let anim_ticks = spawn_anim_ticks_for_speed(s.vx);
+        let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         let start_rot = lcg_range(&mut s.seed, -90.0, 90.0);
         let half = TURRET_FULL_SIZE * 0.5;
         s.spawn_animations.push(SpawnAnim {

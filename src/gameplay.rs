@@ -1,6 +1,19 @@
 use crate::constants::*;
 use crate::state::State;
 
+/// The player's current maximum momentum cap, accounting for the momentum-cap
+/// upgrade and the buff tether node (both can raise it above MOMENTUM_CAP).
+/// Used to scale spawn-animation speed / lookahead so fast players don't
+/// outpace procedural generation.
+pub fn player_max_momentum(s: &State) -> f32 {
+    if s.in_space_mode {
+        SPACE_MOMENTUM_CAP
+    } else if s.buff_timer > 0 || s.upgrade_momentum_bonus {
+        BUFF_MOMENTUM_CAP.max(UPGRADE_MOMENTUM_CAP)
+    } else {
+        MOMENTUM_CAP
+    }
+}
 pub fn zone_index_for_distance(distance: f32) -> usize {
     ((distance / ZONE_DISTANCE_STEP) as usize).min(2)
 }
