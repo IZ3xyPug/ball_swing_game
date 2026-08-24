@@ -15,6 +15,7 @@ mod objects;
 mod menu;
 mod scenes;
 mod shop;
+pub mod headless;
 
 #[cfg(test)]
 mod sim_tests;

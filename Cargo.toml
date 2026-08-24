@@ -25,6 +25,10 @@ tokio = { version = "1.43.0", features = ["rt-multi-thread", "sync", "time", "ne
 name="main"
 crate-type=["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "headless"
+path = "src/bin/headless.rs"
+
 [package.metadata.android]
 package = "com.orange.pkg"
 build_targets = [ "aarch64-linux-android", "armv7-linux-androideabi" ]
