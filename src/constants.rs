@@ -4,9 +4,9 @@ pub const VW: f32 = 3840.0;
 pub const VH: f32 = 2160.0;
 
 // ── Physics ───────────────────────────────────────────────────────────────────
-pub const GRAVITY:        f32 = 0.9;
-pub const SWING_TENSION:  f32 = 1.08;
-pub const MOMENTUM_CAP:   f32 = 56.0;
+pub const GRAVITY:        f32 = 0.82;
+pub const SWING_TENSION:  f32 = 1.06;
+pub const MOMENTUM_CAP:   f32 = 50.0;
 pub const ROPE_LEN_MIN:   f32 = 200.0;
 pub const ROPE_LEN_MAX:   f32 = 720.0;
 pub const SWING_DRAG:     f32 = 0.999;
@@ -24,7 +24,7 @@ pub const SPECIAL_HOOK_CAP_WINDOW_TICKS: i32 = 84;
 pub const RELEASE_MIN_SWING_SPEED: f32 = 3.2;
 pub const RELEASE_SURGE_SCALE: f32 = 0.42;
 pub const RELEASE_SURGE_MAX: f32 = 14.0;
-pub const RELEASE_VERTICAL_BOOST: f32 = 1.42;
+pub const RELEASE_VERTICAL_BOOST: f32 = 1.50;
 
 // ── Object sizes ──────────────────────────────────────────────────────────────
 pub const PLAYER_R:       f32 = 58.0;
@@ -142,10 +142,10 @@ pub const PAD_BELOW_HOOK_Y_GAP: f32 = 400.0;
 pub const PAD_Y_MIN: f32 = HOOK_Y_MAX + 150.0; // ≈ 1200.0
 
 /// Fixed upward velocity applied when the player hits a bounce pad.
-pub const PAD_BOUNCE_VY: f32 = -104.0;
+pub const PAD_BOUNCE_VY: f32 = -88.0;
 
 /// Restitution (bounciness) applied when a space asteroid hits a bounce pad.
-pub const PAD_ASTEROID_RESTITUTION: f32 = 0.75;
+pub const PAD_ASTEROID_RESTITUTION: f32 = 0.62;
 
 /// How far a moving pad travels from its origin (px). 0 = static.
 pub const PAD_MOVE_RANGE: f32 = 250.0;
