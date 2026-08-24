@@ -357,7 +357,13 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
             c.set_var("special_hook_boost_ticks", special_hook_ticks - 1);
         } else {
-            let cap = if s.in_space_mode { SPACE_MOMENTUM_CAP } else { MOMENTUM_CAP };
+            let cap = if s.in_space_mode {
+                SPACE_MOMENTUM_CAP
+            } else if s.buff_timer > 0 {
+                BUFF_MOMENTUM_CAP
+            } else {
+                MOMENTUM_CAP
+            };
             let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
             if speed > cap {
                 s.vx = s.vx / speed * cap;

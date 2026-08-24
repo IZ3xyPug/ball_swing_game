@@ -356,6 +356,12 @@ pub struct State {
     pub boss_bolt_free: Vec<String>,
     pub boss_asteroids: Vec<String>, // decorative asteroids in the arena
     pub hud_last_boss_hp: i32,
+    /// Ticks until the next darkness attack (cooldown).
+    pub boss_dark_cooldown: u32,
+    /// Remaining ticks of the current darkness phase.
+    pub boss_dark_ticks: u32,
+    /// True while a darkness phase is active.
+    pub boss_dark_active: bool,
 
     // ── Comets ────────────────────────────────────────────────────────────────
     /// Live comets: (id, vx, vy, ticks_remaining)
@@ -366,4 +372,25 @@ pub struct State {
     pub warn_free: Vec<String>,
     /// Countdown to next auto-comet spawn attempt (ticks).
     pub comet_spawn_timer: u32,
+
+    // ── Hearts / checkpoint respawn ───────────────────────────────────────────
+    /// Hearts remaining this run. Falling costs one; zero ends the run.
+    pub hearts: i32,
+    /// Hearts a fresh run starts with.
+    pub max_hearts: i32,
+    /// Last auto-progress checkpoint (a grab-node centre).
+    pub checkpoint_x: f32,
+    pub checkpoint_y: f32,
+    /// Block index the checkpoint was saved for (floor(px / CHECKPOINT_INTERVAL)).
+    pub checkpoint_block: i32,
+    /// True while the player is in a respawn orbit-in.
+    pub respawn_active: bool,
+    /// Ticks since respawn started (drives the prompt / wait).
+    pub respawn_ticks: u32,
+    /// Active buff type from a buff tether node (0 = none).
+    pub player_buff: u8,
+    /// Remaining ticks of the current buff.
+    pub buff_timer: u32,
+    /// True for a short window right after a buffed weakpoint hit (hit feedback).
+    pub buff_hit_flash: u32,
 }

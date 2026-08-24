@@ -1,10 +1,30 @@
 # Ball Swing — Design & Implementation Plan
 
-> Status: **draft for review.** This document records what the headless sim told us
+> Status: **active build.** This document records what the headless sim told us
 > about the current loop, then lays out — concretely, against the existing code —
 > how to implement the hearts/boss/buff/space/hazard/roguelike/monetization ideas
-> we discussed. It is a **plan, not code**: before we implement anything we should
-> refine and decide the specifics flagged as **DECISION NEEDED**.
+> we discussed. Specifics flagged as **DECISION NEEDED** still need a human call.
+
+## Implemented so far (validated via headless)
+
+- **Hearts + checkpoint respawn** (`src/scenes/game/hearts.rs`, `state.rs`,
+  `build_scene.rs`, `bootstrap.rs`, `images.rs`) — `MAX_HEARTS = 3`. Falls cost a
+  heart; the first two respawn at the last auto-progress checkpoint (orbit-in),
+  the third ends the run. Headless: 3 heart losses then `death=fall`, `heartsEnd=0`.
+- **Buff tether nodes** (`constants.rs`, `spawning.rs`, `events.rs`, `physics.rs`,
+  `hearts.rs`) — ~5% of spawned hooks are cyan `buff_node`s; grabbing one grants a
+  10 s buff that raises the momentum cap to `BUFF_MOMENTUM_CAP = 84` and enables
+  boss weakpoint damage.
+- **Boss contact inversion + weakpoints** (`boss.rs`, `constants.rs`) — body
+  contact no longer damages the boss. A buffed hit near a weakpoint
+  (`BOSS_WEAKPOINT_OFFSETS`) does damage; unprotected contact knocks the player
+  back and unhooks the tether.
+- **Boss darkness telegraph** (`boss.rs`) — periodic dark phase via the quartz
+  lighting system (`set_ambient`), telegraphed and cleared on boss kill. No-op
+  until `enable_lighting` is on.
+
+> **Not yet implemented:** solar flares + shielded nodes (Stage 3), and a
+> boss-reach test in the sim (the naive bot doesn't reach the 20 000 px threshold).
 
 ---
 

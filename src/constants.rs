@@ -511,6 +511,22 @@ pub const BOSS_HP_BAR_H:         f32   = 50.0;
 pub const BOSS_GRAVITY_SCALE:    f32   = 0.42;
 /// Number of decorative asteroid GIFs placed around the boss arena.
 pub const BOSS_ASTEROID_COUNT:   usize = 16; // 4 cols × 4 rows
+/// Radius within which a hit counts as on a weakpoint.
+pub const BOSS_WEAKPOINT_R:      f32   = 130.0;
+/// Weakpoint offsets (from boss centre): top, right, bottom, left.
+/// A buffed hit near one of these damages the boss.
+pub const BOSS_WEAKPOINT_OFFSETS: [(f32, f32); 4] = [
+    (0.0,           -BOSS_SIZE * 0.36),
+    ( BOSS_SIZE * 0.36, 0.0),
+    (0.0,            BOSS_SIZE * 0.36),
+    (-BOSS_SIZE * 0.36, 0.0),
+];
+/// Ticks between boss darkness attacks.
+pub const BOSS_DARK_INTERVAL:    u32   = 600;  // 10 s
+/// Ticks a darkness phase lasts.
+pub const BOSS_DARK_DURATION:    u32   = 180;  // 3 s
+/// Ticks of warning before darkness strikes.
+pub const BOSS_DARK_TELEGRAPH:   u32   = 60;   // 1 s
 // Movement pattern speeds for lissajous figure-8
 pub const BOSS_PHASE_X_SPEED:    f32   = 0.024;    // radians per tick (horizontal sweep)
 pub const BOSS_PHASE_Y_SPEED:    f32   = 0.048;    // radians per tick (vertical — 2× for figure-8)
@@ -569,6 +585,37 @@ pub const PASSIVE_SCORE_BLOCK_SIZE:  f32 = 5000.0;
 /// Ticks of continuous presence (unpaused) before a block is marked dead.
 /// 720 ticks = 12 seconds at 60 fps.
 pub const PASSIVE_SCORE_DEAD_TICKS:  u32 = 720;
+
+// ── Hearts / Checkpoint respawn ─────────────────────────────────────────────
+/// Hearts a run starts with. Each fall costs one; zero ends the run.
+pub const MAX_HEARTS: i32 = 3;
+/// Distance (px) between auto-progress checkpoints. Each completed block saves
+/// the nearest grab node as the respawn point.
+pub const CHECKPOINT_INTERVAL: f32 = 5000.0;
+/// Orbital radius for the respawn "come back in" animation.
+pub const RESPAWN_ORBIT_R: f32 = 240.0;
+/// Heart HUD geometry.
+pub const HEART_W: f32 = 96.0;
+pub const HEART_H: f32 = 88.0;
+pub const HEART_GAP: f32 = 30.0;
+pub const HEART_HUD_X: f32 = 40.0;
+pub const HEART_HUD_Y: f32 = 40.0;
+pub const C_HEART_FULL:  (u8, u8, u8) = (240,  70,  80);
+pub const C_HEART_EMPTY: (u8, u8, u8) = ( 60,  34,  38);
+
+// ── Buff tether nodes ────────────────────────────────────────────────────────
+/// Probability that a freshly-spawned grab node is a buff tether node.
+pub const BUFF_HOOK_SPAWN_CHANCE: f32 = 0.05;
+/// Minimum X distance between consecutive buff nodes (keeps them sparse).
+pub const BUFF_HOOK_MIN_X_GAP: f32 = 6000.0;
+/// Tag on buff tether nodes.
+pub const BUFF_HOOK_TAG: &str = "buff_node";
+/// How long a buff lasts (ticks). 600 = 10 s at 60 fps.
+pub const BUFF_DURATION_TICKS: u32 = 600;
+/// Momentum cap granted while a buff is active (above the normal 56).
+pub const BUFF_MOMENTUM_CAP: f32 = 84.0;
+/// Buff node base colour (cyan — placeholder).
+pub const C_BUFF_HOOK: (u8, u8, u8) = (110, 230, 255);
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 650;

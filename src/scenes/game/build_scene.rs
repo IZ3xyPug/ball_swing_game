@@ -816,11 +816,24 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_vy:           0.0, boss_shoot_timer:  crate::constants::BOSS_SHOOT_INTERVAL,
                 boss_bolt_live:    Vec::new(), boss_bolt_free:    boss_bolt_free.clone(),
                 boss_asteroids:    boss_asteroid_ids.clone(), hud_last_boss_hp:  -999,
+                boss_dark_cooldown: BOSS_DARK_INTERVAL, boss_dark_ticks: 0,
+                boss_dark_active:   false,
 
                 comet_live:        Vec::new(), comet_free:        comet_free.clone(),
 
                 comet_warn_live:   Vec::new(), warn_free:         warn_free.clone(),
                 comet_spawn_timer: COMET_SPAWN_INTERVAL,
+
+                hearts:            crate::constants::MAX_HEARTS,
+                max_hearts:        crate::constants::MAX_HEARTS,
+                checkpoint_x:      start_hook.0,
+                checkpoint_y:      start_hook.1,
+                checkpoint_block:  0,
+                respawn_active:    false,
+                respawn_ticks:     0,
+                player_buff:       0,
+                buff_timer:        0,
+                buff_hit_flash:    0,
             };
 
             // Reuse persistent Arc across respawns.
@@ -989,6 +1002,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // Reset solar death flag and ceiling visibility for fresh run.
             canvas.set_var("died_to_sun", false);
             canvas.set_var("died_to_oxygen", false);
+            canvas.set_var("heart_losses", 0i32);
             if let Some(obj) = canvas.get_game_object_mut("solar_ceiling") {
                 obj.visible = false;
             }
@@ -1358,6 +1372,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             return;
                         }
                     }
+
+                    // ── Hearts / checkpoint bookkeeping ──────────────────
+                    super::hearts::tick_hearts(c, &st);
 
                     // ── Camera-anchored UI ───────────────────────────────
                     let cam_x = c
@@ -1864,6 +1881,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         && s.py > VH + 150.0)
                         || (s.gravity_dir < 0.0 && s.py < -150.0));
                     if dead_now {
+                        // ── Falls can be survived with hearts remaining ──
+                        let is_fall = !died_to_sun && !died_to_oxygen;
+                        if is_fall {
+                            drop(s);
+                            let over = super::hearts::lose_heart(c, &st);
+                            if !over {
+                                // Respawn at the last auto-progress checkpoint.
+                                super::hearts::respawn(c, &st);
+                                return;
+                            }
+                            // Last heart spent → fall through to game over.
+                            s = st.lock().unwrap();
+                        }
+
                         c.set_var("last_distance", s.distance);
                         c.set_var("last_score", s.score as i32);
                         c.set_var("last_coins", s.coin_count as i32);

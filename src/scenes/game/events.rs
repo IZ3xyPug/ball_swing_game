@@ -195,6 +195,19 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             if is_special_hook {
                 c.set_var("special_hook_boost_ticks", SPECIAL_HOOK_CAP_WINDOW_TICKS);
             }
+            // Buff tether node: grant a timed damage/momentum buff.
+            if let Some(obj) = c.get_game_object(&hook_id) {
+                if obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) {
+                    let mut s = st.lock().unwrap();
+                    s.player_buff = 1;
+                    s.buff_timer = BUFF_DURATION_TICKS;
+                    s.buff_hit_flash = 0;
+                    drop(s);
+                    if let Some(p) = c.get_game_object_mut("player") {
+                        p.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 22.0 });
+                    }
+                }
+            }
             if let Some((ticks, anim_id)) = artifact_grab_info {
                 c.set_var("hook_artifact_play_ticks", ticks);
                 c.set_var("hook_artifact_anim_id", anim_id);

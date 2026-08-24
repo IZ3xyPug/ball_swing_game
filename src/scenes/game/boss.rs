@@ -14,10 +14,42 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_movement(c, st);
     tick_boss_asteroid_drift(c, st);
     tick_boss_shooting(c, st);
+    tick_boss_darkness(c, st);
     tick_boss_bolts(c, st);
     tick_boss_bolt_player_collision(c, st);
     tick_boss_player_hits_boss(c, st);
     tick_boss_hud(c, st);
+}
+
+// ── Boss darkness attack (uses the quartz lighting system) ───────────────────
+
+fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active || !s.boss_spawned || s.boss_hp <= 0 { return; }
+
+    if s.boss_dark_active {
+        s.boss_dark_ticks = s.boss_dark_ticks.saturating_sub(1);
+        if s.boss_dark_ticks == 0 {
+            s.boss_dark_active = false;
+            s.boss_dark_cooldown = BOSS_DARK_INTERVAL;
+            drop(s);
+            c.set_var("boss_darkness", false);
+            if c.has_lighting() {
+                c.set_ambient(Color(255, 255, 255, 255), 1.0);
+            }
+        }
+    } else {
+        s.boss_dark_cooldown = s.boss_dark_cooldown.saturating_sub(1);
+        if s.boss_dark_cooldown == 0 {
+            s.boss_dark_active = true;
+            s.boss_dark_ticks = BOSS_DARK_DURATION;
+            drop(s);
+            c.set_var("boss_darkness", true);
+            if c.has_lighting() {
+                c.set_ambient(Color(10, 10, 25, 255), 0.06);
+            }
+        }
+    }
 }
 
 // ── Zone entry + arena clear ──────────────────────────────────────────────────
@@ -598,21 +630,51 @@ fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dy = py - bcy;
     if dx * dx + dy * dy >= hit_r * hit_r { return; }
 
-    s.boss_hp -= 1;
+    // ── Buffed weakpoint hit damages the boss; unprotected body contact ─────
+    // knocks the player back and disconnects the tether (no boss damage).
+    let buffed = s.player_buff > 0;
+    let near_weakpoint = BOSS_WEAKPOINT_OFFSETS.iter().any(|(wx, wy)| {
+        let wx = bcx + wx;
+        let wy = bcy + wy;
+        let ddx = px - wx;
+        let ddy = py - wy;
+        ddx * ddx + ddy * ddy < BOSS_WEAKPOINT_R * BOSS_WEAKPOINT_R
+    });
 
     let len = (dx * dx + dy * dy).sqrt().max(1.0);
     let nx = dx / len;
     let ny = dy / len;
-    s.vx = nx * 22.0;
-    s.vy = ny * 22.0;
+
+    let (nwx, nwy, did_unhook) = if buffed && near_weakpoint {
+        // Buffed weakpoint hit: damage the boss and launch the player away.
+        s.boss_hp -= 1;
+        s.buff_hit_flash = 20;
+        (nx * 26.0, ny * 26.0, false)
+    } else {
+        // Unprotected contact: hard knockback + tether disconnect.
+        let unhook = s.hooked;
+        if unhook {
+            s.hooked = false;
+            s.active_hook = String::new();
+        }
+        (nx * 34.0, ny * 34.0, unhook)
+    };
+    s.vx = nwx;
+    s.vy = nwy;
 
     let hp = s.boss_hp;
     let asteroid_ids = s.boss_asteroids.clone();
     drop(s);
 
     if let Some(obj) = c.get_game_object_mut("player") {
-        obj.momentum.0 = nx * 22.0;
-        obj.momentum.1 = ny * 22.0;
+        obj.momentum.0 = nwx;
+        obj.momentum.1 = nwy;
+    }
+    if did_unhook {
+        c.run(Action::Hide { target: Target::name("rope") });
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.gravity = GRAVITY * BOSS_GRAVITY_SCALE;
+        }
     }
 
     if hp <= 0 {
@@ -653,6 +715,9 @@ fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s2.boss_cleared = false;
         s2.boss_entry_ticks = 0;
         s2.boss_shoot_timer = BOSS_SHOOT_INTERVAL;
+        s2.boss_dark_active = false;
+        s2.boss_dark_ticks = 0;
+        s2.boss_dark_cooldown = BOSS_DARK_INTERVAL;
 
         // Rewind spawn frontiers behind the player so content repopulates now,
         // not only after travelling far past old rightmost markers.

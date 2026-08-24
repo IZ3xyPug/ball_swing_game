@@ -35,6 +35,8 @@ const AI_RELEASE_VX: f32 = 14.0;
 const AI_RELEASE_SPEED: f32 = 26.0;
 /// If hooked longer than this without meeting the release condition, let go.
 const AI_FORCE_RELEASE_TICKS: u32 = 100;
+/// Frames to play normally before forcing a fall in `--fall-test` mode.
+const FALL_TEST_FRAME: u64 = 200;
 
 #[derive(Debug, Clone)]
 pub struct EpisodeReport {
@@ -49,6 +51,8 @@ pub struct EpisodeReport {
     pub zone: usize,
     pub boss_entered: bool,
     pub boss_killed: bool,
+    pub hearts_lost: i64,
+    pub hearts_end: i32,
     pub panicked: Option<String>,
 }
 
@@ -67,6 +71,8 @@ pub struct AggregateReport {
     pub max_zone: usize,
     pub boss_entries: u64,
     pub boss_kills: u64,
+    pub total_hearts_lost: i64,
+    pub final_hearts_sum: i32,
     pub death_scene_histogram: std::collections::HashMap<String, u64>,
 }
 
@@ -170,7 +176,7 @@ fn zone_for_distance(d: f32) -> usize {
 
 // ── Episode runner ────────────────────────────────────────────────────────────
 
-fn run_episode(max_frames: u64, boss_mode: bool) -> EpisodeReport {
+fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeReport {
     let (mut ctx, _recv) = prism::Context::new();
     let mut canvas = build_canvas(&mut ctx);
     let sized = SizedTree::default();
@@ -207,7 +213,11 @@ fn run_episode(max_frames: u64, boss_mode: bool) -> EpisodeReport {
             hooked_ticks = 0;
         }
 
-        let hold = want_hold(&o, hooked_ticks);
+        let mut hold = want_hold(&o, hooked_ticks);
+        if force_fall && frames >= FALL_TEST_FRAME {
+            // Force a fall so we exercise the heart-loss / respawn path.
+            hold = false;
+        }
         if hold != space_held {
             let state = if hold { KeyboardState::Pressed } else { KeyboardState::Released };
             send_key(&mut ctx, &mut canvas, &sized, state);
@@ -218,6 +228,19 @@ fn run_episode(max_frames: u64, boss_mode: bool) -> EpisodeReport {
         OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
 
         frames += 1;
+
+        // Detect death BEFORE observing — the player object is removed on a
+        // scene switch, so observe() would return None and mask the death.
+        if canvas.is_scene("gameover_sun") {
+            death_scene = Some("sun".to_string());
+            break;
+        } else if canvas.is_scene("gameover_oxygen") {
+            death_scene = Some("oxygen".to_string());
+            break;
+        } else if canvas.is_scene("gameover") {
+            death_scene = Some("fall".to_string());
+            break;
+        }
 
         // Post-frame observation.
         let Some(o) = observe(&canvas) else { break; };
@@ -247,21 +270,12 @@ fn run_episode(max_frames: u64, boss_mode: bool) -> EpisodeReport {
         }
 
         coins = get_i32_or(&canvas, TOTAL_COINS_COLLECTED_VAR, 0);
-
-        if canvas.is_scene("gameover_sun") {
-            death_scene = Some("sun".to_string());
-            break;
-        } else if canvas.is_scene("gameover_oxygen") {
-            death_scene = Some("oxygen".to_string());
-            break;
-        } else if canvas.is_scene("gameover") {
-            death_scene = Some("fall".to_string());
-            break;
-        }
     }
 
     let final_o = observe(&canvas);
     let final_dist = final_o.map(|o| (o.px - SPAWN_X).max(0.0)).unwrap_or(max_dist);
+    let hearts_lost = get_i32_or(&canvas, "heart_losses", 0) as i64;
+    let hearts_end = get_i32_or(&canvas, "hearts", MAX_HEARTS);
 
     EpisodeReport {
         frames,
@@ -275,17 +289,19 @@ fn run_episode(max_frames: u64, boss_mode: bool) -> EpisodeReport {
         zone: zone_for_distance(max_dist),
         boss_entered,
         boss_killed,
+        hearts_lost,
+        hearts_end,
         panicked: None,
     }
 }
 
 /// Run several episodes (each boots a fresh canvas) and aggregate.
-pub fn run(episodes: u64, max_frames: u64, boss_mode: bool) -> AggregateReport {
+pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool) -> AggregateReport {
     let mut agg = AggregateReport::default();
     let mut episode_idx = 0u64;
     while episode_idx < episodes {
         let ep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_episode(max_frames, boss_mode)
+            run_episode(max_frames, boss_mode, force_fall)
         }))
         .unwrap_or_else(|e| {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -307,6 +323,8 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool) -> AggregateReport {
                 zone: 0,
                 boss_entered: false,
                 boss_killed: false,
+                hearts_lost: 0,
+                hearts_end: 0,
                 panicked: Some(msg),
             }
         });
@@ -335,11 +353,13 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool) -> AggregateReport {
         if ep.boss_killed {
             agg.boss_kills += 1;
         }
+        agg.total_hearts_lost += ep.hearts_lost;
+        agg.final_hearts_sum += ep.hearts_end;
         agg.max_zone = agg.max_zone.max(ep.zone);
 
         // Progress line.
         println!(
-            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}",
+            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}  heartsLost={}  heartsEnd={}",
             episode_idx,
             ep.frames,
             ep.max_dist,
@@ -351,6 +371,8 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool) -> AggregateReport {
             ep.space_entered,
             ep.boss_entered,
             ep.boss_killed,
+            ep.hearts_lost,
+            ep.hearts_end,
         );
 
         episode_idx += 1;

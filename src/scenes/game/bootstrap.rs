@@ -386,6 +386,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     let coin_counter      = hud_obj(ctx, "coin_counter",      640.0, 168.0, 26.0,       24.0,  Some(rect_img(640.0, 168.0, coin_counter_img(0))));
     let score_counter     = hud_obj(ctx, "score_counter",     420.0,  98.0, VW - 450.0, 40.0,  Some(rect_img(420.0,  98.0, score_counter_img(0))));
+    let hearts_total_w    = HEART_W * MAX_HEARTS as f32 + HEART_GAP * (MAX_HEARTS as f32 - 1.0);
+    let hearts_hud        = hud_obj(ctx, "hearts_hud", hearts_total_w, HEART_H, HEART_HUD_X, HEART_HUD_Y,
+        Some(rect_img(hearts_total_w, HEART_H, hearts_img(MAX_HEARTS as u32, MAX_HEARTS as u32))));
     let momentum_counter  = hud_obj(ctx, "momentum_counter",  420.0,  86.0, 30.0,       150.0, Some(rect_img(420.0,  86.0, momentum_counter_img(0.0))));
     let gravity_indicator = hud_obj(ctx, "gravity_indicator", 308.0,  84.0, 30.0,       248.0, Some(rect_img(308.0,  84.0, gravity_indicator_img(false, true))));
     let y_meter           = hud_obj(ctx, "y_meter",           420.0,  86.0, 30.0,       344.0, Some(rect_img(420.0,  86.0, y_counter_img(SPAWN_Y))));
@@ -550,6 +553,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("dist_bar",     dist_bar)
         .with_object("coin_counter", coin_counter)
         .with_object("score_counter", score_counter)
+        .with_object("hearts_hud",    hearts_hud)
         .with_object("momentum_counter", momentum_counter)
         .with_object("gravity_indicator", gravity_indicator)
         .with_object("y_meter", y_meter)

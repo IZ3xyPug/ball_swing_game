@@ -5,6 +5,7 @@ fn main() {
     let mut episodes: u64 = 5;
     let mut frames: u64 = 3600;
     let mut boss_mode = false;
+    let mut fall_test = false;
 
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -25,8 +26,11 @@ fn main() {
             "--boss" | "-b" => {
                 boss_mode = true;
             }
+            "--fall-test" => {
+                fall_test = true;
+            }
             "--help" | "-h" => {
-                println!("headless [--episodes N] [--frames N] [--boss]");
+                println!("headless [--episodes N] [--frames N] [--boss] [--fall-test]");
                 return;
             }
             _ => {}
@@ -34,7 +38,7 @@ fn main() {
         i += 1;
     }
 
-    let agg = main::headless::run(episodes, frames, boss_mode);
+    let agg = main::headless::run(episodes, frames, boss_mode, fall_test);
 
     println!("\n=== HEADLESS SUMMARY ===");
     println!(
@@ -48,6 +52,10 @@ fn main() {
     println!(
         "total_frames={} total_hooks_grabbed={} total_coins={}",
         agg.total_frames, agg.total_hooks_grabbed, agg.total_coins
+    );
+    println!(
+        "total_hearts_lost={} final_hearts_sum={}",
+        agg.total_hearts_lost, agg.final_hearts_sum
     );
     println!("death_scene_histogram={:?}", agg.death_scene_histogram);
 }

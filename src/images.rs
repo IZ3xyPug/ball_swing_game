@@ -907,6 +907,40 @@ pub fn oxygen_bar_img(fill: f32, w: u32, h: u32) -> image::RgbaImage {
     img
 }
 
+/// Placeholder heart-row HUD. `full` of `max` hearts are filled (red); the rest
+/// are dim. Replace with real heart art later.
+pub fn hearts_img(full: u32, max: u32) -> image::RgbaImage {
+    use crate::constants::{HEART_W, HEART_H, HEART_GAP, C_HEART_FULL, C_HEART_EMPTY};
+    let max = max.max(1);
+    let w = HEART_W.max(1.0) as u32;
+    let h = HEART_H.max(1.0) as u32;
+    let gap = HEART_GAP.max(1.0) as u32;
+    let total_w = w * max + gap * max.saturating_sub(1);
+    let mut img = image::RgbaImage::new(total_w.max(1), h);
+    for i in 0..max {
+        let c = if i < full { C_HEART_FULL } else { C_HEART_EMPTY };
+        draw_heart(&mut img, i * (w + gap), 0, w, h, c);
+    }
+    img
+}
+
+/// Draw a simple blocky heart placeholder (two round lobes + a tapering point).
+fn draw_heart(img: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, c: (u8, u8, u8)) {
+    let lobe_r = (w / 4).max(2);
+    let left = circle_img(lobe_r, c.0, c.1, c.2);
+    let right = circle_img(lobe_r, c.0, c.1, c.2);
+    let top = y + (h * 3 / 10);
+    image::imageops::overlay(img, &left, (x + w / 4).saturating_sub(lobe_r) as i64, top.saturating_sub(lobe_r) as i64);
+    image::imageops::overlay(img, &right, (x + 3 * w / 4).saturating_sub(lobe_r) as i64, top.saturating_sub(lobe_r) as i64);
+    let cx = x + w / 2;
+    let bottom = y + h;
+    for yy in top.min(bottom)..bottom {
+        let t = (yy.saturating_sub(top)) as f32 / (bottom.saturating_sub(top).max(1)) as f32;
+        let half = ((w as f32 * 0.5) * (1.0 - t * 0.55)).max(1.0) as u32;
+        draw_rect(img, cx.saturating_sub(half), yy, half * 2, 1, [c.0, c.1, c.2, 255]);
+    }
+}
+
 /// Frame 0 of techbouncernew.gif processed with the **exact same** pipeline as
 /// `decode_tech_bounce_frames_stretched` (union crop bounds across all frames,
 /// then crop+scale+top-anchor to PAD_W×PAD_H).  This is the definitive
