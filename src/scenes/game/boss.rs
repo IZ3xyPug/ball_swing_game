@@ -65,7 +65,9 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if s.in_space_mode || s.space_launch_active { return; }
     if s.dead { return; }
 
-    if !s.boss_active && s.px >= BOSS_THRESHOLD_X {
+    // Boss entry: reach the threshold, or be force-warped (debug/test harness).
+    let force = c.get_bool("force_boss_warp");
+    if !s.boss_active && (s.px >= BOSS_THRESHOLD_X || force) {
         s.boss_active = true;
         s.boss_cleared = false;
         s.boss_entry_ticks = 0;
@@ -317,6 +319,8 @@ fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let frac = row as f32 / (rows - 1).max(1) as f32;
         let hy = 300.0 - frac * 3900.0; // +300 … −3600
         let hx = BOSS_ZONE_X1 + zone_w * (0.5 + (col as f32 - (cols as f32 - 1.0) * 0.5) * 0.22);
+        // Every third node is a buff node so the player can get a buff mid-fight.
+        let is_buff = i % 3 == 0;
         s.live_hooks.push(id.clone());
         if let Some(obj) = c.get_game_object_mut(&id) {
             obj.visible = true;
@@ -326,17 +330,27 @@ fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.momentum = (0.0, 0.0);
             obj.rotation_momentum = 0.0;
             obj.collision_mode = CollisionMode::NonPlatform;
-            obj.tags.retain(|t| t != "arena_node");
+            obj.tags.retain(|t| t != "arena_node" && t != BUFF_HOOK_TAG);
             obj.tags.push("arena_node".into());
             if !obj.tags.iter().any(|t| t == "hook") {
                 obj.tags.push("hook".into());
             }
-            obj.set_image(Image {
-                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                image: circle_cached(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2),
-                color: None,
-            });
-            obj.clear_glow();
+            if is_buff {
+                obj.tags.push(BUFF_HOOK_TAG.into());
+                obj.set_image(Image {
+                    shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                    image: circle_cached(HOOK_R as u32, C_BUFF_HOOK.0, C_BUFF_HOOK.1, C_BUFF_HOOK.2),
+                    color: None,
+                });
+                obj.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 16.0 });
+            } else {
+                obj.set_image(Image {
+                    shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                    image: circle_cached(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2),
+                    color: None,
+                });
+                obj.clear_glow();
+            }
             obj.clear_highlight();
         } else {
             s.live_hooks.retain(|n| n != &id);

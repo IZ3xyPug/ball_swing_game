@@ -6,6 +6,7 @@ fn main() {
     let mut frames: u64 = 3600;
     let mut boss_mode = false;
     let mut fall_test = false;
+    let mut boss_warp = false;
 
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -26,11 +27,15 @@ fn main() {
             "--boss" | "-b" => {
                 boss_mode = true;
             }
+            "--boss-warp" => {
+                boss_mode = true;
+                boss_warp = true;
+            }
             "--fall-test" => {
                 fall_test = true;
             }
             "--help" | "-h" => {
-                println!("headless [--episodes N] [--frames N] [--boss] [--fall-test]");
+                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--fall-test]");
                 return;
             }
             _ => {}
@@ -38,7 +43,7 @@ fn main() {
         i += 1;
     }
 
-    let agg = main::headless::run(episodes, frames, boss_mode, fall_test);
+    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp);
 
     println!("\n=== HEADLESS SUMMARY ===");
     println!(

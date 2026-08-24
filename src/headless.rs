@@ -150,7 +150,14 @@ fn observe(c: &Canvas) -> Option<Obs> {
 // (via mouse-targeted grab) so the bot chains forward instead of oscillating.
 // When hooked, release once we're moving forward fast enough (or after a stall).
 
-fn decide(o: &Obs, hooked_ticks: u32, force_fall: bool, frames: u64) -> (bool, Option<(f32, f32)>) {
+fn decide(
+    o: &Obs,
+    hooked_ticks: u32,
+    force_fall: bool,
+    frames: u64,
+    buffed: bool,
+    boss_center: Option<(f32, f32)>,
+) -> (bool, Option<(f32, f32)>) {
     if force_fall && frames >= FALL_TEST_FRAME {
         // Force a fall so we exercise the heart-loss / respawn path.
         return (false, None);
@@ -161,10 +168,33 @@ fn decide(o: &Obs, hooked_ticks: u32, force_fall: bool, frames: u64) -> (bool, O
             || hooked_ticks >= AI_FORCE_RELEASE_TICKS;
         return (!release, None);
     }
+    // Boss attack: while buffed and the boss is visible, swing at the hook
+    // nearest the boss so the arc passes through a weakpoint.
+    if buffed {
+        if let Some(bc) = boss_center {
+            if let Some((hx, hy)) = pick_nearest_to(o, bc) {
+                return (true, Some((hx, hy)));
+            }
+        }
+    }
     match pick_best_target(o) {
         Some((hx, hy)) => (true, Some((hx, hy))),
         None => (false, None),
     }
+}
+
+/// Pick the hook (within reach) nearest to a world point.
+fn pick_nearest_to(o: &Obs, point: (f32, f32)) -> Option<(f32, f32)> {
+    let mut best: Option<(f32, f32, f32)> = None; // (dist2, hx, hy)
+    for &(hx, hy) in &o.hooks {
+        let dx = hx - point.0;
+        let dy = hy - point.1;
+        let d2 = dx * dx + dy * dy;
+        if best.map_or(true, |(bd2, _, _)| d2 < bd2) {
+            best = Some((d2, hx, hy));
+        }
+    }
+    best.map(|(_, hx, hy)| (hx, hy))
 }
 
 /// Pick the hook that best advances the run: within reach, minimising distance
@@ -204,13 +234,18 @@ fn zone_for_distance(d: f32) -> usize {
 
 // ── Episode runner ────────────────────────────────────────────────────────────
 
-fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeReport {
+fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool) -> EpisodeReport {
     let (mut ctx, _recv) = prism::Context::new();
     let mut canvas = build_canvas(&mut ctx);
     let sized = SizedTree::default();
 
     if boss_mode {
         canvas.set_var("boss_mode_active", true);
+    }
+    if boss_warp {
+        // Force boss entry immediately; the boss entry routine warps the player
+        // into the arena (with tether nodes) regardless of player position.
+        canvas.set_var("force_boss_warp", true);
     }
     // Use mouse-targeted grabbing so the bot can steer toward ahead hooks
     // instead of always grabbing the nearest (which causes oscillation).
@@ -245,7 +280,11 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeRep
             hooked_ticks = 0;
         }
 
-        let (hold, target) = decide(&o, hooked_ticks, force_fall, frames);
+        let buffed = get_i32_or(&canvas, "player_buff", 0) > 0;
+        let boss_center = canvas.get_game_object("boss").map(|b| {
+            (b.position.0 + b.size.0 * 0.5, b.position.1 + b.size.1 * 0.5)
+        });
+        let (hold, target) = decide(&o, hooked_ticks, force_fall, frames, buffed, boss_center);
         if let Some((tx, ty)) = target {
             canvas.set_var("mouse_grab_x", Value::F32(tx));
             canvas.set_var("mouse_grab_y", Value::F32(ty));
@@ -333,12 +372,12 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool) -> EpisodeRep
 }
 
 /// Run several episodes (each boots a fresh canvas) and aggregate.
-pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool) -> AggregateReport {
+pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool) -> AggregateReport {
     let mut agg = AggregateReport::default();
     let mut episode_idx = 0u64;
     while episode_idx < episodes {
         let ep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_episode(max_frames, boss_mode, force_fall)
+            run_episode(max_frames, boss_mode, force_fall, boss_warp)
         }))
         .unwrap_or_else(|e| {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {

@@ -39,15 +39,18 @@
   `push_mega_sprite`. WGSL shaders are authored separately (see the engine's
   `renderer/mega_shader/common_effects.wgsl` as a reference).
 - **Boss arena tether nodes + wormhole warp** (`boss.rs`) — on boss entry the
-  arena spawns a grid of climbable grab nodes spanning the boss Y band, and the
-  player is warped into the arena (wormhole-style flash) so the fight is entered
-  cleanly. This makes the upper-sky boss reachable without superhuman swinging.
+  arena spawns a grid of climbable grab nodes spanning the boss Y band (every
+  third one is a buff node), and the player is warped into the arena
+  (wormhole-style flash) so the fight is entered cleanly. This makes the
+  upper-sky boss reachable without superhuman swinging. A `force_boss_warp` var
+  lets the headless harness force entry for testing (`--boss-warp`).
 
-> **Not yet implemented / not validated:** the boss weakpoint *damage* path is not
-> confirmed in the sim — the bot still reaches the boss threshold only
-> inconsistently (it oscillates), so `bossHP` stays at max most runs. The warp
-> currently uses a camera flash; a wormhole-gif overlay can be layered onto
-> `warp_player_into_arena`. Full weakpoint validation needs a deterministic warp.
+> **Not yet validated:** the boss weakpoint *damage* path is still not confirmed
+> in the sim. `--boss-warp` now reliably warps the bot into the arena
+> (`bossIn=true`), but the bot dies within ~350 frames (3 grabs) — it can't
+> chain the 2D grid to reach a buffed weakpoint. `bossHP` stays at max. Full
+> validation needs a more capable (or teleporting) bot. The warp uses a camera
+> flash; a wormhole-gif overlay can be layered onto `warp_player_into_arena`.
 
 ---
 

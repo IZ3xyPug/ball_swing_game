@@ -97,6 +97,8 @@ pub fn tick_solar_flare(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// Tick down an active buff and clear it (and the player glow) when it expires.
 fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
+    c.set_var("player_buff", Value::I32(s.player_buff as i32));
+    c.set_var("buff_timer", Value::I32(s.buff_timer as i32));
     if s.buff_timer == 0 {
         return;
     }
