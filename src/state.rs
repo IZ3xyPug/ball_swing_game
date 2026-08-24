@@ -350,6 +350,12 @@ pub struct State {
     pub cannon_capture_id: String,
     /// Remaining ticks of reduced gravity after cannon launch.
     pub cannon_damp_timer: u32,
+    /// True while the player is captured and the fast-travel prompt is shown.
+    pub cannon_ft_prompt: bool,
+    /// True once the player accepted fast-travel (spends the coin cost).
+    pub cannon_ft_active: bool,
+    /// Ticks of no-grab grace after fast-travel arrival.
+    pub cannon_fast_travel_grace: u32,
     // ── Boss fight ────────────────────────────────────────────────────────────
     pub boss_active: bool,
     pub boss_entry_ticks: u32,      // counts up after crossing threshold

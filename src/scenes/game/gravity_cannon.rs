@@ -185,6 +185,8 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         zero_g_timer,
         gravity_dir,
         player_hooked,
+        coin_count,
+        ft_active,
         phases,
     ) = {
         let s = st.lock().unwrap();
@@ -192,6 +194,8 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.px, s.py, s.cannon_captured,
             s.ticks, s.cannon_damp_timer, s.zero_g_timer, s.gravity_dir,
             s.hooked,
+            s.coin_count,
+            s.cannon_ft_active,
             s.cannon_phases.clone(),
         )
     };
@@ -200,6 +204,7 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut launch_impulse: Option<(f32, f32)> = None;
     let mut release_player = false;
     let mut begin_damp = false;
+    let mut do_fast_travel = false;
     let mut pull_impulse = (0.0_f32, 0.0_f32);
 
     for mut phase in phases {
@@ -232,6 +237,8 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             s.cannon_capture_id = phase.id.clone();
                             s.vx = 0.0;
                             s.vy = 0.0;
+                            // Auto-consent to hyper transit if the player has coins.
+                            s.cannon_ft_active = coin_count >= CANNON_FAST_TRAVEL_COST;
                             let h = s.hooked;
                             if h {
                                 s.hooked = false;
@@ -340,9 +347,14 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         let rot_rad = phase.rotation.to_radians();
                         let vx = CANNON_LAUNCH_VX * rot_rad.cos() - CANNON_LAUNCH_VY * rot_rad.sin();
                         let vy = CANNON_LAUNCH_VX * rot_rad.sin() + CANNON_LAUNCH_VY * rot_rad.cos();
-                        launch_impulse = Some((vx, vy));
-                        release_player = true;
-                        begin_damp = true;
+                        if ft_active {
+                            // Hyper-transit: teleport far ahead instead of the short launch.
+                            do_fast_travel = true;
+                        } else {
+                            launch_impulse = Some((vx, vy));
+                            release_player = true;
+                            begin_damp = true;
+                        }
                         if let Some(obj) = c.get_game_object_mut(&phase.id) {
                             obj.layer = 30;
                         }
@@ -413,7 +425,13 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         if s.cannon_damp_timer > 0 { s.cannon_damp_timer -= 1; }
+        if s.cannon_fast_travel_grace > 0 { s.cannon_fast_travel_grace -= 1; }
         s.cannon_phases = updated_phases;
+    }
+
+    // ── Fast travel: teleport far ahead, grant a random buff ───────────────
+    if do_fast_travel {
+        fast_travel_player(c, st);
     }
 
     // ── Apply gravity override to player object (uses snapshot values, no lock) ─
@@ -430,6 +448,84 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut("player") {
             obj.gravity = grav;
         }
+    }
+}
+
+/// Hyper-transit: consume the coin cost, teleport the player far ahead, grant a
+/// random run-long buff, rewind the spawn frontiers so the destination world is
+/// generated, and give a short no-grab grace so the player settles first.
+fn fast_travel_player(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (dest_x, dest_y) = {
+        let mut s = st.lock().unwrap();
+        let dest_x = s.px + CANNON_FAST_TRAVEL_DISTANCE;
+        let dest_y = (VH * 0.5).clamp(60.0, VH - 60.0);
+        s.coin_count = s.coin_count.saturating_sub(CANNON_FAST_TRAVEL_COST);
+
+        // Random persistent buff (lasts until the run ends).
+        let roll = lcg(&mut s.seed);
+        if roll < 0.34 {
+            s.max_hearts += 1;
+            s.hearts += 1;
+        } else if roll < 0.67 {
+            s.oxygen_drain_scale = UPGRADE_BREATH_DRAIN_SCALE;
+        } else {
+            s.upgrade_momentum_bonus = true;
+        }
+
+        s.cannon_ft_active = false;
+        s.cannon_ft_prompt = false;
+        s.cannon_captured = false;
+        s.cannon_capture_id = String::new();
+        s.cannon_fast_travel_grace = CANNON_FAST_TRAVEL_GRACE;
+        s.hooked = false;
+        s.active_hook = String::new();
+        s.vx = 0.0;
+        s.vy = 0.0;
+        s.in_space_mode = false;
+        s.space_launch_active = false;
+
+        // Rewind spawn frontiers so the destination world is already generated.
+        let backfill_x = dest_x - GEN_AHEAD * 0.3;
+        s.rightmost_x = s.rightmost_x.min(backfill_x);
+        s.pad_rightmost = s.pad_rightmost.min(backfill_x);
+        s.spinner_rightmost = s.spinner_rightmost.min(backfill_x);
+        s.coin_rightmost = s.coin_rightmost.min(backfill_x);
+        s.flip_rightmost = s.flip_rightmost.min(backfill_x);
+        s.score_x2_rightmost = s.score_x2_rightmost.min(backfill_x);
+        s.zero_g_rightmost = s.zero_g_rightmost.min(backfill_x);
+        s.gate_rightmost = s.gate_rightmost.min(backfill_x);
+        s.gwell_rightmost = s.gwell_rightmost.min(backfill_x);
+        s.turret_rightmost = s.turret_rightmost.min(backfill_x);
+        s.cannon_rightmost = s.cannon_rightmost.min(backfill_x);
+        s.rocket_pad_rightmost = s.rocket_pad_rightmost.min(backfill_x);
+        if s.pending.is_empty() {
+            let mut seed = s.seed;
+            let mut gen_head_x = s.gen_head_x.min(backfill_x);
+            let mut gen_head_y = s.gen_head_y;
+            let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
+            s.seed = seed;
+            s.gen_head_x = gen_head_x;
+            s.gen_head_y = gen_head_y;
+            s.pending.extend(batch);
+        }
+
+        s.px = dest_x;
+        s.py = dest_y;
+        (dest_x, dest_y)
+    };
+
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.position = (dest_x - PLAYER_R, dest_y - PLAYER_R);
+        obj.momentum = (0.0, 0.0);
+        obj.gravity = 0.0;
+        obj.visible = true;
+    }
+    c.run(Action::Hide { target: Target::name("rope") });
+    c.set_var("rope_visible_at_pause", false);
+    if let Some(cam) = c.camera_mut() {
+        cam.position = (dest_x - VW * 0.5, dest_y - VH * 0.5);
+        cam.snap_zoom(1.0);
+        cam.flash_with(Color(120, 200, 255, 140), 0.4, FlashMode::Pulse, FlashEase::Sharp, 0.9, 0.0);
     }
 }
 

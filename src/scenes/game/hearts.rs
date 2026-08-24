@@ -235,6 +235,12 @@ pub fn respawn(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     c.set_var("game_paused", true);
     c.set_var("start_orbit_ticks", 0i32);
     c.set_var("input_needs_edge_reset", true);
+    // Center the camera on the respawn node so the standby orbit is framed.
+    if let Some(cam) = c.camera_mut() {
+        cam.position = (cx - VW * 0.5, cy - VH * 0.5);
+        cam.snap_zoom(1.0);
+        cam.zoom_anchor = Some((cx, cy));
+    }
 }
 
 fn rewind_frontiers(st: &Arc<Mutex<State>>, cx: f32) {
@@ -304,10 +310,13 @@ fn hearts_hud_update(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     };
     c.set_var("hearts", Value::I32(hearts));
     if let Some(obj) = c.get_game_object_mut("hearts_hud") {
+        let total_w = HEART_W * max as f32 + HEART_GAP * (max as f32 - 1.0);
         obj.set_image(Image {
-            shape: ShapeType::Rectangle(0.0, (0.0, 0.0), 0.0),
+            shape: ShapeType::Rectangle(0.0, (total_w, HEART_H), 0.0),
             image: hearts_img(hearts as u32, max as u32).into(),
             color: None,
         });
+        obj.size = (total_w, HEART_H);
+        obj.update_image_shape();
     }
 }

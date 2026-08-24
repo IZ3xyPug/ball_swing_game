@@ -58,7 +58,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
     let st = state.clone();
     canvas.register_custom_event("do_grab".into(), move |c| {
         let mut s = st.lock().unwrap();
-        if s.dead || s.hooked { return; }
+        if s.dead || s.hooked || s.cannon_fast_travel_grace > 0 { return; }
 
         let mouse_target = if matches!(c.get_var("grab_from_mouse"), Some(Value::Bool(true))) {
             Some((c.get_f32("mouse_grab_x"), c.get_f32("mouse_grab_y")))

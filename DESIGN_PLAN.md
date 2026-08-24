@@ -72,6 +72,15 @@
   `2500 × 2.0^owned` via `META_EXTRA_HEARTS_VAR`), **controlled breathing**
   (`oxygen_drain_scale`), and a **momentum-cap** upgrade. Purchases apply
   immediately; heart boosts persist across runs for the session.
+- **Gravity-cannon hyper-transit** (`gravity_cannon.rs`, `state.rs`, `events.rs`) —
+  capturing into a cannon now teleports the player far ahead (spending coins) if
+  they have enough, rewinds the spawn frontiers so the destination world is ready,
+  grants a random run-long buff (extra heart / controlled breathing / momentum),
+  and gives a short no-grab grace so tethering resumes after the player settles.
+  (State flag auto-consents; a tasteful "press to accept" prompt can be added.)
+- **Heart HUD + respawn camera** (`images.rs`, `hearts.rs`) — a crisp filled heart
+  shape (implicit heart curve) is drawn for the hearts HUD, and the camera now
+  re-centers on the checkpoint during the respawn standby orbit.
 
 > **Weakpoint fight validated.** `--boss-warp` reliably warps the bot into the
 > arena, and `--boss-weakpoint-check` confirms a buffed weakpoint hit drops

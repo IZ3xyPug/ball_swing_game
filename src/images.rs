@@ -926,18 +926,22 @@ pub fn hearts_img(full: u32, max: u32) -> image::RgbaImage {
 
 /// Draw a simple blocky heart placeholder (two round lobes + a tapering point).
 fn draw_heart(img: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, c: (u8, u8, u8)) {
-    let lobe_r = (w / 4).max(2);
-    let left = circle_img(lobe_r, c.0, c.1, c.2);
-    let right = circle_img(lobe_r, c.0, c.1, c.2);
-    let top = y + (h * 3 / 10);
-    image::imageops::overlay(img, &left, (x + w / 4).saturating_sub(lobe_r) as i64, top.saturating_sub(lobe_r) as i64);
-    image::imageops::overlay(img, &right, (x + 3 * w / 4).saturating_sub(lobe_r) as i64, top.saturating_sub(lobe_r) as i64);
-    let cx = x + w / 2;
-    let bottom = y + h;
-    for yy in top.min(bottom)..bottom {
-        let t = (yy.saturating_sub(top)) as f32 / (bottom.saturating_sub(top).max(1)) as f32;
-        let half = ((w as f32 * 0.5) * (1.0 - t * 0.55)).max(1.0) as u32;
-        draw_rect(img, cx.saturating_sub(half), yy, half * 2, 1, [c.0, c.1, c.2, 255]);
+    // Crisp filled heart via the implicit heart curve:
+    //   (x^2 + y^2 - 1)^3 - x^2 y^3 <= 0
+    let cx = x as f32 + w as f32 * 0.5;
+    let cy = y as f32 + h as f32 * 0.56;
+    let sx = w as f32 / 2.6;
+    let sy = h as f32 / 2.4;
+    for py in y..y + h {
+        for px in x..x + w {
+            let nx = (px as f32 - cx) / sx;
+            let ny = (cy - py as f32) / sy; // y-down → heart up
+            let a = nx * nx + ny * ny - 1.0;
+            let v = a * a * a - nx * nx * ny * ny * ny;
+            if v <= 0.0 {
+                img.put_pixel(px, py, image::Rgba([c.0, c.1, c.2, 255]));
+            }
+        }
     }
 }
 

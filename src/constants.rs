@@ -546,6 +546,14 @@ pub const BOSS_BARRIER_Y:         f32   = -3600.0;
 pub const BOSS_SUN_KILL_Y:        f32   = -4300.0;
 /// Ticks of telegraph before the boss's final desperation lunge.
 pub const BOSS_LUNGE_TELEGRAPH:   u32   = 90;
+
+// ── Gravity cannon hyper-transit (fast travel) ────────────────────────────────
+/// Coin cost to use a cannon as fast travel.
+pub const CANNON_FAST_TRAVEL_COST:      u32   = 2000;
+/// How far ahead a cannon fast-travel launches the player (px).
+pub const CANNON_FAST_TRAVEL_DISTANCE:  f32   = VW * 3.0;
+/// Ticks of no-grab grace after arriving at the receiver.
+pub const CANNON_FAST_TRAVEL_GRACE:     u32   = 45;
 // Movement pattern speeds for lissajous figure-8
 pub const BOSS_PHASE_X_SPEED:    f32   = 0.024;    // radians per tick (horizontal sweep)
 pub const BOSS_PHASE_Y_SPEED:    f32   = 0.048;    // radians per tick (vertical — 2× for figure-8)
