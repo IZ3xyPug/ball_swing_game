@@ -237,8 +237,10 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             s.cannon_capture_id = phase.id.clone();
                             s.vx = 0.0;
                             s.vy = 0.0;
-                            // Auto-consent to hyper transit if the player has coins.
-                            s.cannon_ft_active = coin_count >= CANNON_FAST_TRAVEL_COST;
+                            // Show the fast-travel prompt if the player can afford it;
+                            // they must press F to accept (set s.cannon_ft_active).
+                            s.cannon_ft_prompt = coin_count >= CANNON_FAST_TRAVEL_COST;
+                            s.cannon_ft_active = false;
                             let h = s.hooked;
                             if h {
                                 s.hooked = false;

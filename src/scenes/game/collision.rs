@@ -886,6 +886,12 @@ fn tick_comet_player_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     drop(s);
 
+    // Comet hit costs a heart (plus the knockback).
+    super::hearts::lose_heart(c, st);
+    if let Some(cam) = c.camera_mut() {
+        cam.flash_with(Color(200, 40, 40, 120), 0.4, FlashMode::Pulse, FlashEase::Sharp, 0.85, 0.0);
+    }
+
     if was_hooked {
         c.run(Action::Hide { target: Target::name("rope") });
         if let Some(obj) = c.get_game_object_mut("player") {

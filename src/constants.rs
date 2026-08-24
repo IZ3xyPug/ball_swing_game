@@ -549,7 +549,7 @@ pub const BOSS_LUNGE_TELEGRAPH:   u32   = 90;
 
 // ── Gravity cannon hyper-transit (fast travel) ────────────────────────────────
 /// Coin cost to use a cannon as fast travel.
-pub const CANNON_FAST_TRAVEL_COST:      u32   = 2000;
+pub const CANNON_FAST_TRAVEL_COST:      u32   = 600;
 /// How far ahead a cannon fast-travel launches the player (px).
 pub const CANNON_FAST_TRAVEL_DISTANCE:  f32   = VW * 3.0;
 /// Ticks of no-grab grace after arriving at the receiver.

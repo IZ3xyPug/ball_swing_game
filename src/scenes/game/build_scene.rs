@@ -424,6 +424,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         return;
                     }
 
+                    if *key == Key::Character("f".into()) {
+                        // Accept the cannon hyper-transit prompt (spend coins to skip ahead).
+                        let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                        if let Some(state_arc) = state_opt {
+                            let mut s = state_arc.lock().unwrap();
+                            if s.cannon_ft_prompt && s.cannon_captured {
+                                s.cannon_ft_active = true;
+                            }
+                        }
+                        return;
+                    }
+
                     if *key == Key::Character("2".into()) {
                         if !is_game_paused(c) {
                             c.set_var("manual_flip_queued", true);

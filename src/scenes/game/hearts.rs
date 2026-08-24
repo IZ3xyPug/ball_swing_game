@@ -188,6 +188,10 @@ pub fn lose_heart(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
     };
     c.set_var("heart_losses", Value::I32(losses));
     hearts_hud_update(c, st);
+    // Brief red flash so a heart loss is clearly signalled.
+    if let Some(cam) = c.camera_mut() {
+        cam.flash_with(Color(200, 40, 40, 110), 0.35, FlashMode::Pulse, FlashEase::Sharp, 0.8, 0.0);
+    }
     over
 }
 
@@ -220,6 +224,7 @@ pub fn respawn(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.cannon_captured = false;
     }
 
+    clear_world_for_respawn(c, st);
     rewind_frontiers(st, cx);
     place_checkpoint_hook(c, st, cx, cy);
 
@@ -241,6 +246,59 @@ pub fn respawn(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         cam.snap_zoom(1.0);
         cam.zoom_anchor = Some((cx, cy));
     }
+}
+
+/// Recycle every live world object back to its pool and hide it, so a respawn
+/// regenerates cleanly from the checkpoint instead of duplicating content that
+/// was already spawned ahead of the fall.
+fn clear_world_for_respawn(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    let hook_ids = std::mem::take(&mut s.live_hooks);
+    let pad_ids = std::mem::take(&mut s.pad_live);
+    let spinner_ids = std::mem::take(&mut s.spinner_live);
+    let coin_ids = std::mem::take(&mut s.coin_live);
+    let flip_ids = std::mem::take(&mut s.flip_live);
+    let sx2_ids = std::mem::take(&mut s.score_x2_live);
+    let zg_ids = std::mem::take(&mut s.zero_g_live);
+    let gate_ids = std::mem::take(&mut s.gate_live);
+    let gwell_ids = std::mem::take(&mut s.gwell_live);
+    let turret_ids = std::mem::take(&mut s.turret_live);
+    let bullet_ids: Vec<String> = s.bullet_live.drain(..).map(|(id, _, _, _)| id).collect();
+    let rpad_ids = std::mem::take(&mut s.rocket_pad_live);
+    let cannon_ids = std::mem::take(&mut s.cannon_live);
+
+    for id in hook_ids.iter()
+        .chain(pad_ids.iter()).chain(spinner_ids.iter()).chain(coin_ids.iter())
+        .chain(flip_ids.iter()).chain(sx2_ids.iter()).chain(zg_ids.iter())
+        .chain(gate_ids.iter()).chain(gwell_ids.iter()).chain(turret_ids.iter())
+        .chain(bullet_ids.iter()).chain(rpad_ids.iter()).chain(cannon_ids.iter())
+    {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = false;
+            obj.position = (-6000.0, -6000.0);
+            obj.momentum = (0.0, 0.0);
+        }
+    }
+
+    s.pool_free.extend(hook_ids);
+    s.pad_free.extend(pad_ids);
+    s.spinner_free.extend(spinner_ids);
+    s.coin_free.extend(coin_ids);
+    s.flip_free.extend(flip_ids);
+    s.score_x2_free.extend(sx2_ids);
+    s.zero_g_free.extend(zg_ids);
+    s.gate_free.extend(gate_ids);
+    s.gwell_free.extend(gwell_ids);
+    s.turret_free.extend(turret_ids);
+    s.bullet_free.extend(bullet_ids);
+    s.rocket_pad_free.extend(rpad_ids);
+    s.cannon_free.extend(cannon_ids);
+    s.pad_origins.clear();
+    s.spinner_origins.clear();
+    s.gwell_timers.clear();
+    s.turret_timers.clear();
+    s.cannon_phases.clear();
+    s.spawn_animations.clear();
 }
 
 fn rewind_frontiers(st: &Arc<Mutex<State>>, cx: f32) {
@@ -317,6 +375,7 @@ fn hearts_hud_update(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             color: None,
         });
         obj.size = (total_w, HEART_H);
+        obj.visible = true;
         obj.update_image_shape();
     }
 }

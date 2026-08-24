@@ -699,10 +699,26 @@ pub fn tick_shop_preview(c: &mut Canvas) {
     }
     set_visible(c, "shop_preview_panel", true);
 
+    let (pcx, pcy) = preview_center();
+
+    // Background category: show only a scaled background preview, no ball/trail.
+    if cat == 2 {
+        set_visible(c, "shop_preview_ball", false);
+        set_visible(c, "shop_preview_trail", false);
+        set_visible(c, "shop_preview_bg", true);
+        if let Some(obj) = c.get_game_object_mut("shop_preview_bg") {
+            let (bw, bh) = (700.0, 260.0);
+            obj.size = (bw, bh);
+            obj.position = (pcx - bw * 0.5, pcy - bh * 0.5);
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: bg_preview_img(sel), color: None });
+        }
+        return;
+    }
+    set_visible(c, "shop_preview_bg", false);
+
     // Advance the orbit.
     let angle = c.get_f32("shop_preview_angle") + 0.045;
     c.set_var("shop_preview_angle", angle);
-    let (pcx, pcy) = preview_center();
     let orbit_r = 110.0;
     let bx = pcx + orbit_r * angle.cos();
     let by = pcy + orbit_r * angle.sin();
@@ -717,7 +733,7 @@ pub fn tick_shop_preview(c: &mut Canvas) {
         _ => ((235, 235, 235), (255, 255, 255)),
     };
 
-    // Orbit ball with the selected colour.
+    // Orbit ball with the selected colour (drawn on the top layer).
     if let Some(obj) = c.get_game_object_mut("shop_preview_ball") {
         let d = 110.0;
         obj.position = (bx - d * 0.5, by - d * 0.5);
@@ -729,25 +745,25 @@ pub fn tick_shop_preview(c: &mut Canvas) {
         obj.visible = true;
     }
 
-    // Tail streak drawn as fading dots.
+    // Long/trail streak drawn behind the ball (lower layer).
     let points = {
         let tail = PREVIEW_TAIL.get_or_init(|| Mutex::new(VecDeque::new()));
         let mut t = tail.lock().unwrap();
         t.push_back((bx, by));
-        while t.len() > 12 {
+        while t.len() > 18 {
             t.pop_front();
         }
         t.iter().cloned().collect::<Vec<_>>()
     };
     if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
-        let w = 600u32;
+        let w = 700u32;
         let h = 300u32;
         let mut img = image::RgbaImage::new(w, h);
         for (i, p) in points.iter().enumerate() {
             let px = ((p.0 - pcx) + w as f32 * 0.5) as i32;
             let py = ((p.1 - pcy) + h as f32 * 0.5) as i32;
-            let alpha = (55.0 + i as f32 / points.len().max(1) as f32 * 200.0) as u8;
-            let half = 4u32;
+            let alpha = (40.0 + i as f32 / points.len().max(1) as f32 * 215.0) as u8;
+            let half = 7u32;
             draw_rect(&mut img, (px - half as i32).max(0) as u32, (py - half as i32).max(0) as u32,
                 half * 2, half * 2, [trail_rgb.0, trail_rgb.1, trail_rgb.2, alpha]);
         }
@@ -755,19 +771,6 @@ pub fn tick_shop_preview(c: &mut Canvas) {
         obj.size = (w as f32, h as f32);
         obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None });
         obj.visible = true;
-    }
-
-    // Background category: show a scaled background preview.
-    if cat == 2 {
-        set_visible(c, "shop_preview_bg", true);
-        if let Some(obj) = c.get_game_object_mut("shop_preview_bg") {
-            let (bw, bh) = (700.0, 260.0);
-            obj.size = (bw, bh);
-            obj.position = (pcx - bw * 0.5, pcy - bh * 0.5);
-            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: bg_preview_img(sel), color: None });
-        }
-    } else {
-        set_visible(c, "shop_preview_bg", false);
     }
 }
 
@@ -898,16 +901,19 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
             Some(Image { shape: ShapeType::Ellipse(0.0, (bd, bd), 0.0), image: circle_cached((bd * 0.5) as u32, 235, 235, 235), color: None }),
             (bd, bd), (pcx - bd * 0.5, pcy - bd * 0.5),
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        preview_ball.layer = 46; // above the trail
         preview_ball.visible = false;
 
         let mut preview_trail = GameObject::new_rect(ctx, "shop_preview_trail".into(),
             None::<Image>, (600.0, 300.0), (pcx - 300.0, pcy - 150.0),
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        preview_trail.layer = 44; // behind the ball
         preview_trail.visible = false;
 
         let mut preview_bg = GameObject::new_rect(ctx, "shop_preview_bg".into(),
             None::<Image>, (700.0, 260.0), (pcx - 350.0, pcy - 130.0),
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        preview_bg.layer = 42;
         preview_bg.visible = false;
 
         scene = scene
