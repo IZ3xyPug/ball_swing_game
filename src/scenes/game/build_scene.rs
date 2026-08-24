@@ -778,6 +778,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_settle_done:        false, space_welcome_ticks:      0,
                 space_oxygen:             SPACE_OXYGEN_TICKS, space_return_delay:       0,
                 space_cam_y:              0.0, space_entry_bg_scale:     1.0,
+                space_extract:            false,
 
                 rocket_pad_live:          Vec::new(),
                 rocket_pad_free:          rocket_pad_free.clone(),

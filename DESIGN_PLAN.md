@@ -58,6 +58,10 @@
   bait); if the player dodges, the lunge carries it past the sun line and it falls
   in (`finish_boss`). Runs cleanly in the sim; the naive bot can't yet bait it
   into the sun (it never climbs to the sun edge), so the sun-kill isn't proven.
+- **Space extraction loop (oxygen-out)** (`space_zone.rs`, `state.rs`) — running
+  out of oxygen in space now **ejects the player back to the surface with the
+  coins they collected** instead of a hard death (`space_extract`). This makes the
+  special space zone a bank-vs-greed risk/reward loop rather than a death trap.
 
 > **Weakpoint fight validated.** `--boss-warp` reliably warps the bot into the
 > arena, and `--boss-weakpoint-check` confirms a buffed weakpoint hit drops

@@ -244,6 +244,9 @@ pub struct State {
     pub space_entry_bg_scale:    f32,
     /// Player X at the moment they entered space — restored on return.
     pub space_entry_px:          f32,
+    /// Set when oxygen runs out: eject back to the surface (extraction) rather
+    /// than a hard death.
+    pub space_extract:           bool,
 
     // Rocket pads (rare in normal game)
     pub rocket_pad_live:         Vec<String>,

@@ -303,9 +303,13 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
     tick_space_welcome_text(c, st);
     tick_space_planet_pulse(c, st, frame);
 
-    // Check return threshold: player drifted back below SPACE_RETURN_Y
-    let py = st.lock().unwrap().py;
-    if py > SPACE_RETURN_Y {
+    // Check return threshold: player drifted back below SPACE_RETURN_Y, or
+    // oxygen out (extraction).
+    let (py, extract) = {
+        let s = st.lock().unwrap();
+        (s.py, s.space_extract)
+    };
+    if py > SPACE_RETURN_Y || extract {
         exit_space(c, st, false);
     }
 }
@@ -321,6 +325,7 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_oxygen        = SPACE_OXYGEN_TICKS;
         s.space_welcome_ticks = SPACE_WELCOME_TICKS;
         s.space_return_delay  = 0;
+        s.space_extract       = false;
         s.space_orbit_locked_planet.clear();
         s.space_orbit_speed = 0.0;
 
@@ -746,19 +751,15 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if needs_return {
-        let (dist, coins) = {
-            let mut s = st.lock().unwrap();
-            s.dead = true;
-            (s.distance, s.coin_count as i32)
-        };
-        c.set_var("last_distance", dist);
-        c.set_var("last_coins", coins.max(0));
-        c.set_var("died_to_oxygen", true);
-        c.set_var("died_to_sun", false);
-        sv(c, "player", false);
-        sv(c, "rope", false);
-        play_death_sound(c);
-        c.load_scene("gameover");
+        // Extraction loop: oxygen out ⇒ eject back to the surface with the coins
+        // collected, instead of a hard death. (Bank-vs-greed can refine later.)
+        let mut s = st.lock().unwrap();
+        s.space_extract = true;
+        s.space_oxygen = 0;
+        drop(s);
+        if let Some(cam) = c.camera_mut() {
+            cam.flash_with(Color(200, 40, 40, 80), 0.4, FlashMode::Pulse, FlashEase::Sharp, 0.7, 0.0);
+        }
         return;
     }
 }
