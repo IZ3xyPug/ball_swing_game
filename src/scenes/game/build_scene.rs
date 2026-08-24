@@ -839,6 +839,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_asteroids:    boss_asteroid_ids.clone(), hud_last_boss_hp:  -999,
                 boss_dark_cooldown: BOSS_DARK_INTERVAL, boss_dark_ticks: 0,
                 boss_dark_active:   false,
+                boss_generators:    Vec::new(), boss_generator_hp: Vec::new(),
+                boss_barrier_up:    true, boss_final_phase: false,
+                boss_lunge_telegraph: BOSS_LUNGE_TELEGRAPH, boss_lunge_ticks: 0,
+                boss_lunge_target:  (0.0, 0.0),
 
                 comet_live:        Vec::new(), comet_free:        comet_free.clone(),
 

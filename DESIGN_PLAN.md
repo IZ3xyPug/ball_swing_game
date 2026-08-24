@@ -49,6 +49,15 @@
   where to land buffed hits. `--boss-weakpoint-check` (headless) forces a buff
   and pins the player on a weakpoint to confirm the damage path: it now drops
   `bossHP` 20 → 18 (`weakHit=true`), so the **buffed weakpoint hit is validated**.
+- **Last-boss barrier + generators + bait-and-bail** (`bootstrap.rs`, `boss.rs`,
+  `state.rs`, `constants.rs`) — the arena now has a protective barrier that
+  clamps the player/boss out of the sun, powered by 3 generators. Generators take
+  damage from buffed player hits *and* from the boss crashing into them (the
+  "lure" path). When all generators fall the barrier drops and the boss enters a
+  final phase: it periodically lunges at where the player *was* (a telegraphed
+  bait); if the player dodges, the lunge carries it past the sun line and it falls
+  in (`finish_boss`). Runs cleanly in the sim; the naive bot can't yet bait it
+  into the sun (it never climbs to the sun edge), so the sun-kill isn't proven.
 
 > **Weakpoint fight validated.** `--boss-warp` reliably warps the bot into the
 > arena, and `--boss-weakpoint-check` confirms a buffed weakpoint hit drops

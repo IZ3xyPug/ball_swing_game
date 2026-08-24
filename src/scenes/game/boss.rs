@@ -19,6 +19,9 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_darkness(c, st);
     tick_boss_weakpoints(c, st);
     tick_warp_flash(c, st);
+    tick_generators(c, st);
+    tick_barrier(c, st);
+    tick_desperation(c, st);
     tick_boss_bolts(c, st);
     tick_boss_bolt_player_collision(c, st);
     tick_boss_player_hits_boss(c, st);
@@ -236,6 +239,8 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         spawn_arena_tether_nodes(c, st);
         // Warp the player into the arena with a wormhole-style flash.
         warp_player_into_arena(c, st);
+        // Last-boss set dressing: barrier + generators.
+        spawn_generators_and_barrier(c, st);
         return;
     }
 
@@ -448,6 +453,282 @@ fn tick_warp_flash(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
             obj.visible = false;
         }
     }
+}
+
+// ── Last-boss: barrier + generators + bait-and-bail ──────────────────────────
+
+/// Position the barrier and generator nodes across the arena.
+fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let zone_w = BOSS_ZONE_X2 - BOSS_ZONE_X1;
+    {
+        let mut s = st.lock().unwrap();
+        s.boss_generators.clear();
+        s.boss_generator_hp.clear();
+        for _ in 0..BOSS_GENERATOR_COUNT {
+            s.boss_generators.push(String::new());
+            s.boss_generator_hp.push(BOSS_GENERATOR_HP);
+        }
+        s.boss_barrier_up = true;
+        s.boss_final_phase = false;
+        s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH;
+        s.boss_lunge_ticks = 0;
+        s.boss_lunge_target = (0.0, 0.0);
+    }
+    for i in 0..BOSS_GENERATOR_COUNT {
+        let id = format!("boss_gen_{i}");
+        let frac = i as f32 / (BOSS_GENERATOR_COUNT - 1).max(1) as f32;
+        let gx = BOSS_ZONE_X1 + zone_w * (0.15 + frac * 0.7);
+        let gy = -700.0 - frac * 2200.0;
+        {
+            let mut s = st.lock().unwrap();
+            if i < s.boss_generators.len() {
+                s.boss_generators[i] = id.clone();
+            }
+        }
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.visible = true;
+            obj.position = (gx - BOSS_GENERATOR_R, gy - BOSS_GENERATOR_R);
+            obj.momentum = (0.0, 0.0);
+            obj.rotation_momentum = 0.0;
+        }
+    }
+    if let Some(obj) = c.get_game_object_mut("boss_barrier") {
+        obj.position = (BOSS_ZONE_X1, BOSS_BARRIER_Y);
+        obj.visible = true;
+    }
+}
+
+/// Damage generators (buffed player hits, or the boss crashing into them), and
+/// drop the barrier once all are down (entering the final bait-and-bail phase).
+fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (px, py, buffed, boss_pos) = {
+        let s = st.lock().unwrap();
+        if !s.boss_active || !s.boss_spawned || s.boss_hp <= 0 {
+            return;
+        }
+        (
+            s.px,
+            s.py,
+            s.player_buff > 0,
+            c.get_game_object("boss").map(|o| o.position).unwrap_or((-9999.0, -9999.0)),
+        )
+    };
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+
+    let gens: Vec<String> = st.lock().unwrap().boss_generators.clone();
+    let mut damaged: Vec<usize> = Vec::new();
+    for (i, id) in gens.iter().enumerate() {
+        let Some(obj) = c.get_game_object(id) else { continue; };
+        if !obj.visible {
+            continue;
+        }
+        let gx = obj.position.0 + obj.size.0 * 0.5;
+        let gy = obj.position.1 + obj.size.1 * 0.5;
+        if buffed {
+            let dx = px - gx;
+            let dy = py - gy;
+            let r = PLAYER_R + BOSS_GENERATOR_R;
+            if dx * dx + dy * dy < r * r {
+                damaged.push(i);
+                continue;
+            }
+        }
+        // Boss crashing into the generator damages it (the "lure" path).
+        let dx = bcx - gx;
+        let dy = bcy - gy;
+        let r = BOSS_SIZE * 0.5 + BOSS_GENERATOR_R;
+        if dx * dx + dy * dy < r * r {
+            damaged.push(i);
+        }
+    }
+    if damaged.is_empty() {
+        return;
+    }
+    {
+        let mut s = st.lock().unwrap();
+        for i in damaged {
+            if i < s.boss_generator_hp.len() {
+                s.boss_generator_hp[i] -= 1;
+            }
+        }
+    }
+    let mut all_down = true;
+    {
+        let mut s = st.lock().unwrap();
+        for i in 0..s.boss_generator_hp.len() {
+            if s.boss_generator_hp[i] <= 0 {
+                if let Some(id) = s.boss_generators.get(i).cloned() {
+                    if let Some(obj) = c.get_game_object_mut(&id) {
+                        obj.visible = false;
+                    }
+                }
+            } else {
+                all_down = false;
+            }
+        }
+    }
+    if all_down {
+        let mut s = st.lock().unwrap();
+        s.boss_barrier_up = false;
+        s.boss_final_phase = true;
+        drop(s);
+        if let Some(obj) = c.get_game_object_mut("boss_barrier") {
+            obj.visible = false;
+        }
+    }
+}
+
+/// While the barrier is up, clamp the player (and boss) from crossing into the
+/// sun side of the arena.
+fn tick_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active || !s.boss_barrier_up {
+        return;
+    }
+    if s.py < BOSS_BARRIER_Y {
+        s.py = BOSS_BARRIER_Y;
+        if s.vy < 0.0 {
+            s.vy = 0.0;
+        }
+        drop(s);
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.position.1 = BOSS_BARRIER_Y - PLAYER_R;
+            if obj.momentum.1 < 0.0 {
+                obj.momentum.1 = 0.0;
+            }
+        }
+        return;
+    }
+    // Keep the boss on the safe side of the barrier too.
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((0.0, 0.0));
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    if bcy < BOSS_BARRIER_Y {
+        drop(s);
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position.1 = BOSS_BARRIER_Y - BOSS_SIZE * 0.5;
+        }
+    }
+}
+
+/// Final phase: the boss periodically lunges at where the player *was* (a
+/// telegraphed bait). If the player dodges, the lunge carries the boss past the
+/// open sun line and it falls in.
+fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (final_phase, active, spawned, hp) = {
+        let s = st.lock().unwrap();
+        (s.boss_final_phase, s.boss_active, s.boss_spawned, s.boss_hp)
+    };
+    if !final_phase || !active || !spawned || hp <= 0 {
+        return;
+    }
+
+    let mut s = st.lock().unwrap();
+    if s.boss_lunge_telegraph > 0 {
+        s.boss_lunge_telegraph -= 1;
+        if s.boss_lunge_telegraph == 0 {
+            // Lock target to the player's current position (the bait).
+            s.boss_lunge_target = (s.px, s.py);
+            s.boss_lunge_ticks = 90;
+        }
+        drop(s);
+        return;
+    }
+    if s.boss_lunge_ticks > 0 {
+        s.boss_lunge_ticks -= 1;
+        let (tx, ty) = s.boss_lunge_target;
+        let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((0.0, 0.0));
+        let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+        let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+        let dx = tx - bcx;
+        let dy = ty - bcy;
+        let d = (dx * dx + dy * dy).sqrt().max(1.0);
+        let spd = 42.0;
+        let nvx = dx / d * spd;
+        let nvy = dy / d * spd;
+        let nx = bcx + nvx;
+        let ny = bcy + nvy;
+        s.boss_vx = nvx;
+        s.boss_vy = nvy;
+        let done = s.boss_lunge_ticks == 0;
+        drop(s);
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (nx - BOSS_SIZE * 0.5, ny - BOSS_SIZE * 0.5);
+        }
+        // The lunge carried the boss past the sun line → it falls in.
+        if ny < BOSS_SUN_KILL_Y {
+            finish_boss(c, st);
+            return;
+        }
+        if done {
+            let mut s = st.lock().unwrap();
+            s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH;
+        }
+        return;
+    }
+    s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH.max(s.boss_lunge_telegraph);
+}
+
+/// End the boss fight cleanly (used by the sun finisher). Hides the boss/hud/
+/// generators/barrier and rewinds the spawn frontiers so normal play resumes.
+fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let generator_ids;
+    {
+        let mut s = st.lock().unwrap();
+        s.boss_hp = 0;
+        s.boss_active = false;
+        s.boss_spawned = false;
+        s.boss_cleared = false;
+        s.boss_entry_ticks = 0;
+        s.boss_barrier_up = false;
+        s.boss_final_phase = false;
+        s.boss_lunge_ticks = 0;
+        s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH;
+        let backfill_x = s.px - GEN_AHEAD * 0.35;
+        s.rightmost_x = s.rightmost_x.min(backfill_x);
+        s.pad_rightmost = s.pad_rightmost.min(backfill_x);
+        s.spinner_rightmost = s.spinner_rightmost.min(backfill_x);
+        s.coin_rightmost = s.coin_rightmost.min(backfill_x);
+        s.flip_rightmost = s.flip_rightmost.min(backfill_x);
+        s.score_x2_rightmost = s.score_x2_rightmost.min(backfill_x);
+        s.zero_g_rightmost = s.zero_g_rightmost.min(backfill_x);
+        s.gate_rightmost = s.gate_rightmost.min(backfill_x);
+        s.gwell_rightmost = s.gwell_rightmost.min(backfill_x);
+        s.turret_rightmost = s.turret_rightmost.min(backfill_x);
+        s.rocket_pad_rightmost = s.rocket_pad_rightmost.min(backfill_x);
+        if s.pending.is_empty() {
+            let mut seed = s.seed;
+            let mut gen_head_x = s.gen_head_x.min(backfill_x);
+            let mut gen_head_y = s.gen_head_y;
+            let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
+            s.seed = seed;
+            s.gen_head_x = gen_head_x;
+            s.gen_head_y = gen_head_y;
+            s.pending.extend(batch);
+        }
+        generator_ids = s.boss_generators.clone();
+    }
+    for id in generator_ids {
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.visible = false;
+            obj.position = (-6000.0, -6000.0);
+        }
+    }
+    if let Some(obj) = c.get_game_object_mut("boss") {
+        obj.visible = false;
+        obj.position = (-6000.0, -6000.0);
+        obj.momentum = (0.0, 0.0);
+    }
+    if let Some(obj) = c.get_game_object_mut("boss_hp_bar") {
+        obj.visible = false;
+    }
+    if let Some(obj) = c.get_game_object_mut("boss_barrier") {
+        obj.visible = false;
+    }
+    if c.has_lighting() {
+        c.set_ambient(Color(255, 255, 255, 255), 1.0);
+    }
+    c.set_var("boss_mode_cleared", true);
 }
 
 // ── Boss appearance after delay ───────────────────────────────────────────────

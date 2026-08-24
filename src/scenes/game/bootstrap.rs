@@ -1076,6 +1076,42 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object("warp_flash", wf);
     }
 
+    // ── Last-boss: barrier + generators ────────────────────────────────────
+    // Placeholder recolored shapes; real art can replace them later.
+    {
+        let gr = BOSS_GENERATOR_R;
+        let gd = (gr * 2.0).round().max(2.0) as u32;
+        let gen_img = circle_img(gr as u32, C_BOSS_GENERATOR.0, C_BOSS_GENERATOR.1, C_BOSS_GENERATOR.2);
+        for i in 0..BOSS_GENERATOR_COUNT {
+            let id = format!("boss_gen_{i}");
+            let mut gen = GameObject::new_rect(
+                ctx, id.clone().into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (gd as f32, gd as f32), 0.0), image: gen_img.clone().into(), color: None }),
+                (gd as f32, gd as f32), (-6000.0, -6000.0),
+                vec!["boss_gen".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+            );
+            gen.layer = LAYER_SPACE_HOOK;
+            gen.gravity = 0.0;
+            gen.visible = false;
+            gen.set_glow(GlowConfig { color: Color(C_BOSS_GENERATOR.0, C_BOSS_GENERATOR.1, C_BOSS_GENERATOR.2, 255), width: 16.0 });
+            scene = scene.with_object(&id, gen);
+        }
+        // Barrier: a wide glowing band near the sun edge.
+        let bw = BOSS_ZONE_X2 - BOSS_ZONE_X1;
+        let bh = 70.0f32;
+        let mut barrier = GameObject::new_rect(
+            ctx, "boss_barrier".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: solid(C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 230).into(), color: None }),
+            (bw, bh), (-6000.0, -6000.0),
+            vec!["boss_barrier".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+        );
+        barrier.layer = LAYER_SPACE_HOOK;
+        barrier.gravity = 0.0;
+        barrier.visible = false;
+        barrier.set_glow(GlowConfig { color: Color(C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 120), width: 30.0 });
+        scene = scene.with_object("boss_barrier", barrier);
+    }
+
     // ── Boss HP bar ───────────────────────────────────────────────────────
     {
         let (bw, bh) = (BOSS_HP_BAR_W as u32, BOSS_HP_BAR_H as u32);

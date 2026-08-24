@@ -362,6 +362,21 @@ pub struct State {
     pub boss_dark_ticks: u32,
     /// True while a darkness phase is active.
     pub boss_dark_active: bool,
+    // ── Last-boss barrier / generators / bait-and-bail ──────────────────────
+    /// IDs of the generator nodes powering the barrier.
+    pub boss_generators: Vec<String>,
+    /// Remaining HP per generator (aligns with boss_generators).
+    pub boss_generator_hp: Vec<i32>,
+    /// True while the protective barrier is up (blocks the sun).
+    pub boss_barrier_up: bool,
+    /// True once all generators are down — the final (bait-and-bail) phase.
+    pub boss_final_phase: bool,
+    /// Countdown to the boss's next desperation lunge (final phase).
+    pub boss_lunge_telegraph: u32,
+    /// Remaining ticks of the active lunge.
+    pub boss_lunge_ticks: u32,
+    /// World position the boss is lunging toward.
+    pub boss_lunge_target: (f32, f32),
 
     // ── Comets ────────────────────────────────────────────────────────────────
     /// Live comets: (id, vx, vy, ticks_remaining)

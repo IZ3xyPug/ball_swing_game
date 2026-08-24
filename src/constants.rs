@@ -527,6 +527,25 @@ pub const BOSS_DARK_INTERVAL:    u32   = 600;  // 10 s
 pub const BOSS_DARK_DURATION:    u32   = 180;  // 3 s
 /// Ticks of warning before darkness strikes.
 pub const BOSS_DARK_TELEGRAPH:   u32   = 60;   // 1 s
+
+// ── Last-boss barrier / generators / bait-and-bail ───────────────────────────
+/// How many generators power the protective barrier.
+pub const BOSS_GENERATOR_COUNT:   usize = 3;
+/// HP per generator (buffed hits, or one boss attack, damage it).
+pub const BOSS_GENERATOR_HP:      i32   = 2;
+/// Radius (px) of a generator node.
+pub const BOSS_GENERATOR_R:       f32   = 95.0;
+/// Generator colour (cyan — placeholder).
+pub const C_BOSS_GENERATOR:       (u8, u8, u8) = (90, 220, 255);
+/// Barrier colour (soft blue — placeholder).
+pub const C_BOSS_BARRIER:         (u8, u8, u8) = (120, 160, 255);
+/// Y (most-negative) the player/boss can't cross while the barrier is up.
+pub const BOSS_BARRIER_Y:         f32   = -3600.0;
+/// Y (more negative) the boss must cross after the barrier drops to fall into
+/// the sun (the bait-and-bail finisher).
+pub const BOSS_SUN_KILL_Y:        f32   = -4300.0;
+/// Ticks of telegraph before the boss's final desperation lunge.
+pub const BOSS_LUNGE_TELEGRAPH:   u32   = 90;
 // Movement pattern speeds for lissajous figure-8
 pub const BOSS_PHASE_X_SPEED:    f32   = 0.024;    // radians per tick (horizontal sweep)
 pub const BOSS_PHASE_Y_SPEED:    f32   = 0.048;    // radians per tick (vertical — 2× for figure-8)
