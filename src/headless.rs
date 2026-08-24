@@ -52,6 +52,7 @@ pub struct EpisodeReport {
     pub boss_entered: bool,
     pub boss_killed: bool,
     pub boss_hp_seen: i32,
+    pub weakpoint_hit: bool,
     pub hearts_lost: i64,
     pub hearts_end: i32,
     pub panicked: Option<String>,
@@ -74,6 +75,7 @@ pub struct AggregateReport {
     pub boss_kills: u64,
     pub total_hearts_lost: i64,
     pub final_hearts_sum: i32,
+    pub weakpoint_hits: u64,
     pub death_scene_histogram: std::collections::HashMap<String, u64>,
 }
 
@@ -234,7 +236,7 @@ fn zone_for_distance(d: f32) -> usize {
 
 // ── Episode runner ────────────────────────────────────────────────────────────
 
-fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool) -> EpisodeReport {
+fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool) -> EpisodeReport {
     let (mut ctx, _recv) = prism::Context::new();
     let mut canvas = build_canvas(&mut ctx);
     let sized = SizedTree::default();
@@ -267,6 +269,9 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
     let mut boss_entered = false;
     let mut boss_killed = false;
     let mut boss_hp_seen = crate::constants::BOSS_MAX_HP;
+    let mut weakpoint_hit = false;
+    let mut weakpoint_checked = false;
+    let mut weakpoint_check_ticks: u32 = 0;
     let mut death_scene: Option<String> = None;
 
     while frames < max_frames {
@@ -281,10 +286,36 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         }
 
         let buffed = get_i32_or(&canvas, "player_buff", 0) > 0;
+        let boss_visible = canvas.get_game_object("boss").map(|b| b.visible).unwrap_or(false);
         let boss_center = canvas.get_game_object("boss").map(|b| {
             (b.position.0 + b.size.0 * 0.5, b.position.1 + b.size.1 * 0.5)
         });
-        let (hold, target) = decide(&o, hooked_ticks, force_fall, frames, buffed, boss_center);
+
+        let (hold, target) = if weakpoint_check && !weakpoint_checked && boss_visible {
+            // Deterministic weakpoint validation: force a buff and pin the player
+            // on a weakpoint each frame so the contact logic fires.
+            let bc = boss_center.unwrap();
+            let (ox, oy) = crate::constants::BOSS_WEAKPOINT_OFFSETS[0];
+            if let Some(p) = canvas.get_game_object_mut("player") {
+                p.position.0 = bc.0 + ox - PLAYER_R;
+                p.position.1 = bc.1 + oy - PLAYER_R;
+                p.momentum = (0.0, 0.0);
+                p.gravity = 0.0;
+            }
+            canvas.set_var("debug_force_buff", true);
+            weakpoint_check_ticks += 1;
+            let bh = get_i32_or(&canvas, "boss_hp", crate::constants::BOSS_MAX_HP);
+            if bh < crate::constants::BOSS_MAX_HP {
+                weakpoint_hit = true;
+                weakpoint_checked = true;
+            } else if weakpoint_check_ticks > 10 {
+                weakpoint_checked = true;
+            }
+            (false, None)
+        } else {
+            decide(&o, hooked_ticks, force_fall, frames, buffed, boss_center)
+        };
+
         if let Some((tx, ty)) = target {
             canvas.set_var("mouse_grab_x", Value::F32(tx));
             canvas.set_var("mouse_grab_y", Value::F32(ty));
@@ -365,6 +396,7 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         boss_entered,
         boss_killed,
         boss_hp_seen,
+        weakpoint_hit,
         hearts_lost,
         hearts_end,
         panicked: None,
@@ -372,12 +404,12 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
 }
 
 /// Run several episodes (each boots a fresh canvas) and aggregate.
-pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool) -> AggregateReport {
+pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool) -> AggregateReport {
     let mut agg = AggregateReport::default();
     let mut episode_idx = 0u64;
     while episode_idx < episodes {
         let ep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_episode(max_frames, boss_mode, force_fall, boss_warp)
+            run_episode(max_frames, boss_mode, force_fall, boss_warp, weakpoint_check)
         }))
         .unwrap_or_else(|e| {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -400,6 +432,7 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
                 boss_entered: false,
                 boss_killed: false,
                 boss_hp_seen: crate::constants::BOSS_MAX_HP,
+                weakpoint_hit: false,
                 hearts_lost: 0,
                 hearts_end: 0,
                 panicked: Some(msg),
@@ -432,11 +465,14 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
         }
         agg.total_hearts_lost += ep.hearts_lost;
         agg.final_hearts_sum += ep.hearts_end;
+        if ep.weakpoint_hit {
+            agg.weakpoint_hits += 1;
+        }
         agg.max_zone = agg.max_zone.max(ep.zone);
 
         // Progress line.
         println!(
-            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}  bossHP={}  heartsLost={}  heartsEnd={}",
+            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}  bossHP={}  weakHit={}  heartsLost={}  heartsEnd={}",
             episode_idx,
             ep.frames,
             ep.max_dist,
@@ -449,6 +485,7 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
             ep.boss_entered,
             ep.boss_killed,
             ep.boss_hp_seen,
+            ep.weakpoint_hit,
             ep.hearts_lost,
             ep.hearts_end,
         );

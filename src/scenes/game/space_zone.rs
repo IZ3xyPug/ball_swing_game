@@ -36,7 +36,8 @@ fn blackhole1_template() -> AnimatedSprite {
             .expect("blackhole1.gif decode")
     }).clone()
 }
-fn wormhole2_template() -> AnimatedSprite {
+/// A clone of the wormhole gif animation (used for boss-arena warps too).
+pub fn wormhole2_template() -> AnimatedSprite {
     WORMHOLE2_TEMPLATE.get_or_init(|| {
         AnimatedSprite::new(include_bytes!("../../../assets/wormhole2.gif"), (256.0, 256.0), 12.0)
             .expect("wormhole2.gif decode")

@@ -96,6 +96,20 @@ pub fn tick_solar_flare(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 /// Tick down an active buff and clear it (and the player glow) when it expires.
 fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Debug/test: a var can force a buff so the weakpoint check can be validated.
+    // Safe read (get_bool panics if unset).
+    let force = matches!(c.get_var("debug_force_buff"), Some(Value::Bool(true)));
+    if force {
+        {
+            let mut s = st.lock().unwrap();
+            s.player_buff = 1;
+            s.buff_timer = 600;
+        }
+        c.set_var("debug_force_buff", false);
+        if let Some(p) = c.get_game_object_mut("player") {
+            p.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 22.0 });
+        }
+    }
     let mut s = st.lock().unwrap();
     c.set_var("player_buff", Value::I32(s.player_buff as i32));
     c.set_var("buff_timer", Value::I32(s.buff_timer as i32));

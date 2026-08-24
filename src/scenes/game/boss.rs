@@ -8,6 +8,7 @@ use crate::constants::*;
 use crate::state::*;
 use crate::images::circle_cached;
 use super::bootstrap::hook_asteroid_anim_for_spawn;
+use crate::scenes::game::space_zone::wormhole2_template;
 
 pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_zone_entry(c, st);
@@ -16,10 +17,35 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_asteroid_drift(c, st);
     tick_boss_shooting(c, st);
     tick_boss_darkness(c, st);
+    tick_boss_weakpoints(c, st);
+    tick_warp_flash(c, st);
     tick_boss_bolts(c, st);
     tick_boss_bolt_player_collision(c, st);
     tick_boss_player_hits_boss(c, st);
     tick_boss_hud(c, st);
+}
+
+/// Position the weakpoint marker rings on the boss body, visible only while the
+/// boss is up, so players can see where to land buffed hits.
+fn tick_boss_weakpoints(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let active = {
+        let s = st.lock().unwrap();
+        s.boss_active && s.boss_spawned && s.boss_hp > 0
+    };
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    for (i, (ox, oy)) in BOSS_WEAKPOINT_OFFSETS.iter().enumerate() {
+        let id = format!("boss_weak_{i}");
+        let Some(obj) = c.get_game_object_mut(&id) else { continue; };
+        if active {
+            let r = BOSS_WEAKPOINT_R;
+            obj.position = (bcx + ox - r, bcy + oy - r);
+            obj.visible = true;
+        } else {
+            obj.visible = false;
+        }
+    }
 }
 
 // ── Boss darkness attack (uses the quartz lighting system) ───────────────────
@@ -387,6 +413,14 @@ fn warp_player_into_arena(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     c.run(Action::Hide { target: Target::name("rope") });
     c.set_var("rope_visible_at_pause", false);
+    // Show the wormhole gif over the player during the warp.
+    if let Some(obj) = c.get_game_object_mut("warp_flash") {
+        obj.set_animation(wormhole2_template());
+        obj.size = (VW, VH);
+        obj.position = (warp_x - VW * 0.5, warp_y - VH * 0.5);
+        obj.visible = true;
+    }
+    c.set_var("warp_flash_ticks", 40i32);
     if let Some(cam) = c.camera_mut() {
         cam.flash_with(
             Color(160, 160, 255, 130),
@@ -396,6 +430,23 @@ fn warp_player_into_arena(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             0.9,
             0.0,
         );
+    }
+}
+
+/// Count down and hide the boss-arena wormhole warp overlay.
+fn tick_warp_flash(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
+    let t = match c.get_var("warp_flash_ticks") {
+        Some(Value::I32(v)) => v,
+        _ => 0,
+    };
+    if t <= 0 {
+        return;
+    }
+    c.set_var("warp_flash_ticks", t - 1);
+    if t - 1 <= 0 {
+        if let Some(obj) = c.get_game_object_mut("warp_flash") {
+            obj.visible = false;
+        }
     }
 }
 

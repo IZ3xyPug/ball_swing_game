@@ -40,17 +40,20 @@
   `renderer/mega_shader/common_effects.wgsl` as a reference).
 - **Boss arena tether nodes + wormhole warp** (`boss.rs`) — on boss entry the
   arena spawns a grid of climbable grab nodes spanning the boss Y band (every
-  third one is a buff node), and the player is warped into the arena
-  (wormhole-style flash) so the fight is entered cleanly. This makes the
+  third one is a buff node), and the player is warped into the arena with the
+  **wormhole gif** (`warp_flash`) so the fight is entered cleanly. This makes the
   upper-sky boss reachable without superhuman swinging. A `force_boss_warp` var
   lets the headless harness force entry for testing (`--boss-warp`).
+- **Weakpoint markers** (`bootstrap.rs`, `boss.rs`) — four bright gold rings are
+  drawn on the purple boss body at the weakpoint offsets, so players can see
+  where to land buffed hits. `--boss-weakpoint-check` (headless) forces a buff
+  and pins the player on a weakpoint to confirm the damage path: it now drops
+  `bossHP` 20 → 18 (`weakHit=true`), so the **buffed weakpoint hit is validated**.
 
-> **Not yet validated:** the boss weakpoint *damage* path is still not confirmed
-> in the sim. `--boss-warp` now reliably warps the bot into the arena
-> (`bossIn=true`), but the bot dies within ~350 frames (3 grabs) — it can't
-> chain the 2D grid to reach a buffed weakpoint. `bossHP` stays at max. Full
-> validation needs a more capable (or teleporting) bot. The warp uses a camera
-> flash; a wormhole-gif overlay can be layered onto `warp_player_into_arena`.
+> **Weakpoint fight validated.** `--boss-warp` reliably warps the bot into the
+> arena, and `--boss-weakpoint-check` confirms a buffed weakpoint hit drops
+> `bossHP` (20 → 18). The bot still can't *chain* the 2D grid to kill the boss
+> itself (it dies in the fight), but the damage path is proven.
 
 ---
 

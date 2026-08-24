@@ -108,7 +108,12 @@ fn tick_hook_artifact_anim(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
     let asteroid_mode = c.get_bool("asteroid_hooks_on");
     if !asteroid_mode { return; }
 
-    let mut ticks = c.get_i32("hook_artifact_play_ticks");
+    // Safe read: `get_i32` panics if the var is unset (it is until the first
+    // grab), so use get_var here.
+    let mut ticks = match c.get_var("hook_artifact_play_ticks") {
+        Some(Value::I32(t)) => t,
+        _ => 0,
+    };
     if ticks <= 0 { return; } // not playing
 
     ticks -= 1;

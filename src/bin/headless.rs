@@ -7,6 +7,7 @@ fn main() {
     let mut boss_mode = false;
     let mut fall_test = false;
     let mut boss_warp = false;
+    let mut weakpoint_check = false;
 
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -31,11 +32,16 @@ fn main() {
                 boss_mode = true;
                 boss_warp = true;
             }
+            "--boss-weakpoint-check" => {
+                boss_mode = true;
+                boss_warp = true;
+                weakpoint_check = true;
+            }
             "--fall-test" => {
                 fall_test = true;
             }
             "--help" | "-h" => {
-                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--fall-test]");
+                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-weakpoint-check] [--fall-test]");
                 return;
             }
             _ => {}
@@ -43,7 +49,7 @@ fn main() {
         i += 1;
     }
 
-    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp);
+    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp, weakpoint_check);
 
     println!("\n=== HEADLESS SUMMARY ===");
     println!(
@@ -59,8 +65,8 @@ fn main() {
         agg.total_frames, agg.total_hooks_grabbed, agg.total_coins
     );
     println!(
-        "total_hearts_lost={} final_hearts_sum={}",
-        agg.total_hearts_lost, agg.final_hearts_sum
+        "total_hearts_lost={} final_hearts_sum={} weakpoint_hits={}",
+        agg.total_hearts_lost, agg.final_hearts_sum, agg.weakpoint_hits
     );
     println!("death_scene_histogram={:?}", agg.death_scene_histogram);
 }

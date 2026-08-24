@@ -1041,6 +1041,41 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object("boss", boss_obj);
     }
 
+    // ── Boss weakpoint markers ────────────────────────────────────────────
+    // Bright gold rings drawn on top of the purple body so weakpoints are
+    // obvious during a playtest. Follow the boss in boss.rs.
+    {
+        let wpr = BOSS_WEAKPOINT_R;
+        let d = (wpr * 2.0).round().max(2.0) as u32;
+        let ring = gwell_ring_cached(wpr, 255, 210, 80, GWELL_RING_COUNT, 235.0);
+        for (i, _) in BOSS_WEAKPOINT_OFFSETS.iter().enumerate() {
+            let id = format!("boss_weak_{i}");
+            let mut wp = GameObject::new_rect(
+                ctx, id.clone().into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (d as f32, d as f32), 0.0), image: ring.clone(), color: None }),
+                (d as f32, d as f32), (-6000.0, -6000.0),
+                vec!["boss_weak".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+            );
+            wp.layer = LAYER_SPACE_HOOK;
+            wp.gravity = 0.0;
+            wp.visible = false;
+            wp.set_glow(GlowConfig { color: Color(255, 210, 80, 255), width: 22.0 });
+            scene = scene.with_object(&id, wp);
+        }
+    }
+
+    // ── Boss warp wormhole overlay ────────────────────────────────────────
+    // A large wormhole gif shown briefly when the player is warped into (or out
+    // of) a boss arena. Animation set at warp time in boss.rs.
+    {
+        let mut wf = GameObject::new_rect(ctx, "warp_flash".into(),
+            None::<Image>, (VW, VH), (-6000.0, -6000.0),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        wf.visible = false;
+        wf.layer = 9000;
+        scene = scene.with_object("warp_flash", wf);
+    }
+
     // ── Boss HP bar ───────────────────────────────────────────────────────
     {
         let (bw, bh) = (BOSS_HP_BAR_W as u32, BOSS_HP_BAR_H as u32);
