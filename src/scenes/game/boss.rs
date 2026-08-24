@@ -95,7 +95,8 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if s.dead { return; }
 
     // Boss entry: reach the threshold, or be force-warped (debug/test harness).
-    let force = c.get_bool("force_boss_warp");
+    // Safe read: `get_bool` panics if the var is unset in a normal boss run.
+    let force = matches!(c.get_var("force_boss_warp"), Some(Value::Bool(true)));
     if !s.boss_active && (s.px >= BOSS_THRESHOLD_X || force) {
         s.boss_active = true;
         s.boss_cleared = false;

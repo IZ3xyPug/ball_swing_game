@@ -21,6 +21,48 @@ fn play_menu_track(c: &mut Canvas, idx: usize) {
     c.set_var("menu_bgm_track_index", track_idx as i32);
 }
 
+/// The menu lives in the upper half of a 2×VH world (camera at MENU_Y), but the
+/// engine's mouse hit-testing maps clicks to *virtual* coords while checking
+/// *world* boxes — so menu buttons (at world y > VH) can't be clicked. Register
+/// a camera-aware click handler that converts the click to world coords and
+/// fires the button's custom event.
+fn push_menu_press_handler(canvas: &mut Canvas) {
+    let registered = matches!(canvas.get_var("menu_press_handler_registered"), Some(Value::Bool(true)));
+    if registered {
+        return;
+    }
+    canvas.on_mouse_press(move |c, _btn, pos| {
+        if !c.is_scene("menu") {
+            return;
+        }
+        if matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) {
+            return;
+        }
+        let world = c.screen_to_world(pos);
+        const BTNS: &[(&str, &str)] = &[
+            ("start_btn", "goto_game"),
+            ("menu_shop_btn", "goto_shop"),
+            ("menu_settings_btn", "goto_menu_settings"),
+            ("menu_achievements_btn", "goto_achievements"),
+            ("menu_stats_btn", "goto_stats"),
+            ("menu_daily_btn", "goto_daily_reward"),
+        ];
+        for (name, event) in BTNS {
+            if let Some(obj) = c.get_game_object(name) {
+                if world.0 >= obj.position.0
+                    && world.0 <= obj.position.0 + obj.size.0
+                    && world.1 >= obj.position.1
+                    && world.1 <= obj.position.1 + obj.size.1
+                {
+                    c.run(Action::Custom { name: event.to_string() });
+                    return;
+                }
+            }
+        }
+    });
+    canvas.set_var("menu_press_handler_registered", true);
+}
+
 fn gameover_step_countup(c: &mut Canvas, value_key: &str, velocity_key: &str, target: i32) -> i32 {
     if target <= 0 {
         c.set_var(value_key, 0i32);
@@ -638,6 +680,8 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             canvas.set_camera(cam);
             canvas.set_var("menu_cam_target_y", MENU_Y);
             canvas.set_var("menu_in_shop", false);
+
+            push_menu_press_handler(canvas);
 
             canvas.set_var("menu_text_dirty", true);
             // Reset mode selection to FREE ROAM whenever the menu is entered.
