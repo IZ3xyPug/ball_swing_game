@@ -60,20 +60,13 @@ pub fn tick_spawn_animations(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     if s.spawn_animations.is_empty() { return; }
 
-    // Trigger distance = half the visible screen width + speed lookahead.
-    // At zoom=1.0 the visible half-width is VW/2. Zoomed out (zoom<1) the
-    // visible area is larger, so the trigger fires earlier automatically.
-    // Speed adds a small extra lookahead on top so fast players stay ahead.
-    let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.1);
-    let visible_half_w = (VW as f32 * 0.5) / zoom;
-    let cap = crate::gameplay::player_max_momentum(&s);
-    let speed_t = (s.vx.abs() / cap.max(1.0)).min(1.0);
-    let trigger_ahead = visible_half_w + VW as f32 * speed_t * 0.3;
-    let trigger_x = s.px + trigger_ahead;
+    // Always start the drop-in animation so placed hooks/obstacles reliably
+    // animate to their target and become visible. (The previous proximity
+    // trigger kept far-ahead hooks stuck off-screen and invisible until the
+    // player got close — which left "empty" stretches even though the hooks
+    // existed.)
     for anim in s.spawn_animations.iter_mut() {
-        if !anim.started && anim.target_x < trigger_x {
-            anim.started = true;
-        }
+        anim.started = true;
     }
 
     // Collect per-anim updates, then release the lock before touching game objects.
@@ -282,6 +275,7 @@ pub fn tick_spawning(
         s.world_sampler.evict_before(evict_x);
     }
     spawn_hooks(c, st);
+    ensure_player_hooks(c, st);
     if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
         spawn_pads(c, st, tech_bounce_img, tech_bounce_img_flipped, pad_thruster_static_img, pad_thruster_anim_template, pad_thruster_anim_template_flipped);
     }
@@ -578,23 +572,11 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             c.set_var("extended_hook_last_x", Value::F32(hx));
         }
 
-        let rolled_buff = lcg(&mut s.seed) < BUFF_HOOK_SPAWN_CHANCE;
-        let last_buff_x = c.get_var("buff_hook_last_x").and_then(|v| {
-            if let Value::F32(x) = v {
-                Some(x)
-            } else if let Value::F64(x) = v {
-                Some(x as f32)
-            } else {
-                None
-            }
-        });
-        let has_buff_gap = last_buff_x
-            .map(|prev_x| (hx - prev_x).abs() >= BUFF_HOOK_MIN_X_GAP)
-            .unwrap_or(true);
-        let is_buff_hook = rolled_buff && has_buff_gap && !is_special_hook && !is_extended_hook;
-        if is_buff_hook {
-            c.set_var("buff_hook_last_x", Value::F32(hx));
-        }
+        // Buff hooks are a boss-arena mechanic only (spawn_arena_tether_nodes
+        // makes every 3rd node a buff node). Keep the RNG draw so level layout
+        // is unchanged, but never spawn a buff node from the normal generator.
+        let _rolled_buff = lcg(&mut s.seed) < BUFF_HOOK_SPAWN_CHANCE;
+        let is_buff_hook = false;
 
         let rolled_shield = lcg(&mut s.seed) < SHIELD_HOOK_SPAWN_CHANCE;
         let last_shield_x = c.get_var("shield_hook_last_x").and_then(|v| {
@@ -726,6 +708,97 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drop(s);
 }
 
+/// Safety net: guarantee the player always has a hook to swing to. If no live
+/// hook is within a comfortable distance ahead of the player (or the frontier
+/// is behind the player), place one. This prevents "empty" stretches that can
+/// strand the player — such as the deterministic first-run layout where the
+/// initial generation (from the last starter hook) differs from the respawn
+/// generation.
+fn ensure_player_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Place the guaranteed hook far enough ahead to be off-screen (the camera
+    // spans ~VW around the player, so > VW/2 is off-screen), yet still inside the
+    // ahead-window so the very next frame detects it and doesn't re-place one.
+    const GUARANTEED_AHEAD: f32 = 2000.0;
+
+    let (px, py, vx, max_momentum, has_ahead) = {
+        let s = st.lock().unwrap();
+        let px = s.px;
+        let py = s.py;
+        let vx = s.vx;
+        let max_momentum = crate::gameplay::player_max_momentum(&s);
+        let has_ahead = s.live_hooks.iter().any(|id| {
+            if let Some(obj) = c.get_game_object(id) {
+                let hx = obj.position.0 + obj.size.0 * 0.5;
+                let hy = obj.position.1 + obj.size.1 * 0.5;
+                let dx = hx - px;
+                (dx > -240.0 && dx < 2600.0) && (hy - py).abs() < 1800.0
+            } else {
+                false
+            }
+        });
+        (px, py, vx, max_momentum, has_ahead)
+    };
+    // Already have a hook in the ahead-window — nothing to do. Do NOT bail just
+    // because the spawn frontier is far ahead: a fast swing can leave a hole
+    // between the player and the next generated hook.
+    if has_ahead {
+        return;
+    }
+    // Only place a hook when the player is near the playable band. Far outside
+    // it (e.g. a very high swing) there are no hooks in the void, and placing
+    // them every frame there would spray a column of hooks into the empty sky.
+    if py < HOOK_Y_MIN - 1800.0 || py > HOOK_Y_MAX + 1800.0 {
+        return;
+    }
+
+    let Some(id) = ({ let mut s = st.lock().unwrap(); s.pool_free.pop() }) else { return; };
+    let hx = px + GUARANTEED_AHEAD;
+    let hy = py.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+    let hook_half = HOOK_R;
+    let target_x = hx - hook_half;
+    let target_y = hy - hook_half;
+    let start_y  = target_y - SPAWN_ANIM_DROP; // enter from above, off-screen
+    let anim_ticks = spawn_anim_ticks_for_speed(vx, max_momentum);
+    {
+        let mut s = st.lock().unwrap();
+        s.live_hooks.push(id.clone());
+        // Note: do NOT advance rightmost_x here. Bumping the placement frontier
+        // to the failsafe x makes the next gen_hook_batch start beyond it and
+        // can skip an entire band of hooks, leaving a long gap that only the
+        // failsafe fills. The failsafe hook is already in live_hooks, so the
+        // normal spawner keeps its own frontier.
+        s.spawn_animations.push(SpawnAnim {
+            id: id.clone(),
+            target_x,
+            target_y,
+            start_y,
+            start_rot: 0.0,
+            target_rot: 0.0,
+            elapsed: 0,
+            total: anim_ticks,
+            restore_platform: false,
+            started: false,
+            restore_rotation_momentum: 0.0,
+        });
+    }
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.visible = false;
+        obj.position = (target_x, start_y);
+        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.tags.retain(|t| t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG);
+        if !obj.tags.iter().any(|t| t == "hook") {
+            obj.tags.push("hook".into());
+        }
+        obj.animated_sprite = None;
+        obj.set_image(hook_img(C_HOOK.0, C_HOOK.1, C_HOOK.2));
+        obj.clear_glow();
+    }
+}
+
 // ── Pads ──────────────────────────────────────────────────────────────────────
 
 fn spawn_pads(
@@ -824,6 +897,7 @@ fn spawn_pads(
             obj.visible = false; // hidden until animation starts
             obj.animated_sprite = None;
             obj.rotation = 0.0;
+            obj.layer = 2;
             obj.set_image(pad_img.clone());
         }
         ensure_pad_dynamic_outline(c, &id);
@@ -1361,6 +1435,7 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (x - half, y - half - SPAWN_ANIM_DROP);
             obj.size = (TURRET_FULL_SIZE, TURRET_FULL_SIZE);
             obj.visible = false;
+            obj.layer = 2;
             obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (TURRET_FULL_SIZE, TURRET_FULL_SIZE), 0.0), image: sprite.into(), color: None });
         }
 
@@ -1397,6 +1472,7 @@ fn spawn_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if let Some(obj) = c.get_game_object_mut(&id) {
                 obj.position = (x, y);
                 obj.visible = true;
+                obj.layer = 2;
             }
 
             s = st.lock().unwrap();

@@ -14,6 +14,9 @@ pub enum CannonState {
     Capturing { seq_idx: usize, frame_timer: u32 },
     /// Player frozen inside barrel; cannon slowly rotates CW.
     Charging { ticks: u32 },
+    /// Waiting for the player to accept fast-travel (press F) or let the
+    /// default launch fire. Player is held frozen in the barrel.
+    WaitingChoice { ticks: u32 },
     /// Fire windup animation: frames 8→0, launch at frame 0.
     FiringDown { frame_idx: usize, frame_timer: u32 },
     /// Post-launch return animation: frames 0→8 before rotation recovery.
@@ -32,6 +35,9 @@ pub struct CannonPhase {
     pub bob_phase: f32,
     /// Current visual rotation in degrees.
     pub rotation:  f32,
+    /// True while gravity is flipped (world mirrored vertically). The cannon
+    /// barrel points the opposite way and its default rotation is +180°.
+    pub flipped:   bool,
 }
 
 pub fn lcg(s: &mut u64) -> f32 {
@@ -361,6 +367,15 @@ pub struct State {
     pub boss_entry_ticks: u32,      // counts up after crossing threshold
     pub boss_spawned: bool,         // body object made visible
     pub boss_cleared: bool,         // arena cleared on entry (one-shot)
+    /// Once the pre-portal approach grapple nodes have been placed.
+    pub boss_approach_nodes_spawned: bool,
+    /// True while the player orbits a safe node after teleporting into the arena,
+    /// before the battle activates. Cleared when the player tethers to a node.
+    pub boss_stasis_active: bool,
+    /// Orbit angle driver during boss stasis.
+    pub boss_stasis_ticks: u32,
+    /// The safe node the player orbits during boss stasis (for reference).
+    pub boss_stasis_hook: String,
     pub boss_hp: i32,
     pub boss_phase: f32,            // lissajous phase angle (radians, advances per tick)
     pub boss_vx: f32,               // kept for bolts; movement now parametric
@@ -422,6 +437,8 @@ pub struct State {
     pub buff_timer: u32,
     /// True for a short window right after a buffed weakpoint hit (hit feedback).
     pub buff_hit_flash: u32,
+    /// How many boss projectiles the current buff can absorb before it ends.
+    pub buff_absorbs: u32,
     // ── Roguelike upgrade nodes ──────────────────────────────────────────────
     pub upgrade_live:       Vec<String>,
     pub upgrade_free:       Vec<String>,
@@ -432,6 +449,27 @@ pub struct State {
     pub oxygen_drain_accum: f32,
     /// Owned momentum-cap upgrade.
     pub upgrade_momentum_bonus: bool,
+    /// How many times each run-upgrade has been bought THIS run (drives the
+    /// escalating cost of the run-persisting upgrades).
+    pub run_heart_buys:     u32,
+    pub run_breath_buys:    u32,
+    pub run_momentum_buys:  u32,
+    /// True while the roguelike upgrade choice dialogue is open.
+    pub upgrade_dialogue_active: bool,
+    /// Id of the upgrade node the dialogue is attached to.
+    pub upgrade_dialogue_node: String,
+    /// World-space centre where the upgrade dialogue holds the player.
+    pub upgrade_hold_x: f32,
+    pub upgrade_hold_y: f32,
+    /// True after the dialogue closes: the player is held in stasis until they
+    /// tether to a hook node.
+    pub upgrade_hold_until_tether: bool,
+    /// True if this run entered the space zone (used for meta-currency bonus).
+    pub space_visited: bool,
+    /// True if this run defeated the boss (used for meta-currency bonus).
+    pub boss_killed: bool,
+    /// Coins banked during the current space visit (lost if oxygen runs out).
+    pub space_coins_collected: u32,
     /// Solar flare hazard: ticks until the next flare.
     pub flare_cooldown: u32,
     /// Remaining telegraph ticks before a flare erupts.

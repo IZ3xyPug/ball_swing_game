@@ -66,6 +66,7 @@ fn flip_all_live_objects(c: &mut Canvas, s: &State, tech_bounce_img: &Image, tec
         .chain(&s.zero_g_live)
         .chain(&s.gwell_live)
         .chain(&s.turret_live)
+        .chain(&s.space_hook_live)
         .chain(&s.space_asteroid_live)
     {
         if let Some(obj) = c.get_game_object_mut(name) {
@@ -154,6 +155,7 @@ fn mirror_player_for_flip(s: &mut State) {
 fn apply_flip_transform(c: &mut Canvas, s: &mut State, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     mirror_player_for_flip(s);
     flip_all_live_objects(c, s, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
+    super::gravity_cannon::flip_cannons(c, s);
     flip_mover_origins(c, s);
     // Negate bullet vertical velocities so they keep flying in the right direction.
     for (_, _, vy, _) in s.bullet_live.iter_mut() {

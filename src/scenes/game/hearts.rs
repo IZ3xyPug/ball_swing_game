@@ -104,11 +104,10 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let mut s = st.lock().unwrap();
             s.player_buff = 1;
             s.buff_timer = 600;
+            s.buff_absorbs = crate::constants::BUFF_ABSORB_MAX;
         }
         c.set_var("debug_force_buff", false);
-        if let Some(p) = c.get_game_object_mut("player") {
-            p.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 22.0 });
-        }
+        // Buff is shown by the round electricity mega-shader effect (not a glow).
     }
     let mut s = st.lock().unwrap();
     c.set_var("player_buff", Value::I32(s.player_buff as i32));
@@ -124,6 +123,16 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             p.clear_glow();
         }
         return;
+    }
+    // Buff is still active: render the "electricity ball" mega-shader effect over
+    // the player while the boss-damage buff is in effect.
+    if s.player_buff > 0 {
+        if let Some(p) = c.get_game_object("player") {
+            let cx = p.position.0 + p.size.0 * 0.5;
+            let cy = p.position.1 + p.size.1 * 0.5;
+            let d = p.size.0.max(p.size.1).max(PLAYER_R * 2.0);
+            super::fx::push_electric_fx(c, (cx, cy), (d * 1.6, d * 1.6), (0.75, 0.95, 1.0, 0.9));
+        }
     }
     if s.buff_hit_flash > 0 {
         s.buff_hit_flash -= 1;
@@ -255,6 +264,11 @@ fn clear_world_for_respawn(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let hook_ids = std::mem::take(&mut s.live_hooks);
     let pad_ids = std::mem::take(&mut s.pad_live);
+    // Each pad has a companion thruster (`pad_X_thruster`) that is only
+    // positioned/visible via `tick_pad_thrusters` while the pad stays in
+    // `pad_live`. After recycling the pad we must hide its thruster too,
+    // otherwise it is left floating alone (no pad) after a respawn.
+    let pad_thr_ids: Vec<String> = pad_ids.iter().map(|n| format!("{n}_thruster")).collect();
     let spinner_ids = std::mem::take(&mut s.spinner_live);
     let coin_ids = std::mem::take(&mut s.coin_live);
     let flip_ids = std::mem::take(&mut s.flip_live);
@@ -268,7 +282,8 @@ fn clear_world_for_respawn(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let cannon_ids = std::mem::take(&mut s.cannon_live);
 
     for id in hook_ids.iter()
-        .chain(pad_ids.iter()).chain(spinner_ids.iter()).chain(coin_ids.iter())
+        .chain(pad_ids.iter()).chain(pad_thr_ids.iter()).chain(spinner_ids.iter())
+        .chain(coin_ids.iter())
         .chain(flip_ids.iter()).chain(sx2_ids.iter()).chain(zg_ids.iter())
         .chain(gate_ids.iter()).chain(gwell_ids.iter()).chain(turret_ids.iter())
         .chain(bullet_ids.iter()).chain(rpad_ids.iter()).chain(cannon_ids.iter())
@@ -314,18 +329,22 @@ fn rewind_frontiers(st: &Arc<Mutex<State>>, cx: f32) {
     s.gate_rightmost = s.gate_rightmost.min(backfill_x);
     s.gwell_rightmost = s.gwell_rightmost.min(backfill_x);
     s.turret_rightmost = s.turret_rightmost.min(backfill_x);
+    s.cannon_rightmost = s.cannon_rightmost.min(backfill_x);
     s.rocket_pad_rightmost = s.rocket_pad_rightmost.min(backfill_x);
 
-    if s.pending.is_empty() {
-        let mut seed = s.seed;
-        let mut gen_head_x = s.gen_head_x.min(backfill_x);
-        let mut gen_head_y = s.gen_head_y;
-        let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
-        s.seed = seed;
-        s.gen_head_x = gen_head_x;
-        s.gen_head_y = gen_head_y;
-        s.pending.extend(batch);
-    }
+    // Drop hooks that were pre-generated for the (now cleared) world ahead —
+    // otherwise the spawner places them at their old far-ahead positions and
+    // the content near the checkpoint never regenerates. Regenerate from the
+    // checkpoint X so hooks/pads/etc. follow the player back.
+    s.pending.clear();
+    let mut seed = s.seed;
+    let mut gen_head_x = s.gen_head_x.min(backfill_x);
+    let mut gen_head_y = s.gen_head_y;
+    let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
+    s.seed = seed;
+    s.gen_head_x = gen_head_x;
+    s.gen_head_y = gen_head_y;
+    s.pending.extend(batch);
 }
 
 fn place_checkpoint_hook(c: &mut Canvas, st: &Arc<Mutex<State>>, cx: f32, cy: f32) {
@@ -337,6 +356,7 @@ fn place_checkpoint_hook(c: &mut Canvas, st: &Arc<Mutex<State>>, cx: f32, cy: f3
     }
     drop(s);
 
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
     if let Some(obj) = c.get_game_object_mut(&id) {
         obj.visible = true;
         obj.position = (cx - HOOK_R, cy - HOOK_R);
@@ -348,12 +368,16 @@ fn place_checkpoint_hook(c: &mut Canvas, st: &Arc<Mutex<State>>, cx: f32, cy: f3
         obj.tags.retain(|t| t != "checkpoint_node" && t != "hook");
         obj.tags.push("checkpoint_node".into());
         obj.tags.push("hook".into());
-        obj.set_image(Image {
-            shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-            image: circle_cached(HOOK_R as u32, 90, 220, 255),
-            color: None,
-        });
-        obj.set_glow(GlowConfig { color: Color(120, 220, 255, 255), width: 20.0 });
+        if asteroid_mode {
+            // Match the standard artifact hook look (same as the starting hook)
+            // so the respawn orbit node doesn't appear as a plain coloured circle.
+            obj.set_animation(hook_artifact_anim());
+            obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+            obj.clear_glow();
+        } else {
+            obj.set_image(hook_img(C_HOOK.0, C_HOOK.1, C_HOOK.2));
+            obj.clear_glow();
+        }
     } else {
         let mut s = st.lock().unwrap();
         s.live_hooks.retain(|n| n != &id);

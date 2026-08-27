@@ -206,6 +206,27 @@ pub fn circle_cached(radius: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> 
     arc
 }
 
+/// A right-pointing arrow on a transparent square, so the object's centre is
+/// the rotation pivot. Used for off-screen objective indicators. `a` is the
+/// alpha for the arrow body.
+pub fn arrow_img(size: u32, r: u8, g: u8, b: u8, a: u8) -> image::RgbaImage {
+    let mut img = image::RgbaImage::new(size, size);
+    let cy = size as f32 * 0.5;
+    for py in 0..size {
+        for px in 0..size {
+            let x = px as f32 + 0.5;
+            let y = py as f32 + 0.5;
+            // u = 0 at the right tip, 1 at the left base.
+            let u = ((size as f32 - x) / size as f32).clamp(0.0, 1.0);
+            let half = u * cy;
+            if (y - cy).abs() <= half {
+                img.put_pixel(px, py, image::Rgba([r, g, b, a]));
+            }
+        }
+    }
+    img
+}
+
 pub fn gradient_rect(w: u32, h: u32, (r0,g0,b0): (u8,u8,u8), (r1,g1,b1): (u8,u8,u8)) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
     for py in 0..h {

@@ -15,12 +15,14 @@ mod objects;
 mod menu;
 mod scenes;
 mod shop;
+mod profile;
 pub mod headless;
 
 #[cfg(test)]
 mod sim_tests;
 
 use menu::{
+    build_profile_scene,
     build_tutorial_scene,
     build_gameover_oxygen_scene,
     build_gameover_scene,
@@ -38,6 +40,7 @@ pub struct App;
 impl App {
     fn new(ctx: &mut Context) -> impl Drawable {
         let mut canvas = Canvas::new(ctx, CanvasMode::Landscape);
+        canvas.add_scene(build_profile_scene(ctx));
         canvas.add_scene(build_tutorial_scene(ctx));
         canvas.add_scene(build_menu_scene(ctx));
         canvas.add_scene(build_game_scene(ctx));
@@ -48,7 +51,7 @@ impl App {
         canvas.add_scene(build_achievements_scene(ctx));
         canvas.add_scene(build_stats_scene(ctx));
         canvas.add_scene(build_daily_reward_scene(ctx));
-        canvas.load_scene("tutorial");
+        canvas.load_scene("profile");
         canvas
     }
 }

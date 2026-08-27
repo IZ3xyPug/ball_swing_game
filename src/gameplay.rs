@@ -2,11 +2,11 @@ use crate::constants::*;
 use crate::state::State;
 
 /// The player's current maximum momentum cap, accounting for the momentum-cap
-/// upgrade and the buff tether node (both can raise it above MOMENTUM_CAP).
-/// Early zones are slower and it ramps up gradually as the player progresses
-/// (via the zone multiplier), so the fast ceiling is a late-game reward.
-/// Used to scale spawn-animation speed / lookahead so fast players don't
-/// outpace procedural generation.
+/// upgrade. (The buff tether node is a boss-fight mechanic that enables boss
+/// damage and no longer boosts momentum.) Early zones are slower and it ramps up
+/// gradually as the player progresses (via the zone multiplier), so the fast
+/// ceiling is a late-game reward. Used to scale spawn-animation speed / lookahead
+/// so fast players don't outpace procedural generation.
 pub fn player_max_momentum(s: &State) -> f32 {
     if s.in_space_mode {
         SPACE_MOMENTUM_CAP
@@ -17,8 +17,8 @@ pub fn player_max_momentum(s: &State) -> f32 {
             _ => 1.36,
         };
         let base = MOMENTUM_CAP * zone_mult;
-        if s.buff_timer > 0 || s.upgrade_momentum_bonus {
-            base.max(BUFF_MOMENTUM_CAP).max(UPGRADE_MOMENTUM_CAP)
+        if s.upgrade_momentum_bonus {
+            base.max(UPGRADE_MOMENTUM_CAP)
         } else {
             base
         }

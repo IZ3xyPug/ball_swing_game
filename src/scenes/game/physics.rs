@@ -1,6 +1,5 @@
 use quartz::*;
 use std::collections::HashMap;
-use std::f32::consts::PI;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -72,79 +71,16 @@ fn rope_fx_image(
     let mut resized = image::imageops::resize(src, target_w, target_h, image::imageops::FilterType::Nearest);
 
     // Style 0 preserves the original animated energy rope unchanged.
-    // Styles 1-4 are drawn fresh onto a blank canvas — completely new rope shapes,
-    // not a recolor of the GIF.
+    // Styles 1-4 recolour that same energy-hook GIF toward the selected rope
+    // colour (a mild overlay), rather than drawing a fresh braided shape.
     if style_idx != 0 {
-        let w = target_w.max(1) as f32;
-        let h = target_h.max(1) as f32;
-        let phase = frame_idx as f32 * 0.27;
-        let style = style_idx.min(4);
-        let mut fresh = image::RgbaImage::new(target_w, target_h);
-        for y in 0..target_h {
-            for x in 0..target_w {
-                let xf = x as f32 / w;
-                let yf = y as f32 / h;
-
-                let shade: f32 = match style {
-                    // Braided rope: two crossing strands with a bright highlight core.
-                    1 => {
-                        let lane_a = 0.35 + 0.22 * (yf * 30.0 + phase).sin();
-                        let lane_b = 0.65 + 0.22 * (yf * 30.0 + phase + PI).sin();
-                        let da = (xf - lane_a).abs();
-                        let db = (xf - lane_b).abs();
-                        let near = da.min(db);
-                        let strand = (1.0 - near / 0.18).clamp(0.0, 1.0);
-                        // Highlight: bright center of each strand.
-                        let hi_a = (1.0 - da / 0.06).clamp(0.0, 1.0);
-                        let hi_b = (1.0 - db / 0.06).clamp(0.0, 1.0);
-                        (strand * 0.7 + hi_a.max(hi_b) * 0.3).clamp(0.0, 1.0)
-                    }
-                    // Segmented cable: dark gaps between metallic link sections.
-                    2 => {
-                        let seg_len = 12u32;
-                        let seg_phase = ((y / seg_len + (frame_idx / 2) as u32) % 2) as f32;
-                        let core = (1.0 - (xf - 0.5).abs() / 0.40).clamp(0.0, 1.0);
-                        // Gap at segment boundary.
-                        let local_y = (y % seg_len) as f32 / seg_len as f32;
-                        let gap = if local_y < 0.12 || local_y > 0.88 { 0.0 } else { 1.0 };
-                        let brightness = if seg_phase > 0.5 { 0.90 } else { 0.55 };
-                        core * gap * brightness
-                    }
-                    // Chain: oval links with dark holes in the centre.
-                    3 => {
-                        let link_h = 18u32;
-                        let local_y = (y % link_h) as f32 / link_h as f32;
-                        // Outer oval of the link.
-                        let oy = (local_y - 0.5).abs() * 2.0; // 0 = mid, 1 = top/bot
-                        let outer_r = 0.44 + 0.1 * (1.0 - oy);
-                        let ox = (xf - 0.5).abs();
-                        let on_link = (ox < outer_r) as u8 as f32;
-                        // Cut out inner hole.
-                        let inner_r = outer_r * 0.45;
-                        let in_hole = (ox < inner_r && oy < 0.55) as u8 as f32;
-                        // Pulsing highlight along the top of each link.
-                        let hi = ((local_y * PI * 2.0 + phase).sin() * 0.5 + 0.5) * 0.35;
-                        (on_link - in_hole).clamp(0.0, 1.0) * (0.65 + hi)
-                    }
-                    // Plasma ribbon: bright animated wave core.
-                    _ => {
-                        let wave = 0.5 + 0.5 * (yf * 44.0 + phase * 2.4 + xf * 8.0).sin();
-                        let core = (1.0 - (xf - 0.5).abs() / 0.42).clamp(0.0, 1.0);
-                        let glow_edge = (1.0 - (xf - 0.5).abs() / 0.50).clamp(0.0, 1.0);
-                        0.15 * glow_edge + 0.85 * (0.55 * core + 0.45 * wave) * core
-                    }
-                };
-
-                if shade > 0.02 {
-                    let r = (rope_rgb.0 as f32 * shade).clamp(0.0, 255.0) as u8;
-                    let g = (rope_rgb.1 as f32 * shade).clamp(0.0, 255.0) as u8;
-                    let b = (rope_rgb.2 as f32 * shade).clamp(0.0, 255.0) as u8;
-                    let a = (shade * 255.0).clamp(0.0, 255.0) as u8;
-                    fresh.put_pixel(x, y, image::Rgba([r, g, b, a]));
-                }
-            }
+        let (cr, cg, cb) = rope_rgb;
+        for px in resized.pixels_mut() {
+            if px[3] == 0 { continue; }
+            px[0] = (px[0] as f32 * 0.65 + cr as f32 * 0.35).min(255.0) as u8;
+            px[1] = (px[1] as f32 * 0.65 + cg as f32 * 0.35).min(255.0) as u8;
+            px[2] = (px[2] as f32 * 0.65 + cb as f32 * 0.35).min(255.0) as u8;
         }
-        resized = fresh;
     }
     let out = Arc::new(resized);
 

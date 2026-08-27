@@ -34,6 +34,30 @@ pub fn tick_visuals(
     tick_zoom(c, st);
     tick_debug_radii(c, st);
     tick_player_ball_animation(c, st);
+    tick_ensure_asteroid_hooks(c, st);
+}
+
+/// Defensive: in asteroid mode, any live REGULAR hook that has lost its
+/// animation (showing a plain colored circle instead of the `hook_artifact.gif`)
+/// gets the artifact animation restored. Buff/shield/special/extended hooks are
+/// intentionally colored circles and are left alone.
+fn tick_ensure_asteroid_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    if !c.get_bool("asteroid_hooks_on") { return; }
+    let hooks = st.lock().unwrap().live_hooks.clone();
+    for hid in &hooks {
+        if let Some(obj) = c.get_game_object_mut(hid) {
+            if obj.animated_sprite.is_some() { continue; }
+            if obj.tags.iter().any(|t| {
+                t == SPECIAL_HOOK_TAG || t == EXTENDED_HOOK_TAG
+                    || t == BUFF_HOOK_TAG || t == SHIELD_HOOK_TAG
+            }) { continue; }
+            obj.set_animation(hook_artifact_anim());
+            obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+            obj.collision_mode = CollisionMode::NonPlatform;
+            obj.gravity = 0.0;
+            obj.momentum = (0.0, 0.0);
+        }
+    }
 }
 
 fn tick_pad_impact_animation(
@@ -458,6 +482,11 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let effective_y = s.py + s.vy.min(0.0) * ZOOM_LOOKAHEAD_T;
         ((VH - ZOOM_TOP_MARGIN) / (VH - effective_y).abs().max(1.0)).clamp(1.0 / ZOOM_MAX, 1.0)
     };
+
+    // In the boss arena the Dune-style height zoom would pull way out on the
+    // tall zero-g space; keep the boss readable by capping how far out it goes.
+    let in_boss = s.boss_active && s.boss_spawned && s.boss_hp > 0;
+    let target_zoom = if in_boss { target_zoom.max(BOSS_CAM_MIN_ZOOM) } else { target_zoom };
 
     let px = s.px;
     let py = s.py;

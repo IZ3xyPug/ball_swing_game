@@ -131,6 +131,10 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             s.hook_y = hy;
             s.rope_len = rope_len;
             s.active_hook = hook_id.clone();
+            // A successful grab ends any post-dialogue stasis hold.
+            s.upgrade_hold_until_tether = false;
+            s.upgrade_dialogue_active = false;
+            c.set_var("game_paused", false);
 
             let zone_idx = zone_index_for_distance(s.distance);
 
@@ -202,10 +206,10 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     s.player_buff = 1;
                     s.buff_timer = BUFF_DURATION_TICKS;
                     s.buff_hit_flash = 0;
+                    s.buff_absorbs = BUFF_ABSORB_MAX;
                     drop(s);
-                    if let Some(p) = c.get_game_object_mut("player") {
-                        p.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 22.0 });
-                    }
+                    // The buff is shown by the round electricity mega-shader effect
+                    // (fx::push_electric_fx in tick_buff), not a square glow.
                 }
             }
             if let Some((ticks, anim_id)) = artifact_grab_info {

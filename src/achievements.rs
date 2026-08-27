@@ -50,6 +50,8 @@ pub fn trigger_gold_master_unlock(c: &mut Canvas) {
     c.set_var(GOLD_MASTER_UNLOCKED_VAR, true);
     c.set_var(GOLD_MASTER_TOAST_ACTIVE_VAR, true);
     c.set_var(GOLD_MASTER_TOAST_TICKS_VAR, 0i32);
+    // Persist the unlock on the active profile so it doesn't re-trigger.
+    crate::profile::unlock_achievement_on_profile("gold_master");
 }
 
 pub fn maybe_unlock_gold_master(c: &mut Canvas, total_coins: i32) -> bool {

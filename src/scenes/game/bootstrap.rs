@@ -45,6 +45,7 @@ use crate::constants::*;
 use crate::hud::*;
 use crate::images::*;
 use crate::objects::*;
+use super::space_zone::blackhole1_template;
 
 const LAYER_SOLAR_CEILING: i32 = 12;
 const LAYER_SPACE_BLACKHOLE: i32 = 18;
@@ -992,6 +993,68 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     start_prompt_text.layer = 10_002;
     start_prompt_text.ignore_zoom = true;
 
+    // Cannon fast-travel prompt (shown while the player is held and can afford
+    // the hyper-transit; press F to accept, otherwise the default launch fires).
+    let mut cannon_prompt_text = GameObject::build("cannon_prompt_text")
+        .size(1500.0, 120.0)
+        .position((VW - 1500.0) * 0.5, VH * 0.16)
+        .tag("hud")
+        .build(ctx);
+    cannon_prompt_text.visible = false;
+    cannon_prompt_text.layer = 10_002;
+    cannon_prompt_text.ignore_zoom = true;
+
+    // ── Roguelike upgrade choice dialogue (HUD) ─────────────────────────
+    // Shown while the player is held at an upgrade node; options are set by
+    // upgrades.rs::update_dialogue_text and selected with keys 1-5 / Esc.
+    let dlg_panel = {
+        let (w, h) = (1100u32, 620u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h {
+            for px in 0..w {
+                let border = px < 3 || px >= w - 3 || py < 3 || py >= h - 3;
+                img.put_pixel(px, py, image::Rgba([16, 26, 48, if border { 235 } else { 205 }]));
+            }
+        }
+        let mut obj = GameObject::new_rect(ctx, "upgrade_dialogue_panel".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (VW * 0.5 - w as f32 * 0.5, VH * 0.5 - h as f32 * 0.5),
+            vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        obj.visible = false;
+        obj.ignore_zoom = true;
+        obj.layer = 10_001;
+        obj
+    };
+    let mut dlg_title = GameObject::build("upgrade_dialogue_title")
+        .size(1000.0, 80.0)
+        .position(VW * 0.5 - 500.0, VH * 0.36)
+        .tag("hud")
+        .build(ctx);
+    dlg_title.visible = false;
+    dlg_title.ignore_zoom = true;
+    dlg_title.layer = 10_001;
+    let mut dlg_meta = GameObject::build("upgrade_dialogue_meta")
+        .size(1000.0, 70.0)
+        .position(VW * 0.5 - 500.0, VH * 0.43)
+        .tag("hud")
+        .build(ctx);
+    dlg_meta.visible = false;
+    dlg_meta.ignore_zoom = true;
+    dlg_meta.layer = 10_001;
+    let mut dlg_opts = Vec::new();
+    for i in 0..5 {
+        let y = VH * 0.50 + i as f32 * 82.0;
+        let mut o = GameObject::build(format!("upgrade_opt_{i}"))
+            .size(1000.0, 72.0)
+            .position(VW * 0.5 - 500.0, y)
+            .tag("hud")
+            .build(ctx);
+        o.visible = false;
+        o.ignore_zoom = true;
+        o.layer = 10_001;
+        dlg_opts.push(o);
+    }
+
     // Three independent label objects — one above each slider track — so
     // vertical positioning is exact rather than relying on \n spacing.
     // Positioned at SLIDER_Y[i] - 100 so the label sits just above its track.
@@ -1059,6 +1122,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("pause_settings_btn", pause_settings_btn)
         .with_object("pause_menu_btn", pause_menu_btn)
         .with_object("start_prompt_text", start_prompt_text)
+        .with_object("cannon_prompt_text", cannon_prompt_text)
+        .with_object("upgrade_dialogue_panel", dlg_panel)
+        .with_object("upgrade_dialogue_title", dlg_title)
+        .with_object("upgrade_dialogue_meta", dlg_meta)
         .with_object("settings_label_0", settings_label_0)
         .with_object("settings_label_1", settings_label_1)
         .with_object("settings_label_2", settings_label_2)
@@ -1069,6 +1136,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("slider_music_thumb",  slider_music_thumb)
         .with_object("slider_sound_track",  slider_sound_track)
         .with_object("slider_sound_thumb",  slider_sound_thumb);
+
+    // Register the upgrade-dialogue option text objects.
+    for (i, opt) in dlg_opts.into_iter().enumerate() {
+        scene = scene.with_object(format!("upgrade_opt_{i}"), opt);
+    }
 
     // ── Boss body ─────────────────────────────────────────────────────────
     {
@@ -1117,6 +1189,41 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object("warp_flash", wf);
     }
 
+    // ── Boss teleport threshold marker ─────────────────────────────────────
+    // A huge black-hole swirl at the boss threshold (x = BOSS_THRESHOLD_X) so
+    // the player has a clear visual that they are heading into something
+    // special; the teleport threshold is near its centre. It sits on a very low
+    // world layer (-1; below the default layer 0 used by turrets/pads/rocket-
+    // pads, spinners at 5 and hooks at 21) so ALL playable obstacles render in
+    // front of it, and a down-pointing arrow floats just above it on a higher
+    // layer so it stays visible. Shown in boss mode as the player approaches
+    // (boss.rs::spawn_boss_approach_nodes).
+    {
+        let d = BOSS_MARKER_D;
+        let mut mk = GameObject::new_rect(ctx, "boss_threshold_marker".into(),
+            None::<Image>, (d, d), (BOSS_THRESHOLD_X - d * 0.5, BOSS_MARKER_Y - d * 0.5),
+            vec!["boss_marker".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        mk.set_animation(blackhole1_template());
+        mk.visible = false;
+        mk.gravity = 0.0;
+        mk.layer = 1;
+        scene = scene.with_object("boss_threshold_marker", mk);
+
+        // Down-pointing arrow above the marker (points at the teleport point).
+        let asz = 220.0;
+        let acx = BOSS_THRESHOLD_X;
+        let acy = BOSS_MARKER_Y - 900.0;
+        let mut arr = GameObject::new_rect(ctx, "boss_marker_arrow".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (asz, asz), 0.0), image: arrow_img(asz as u32, 255, 200, 60, 240).into(), color: None }),
+            (asz, asz), (acx - asz * 0.5, acy - asz * 0.5),
+            vec!["boss_marker".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        arr.rotation = 90.0; // point down at the black hole
+        arr.visible = false;
+        arr.gravity = 0.0;
+        arr.layer = 40;
+        scene = scene.with_object("boss_marker_arrow", arr);
+    }
+
     // ── Last-boss: barrier + generators ────────────────────────────────────
     // Placeholder recolored shapes; real art can replace them later.
     {
@@ -1151,6 +1258,48 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         barrier.visible = false;
         barrier.set_glow(GlowConfig { color: Color(C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 120), width: 30.0 });
         scene = scene.with_object("boss_barrier", barrier);
+
+        // Boss forcefield: a glowing ring around the boss while the generators
+        // are still up (the boss is invulnerable until they are destroyed).
+        {
+            let d = (BOSS_SIZE * 1.5).round() as u32;
+            let ring = gwell_ring_cached(BOSS_SIZE * 0.75, C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 3, 150.0);
+            let mut ff = GameObject::new_rect(ctx, "boss_forcefield".into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (d as f32, d as f32), 0.0), image: ring, color: None }),
+                (d as f32, d as f32), (-6000.0, -6000.0),
+                vec!["boss_forcefield".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            ff.layer = LAYER_SPACE_HOOK + 2;
+            ff.gravity = 0.0;
+            ff.visible = false;
+            scene = scene.with_object("boss_forcefield", ff);
+        }
+
+        // Boss arena boundary forcefield: a glowing outline of the arena bounds
+        // that contains the player for the fight. Built as four thin solid-edged
+        // rectangles (1×1 `solid` texture stretched to each rect) instead of one
+        // full-arena RgbaImage — a 14000×8400 image exceeds wgpu's 8192 texture
+        // dimension limit and panics in `Device::create_texture`.
+        {
+            let (bx1, bx2, ymin, ymax): (f32, f32, f32, f32) = (BOSS_ZONE_X1, BOSS_ZONE_X2, -6000.0, 2400.0);
+            let bw = bx2 - bx1;
+            let bh = ymax - ymin;
+            let t = 24.0; // border thickness
+            let col = C_BOSS_BARRIER;
+            let mut border = |ctx: &mut Context, id: &str, x: f32, y: f32, w: f32, h: f32| {
+                let mut o = GameObject::new_rect(ctx, id.into(),
+                    Some(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: solid(col.0, col.1, col.2, 90).into(), color: None }),
+                    (w, h), (x, y),
+                    vec!["boss_boundary".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                o.layer = LAYER_SPACE_HOOK + 1;
+                o.gravity = 0.0;
+                o.visible = false;
+                o
+            };
+            scene = scene.with_object("boss_boundary_b", border(ctx, "boss_boundary_b", bx1, ymin, bw, t));
+            scene = scene.with_object("boss_boundary_t", border(ctx, "boss_boundary_t", bx1, ymax - t, bw, t));
+            scene = scene.with_object("boss_boundary_l", border(ctx, "boss_boundary_l", bx1, ymin, t, bh));
+            scene = scene.with_object("boss_boundary_r", border(ctx, "boss_boundary_r", bx2 - t, ymin, t, bh));
+        }
     }
 
     // ── Boss HP bar ───────────────────────────────────────────────────────
@@ -1168,6 +1317,45 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         boss_hp_bar.ignore_zoom = true;
         boss_hp_bar.layer = 101;
         scene = scene.with_object("boss_hp_bar", boss_hp_bar);
+    }
+
+    // ── Boss-name indicator + off-screen objective arrows ─────────────────
+    // `boss_name_text` is a HUD banner (text drawable set in build_scene.rs)
+    // shown during the fight. The arrows are HUD sprites that appear at the
+    // screen edge pointing at the boss / generators when they are off-screen.
+    {
+        let mut boss_name_text = GameObject::build("boss_name_text")
+            .size(1000.0, 100.0)
+            .position((VW - 1000.0) * 0.5, VH * 0.17)
+            .tag("hud")
+            .build(ctx);
+        boss_name_text.visible = false;
+        boss_name_text.ignore_zoom = true;
+        boss_name_text.layer = 102;
+        scene = scene.with_object("boss_name_text", boss_name_text);
+
+        let asz = 64u32;
+        let arrow = arrow_img(asz, C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 230);
+        let mut boss_off_arrow = GameObject::new_rect(ctx, "boss_off_arrow".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (asz as f32, asz as f32), 0.0), image: arrow.clone().into(), color: None }),
+            (asz as f32, asz as f32), (VW * 0.5, VH * 0.5),
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        boss_off_arrow.visible = false;
+        boss_off_arrow.ignore_zoom = true;
+        boss_off_arrow.layer = 102;
+        scene = scene.with_object("boss_off_arrow", boss_off_arrow);
+
+        for i in 0..BOSS_GENERATOR_COUNT {
+            let id = format!("gen_arrow_{i}");
+            let mut a = GameObject::new_rect(ctx, id.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (asz as f32, asz as f32), 0.0), image: arrow.clone().into(), color: None }),
+                (asz as f32, asz as f32), (VW * 0.5, VH * 0.5),
+                vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            a.visible = false;
+            a.ignore_zoom = true;
+            a.layer = 102;
+            scene = scene.with_object(&id, a);
+        }
     }
 
     // ── Boss bolt pool ────────────────────────────────────────────────────

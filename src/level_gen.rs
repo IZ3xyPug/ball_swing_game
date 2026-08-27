@@ -21,10 +21,16 @@ pub fn generate_next_hook(
     seed: &mut u64,
     head_x: &mut f32,
     head_y: &mut f32,
-    _distance_px: f32,
+    distance_px: f32,
 ) -> HookSpec {
-    // Horizontal step.
-    let dx = lcg_range(seed, HOOK_X_STRIDE_MIN, HOOK_X_STRIDE_MAX);
+    // Difficulty curve: as the run advances, stretch the horizontal stride and
+    // the vertical variance. Stride is capped at HOOK_STRIDE_HARD_MAX so hooks
+    // never become un-survivable, and the y-variance bonus still keeps hooks
+    // within the reachable cone for the stride they roll.
+    let t = (distance_px / DIFFICULTY_RAMP_DISTANCE).clamp(0.0, 1.0);
+    let stride_min = HOOK_X_STRIDE_MIN + DIFFICULTY_STRIDE_BONUS * t;
+    let stride_max = (HOOK_X_STRIDE_MAX + DIFFICULTY_STRIDE_BONUS * t).min(HOOK_STRIDE_HARD_MAX);
+    let dx = lcg_range(seed, stride_min, stride_max);
 
     // If stride is within rope reach, keep the old Pythagorean dy budget.
     // If stride exceeds rope reach (intentional long-gap mode), use a fixed
@@ -35,6 +41,9 @@ pub fn generate_next_hook(
     } else {
         (HOOK_CLOSE_Y_THRESHOLD, HOOK_CLOSE_Y_THRESHOLD * 2.0)
     };
+    // Difficulty also widens the vertical band, but never beyond the reach cone
+    // so hops stay makeable.
+    let max_dy = (max_dy + DIFFICULTY_Y_BONUS * t).min((HOOK_MAX_REACH * HOOK_MAX_REACH).sqrt());
 
     let dy_mag = lcg_range(seed, min_dy, max_dy);
     let dy = if lcg_range(seed, 0.0, 1.0) < 0.5 { dy_mag } else { -dy_mag };

@@ -290,6 +290,19 @@ pub fn pad_thruster_id(pad_id: &str) -> String {
     format!("{pad_id}_thruster")
 }
 
+/// Keep the `warp_flash` overlay centred on the player each frame so the
+/// speed-line / wormhole origin tracks the ball, rather than sitting at the
+/// middle of the screen. Only repositions (leaves the sprite size alone, which
+/// is set per-effect). Read the player centre first, then mutate the overlay.
+pub fn center_warp_on_player(c: &mut Canvas) {
+    let Some(p) = c.get_game_object("player") else { return; };
+    let cx = p.position.0 + p.size.0 * 0.5;
+    let cy = p.position.1 + p.size.1 * 0.5;
+    if let Some(obj) = c.get_game_object_mut("warp_flash") {
+        obj.position = (cx - obj.size.0 * 0.5, cy - obj.size.1 * 0.5);
+    }
+}
+
 // ── Comet warning images ──────────────────────────────────────────────────────
 // Each image is decoded once (OnceLock) and cloned cheaply on each use.
 

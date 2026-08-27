@@ -46,6 +46,7 @@ fn push_menu_press_handler(canvas: &mut Canvas) {
             ("menu_achievements_btn", "goto_achievements"),
             ("menu_stats_btn", "goto_stats"),
             ("menu_daily_btn", "goto_daily_reward"),
+            ("menu_profile_btn", "goto_profile"),
         ];
         for (name, event) in BTNS {
             if let Some(obj) = c.get_game_object(name) {
@@ -54,7 +55,14 @@ fn push_menu_press_handler(canvas: &mut Canvas) {
                     && world.1 >= obj.position.1
                     && world.1 <= obj.position.1 + obj.size.1
                 {
-                    c.run(Action::Custom { name: event.to_string() });
+                    // Load the profile scene directly, bypassing the custom
+                    // event, so this button works even if the "goto_profile"
+                    // event registration is somehow stale or missing.
+                    if *name == "menu_profile_btn" {
+                        c.load_scene("profile");
+                    } else {
+                        c.run(Action::Custom { name: event.to_string() });
+                    }
                     return;
                 }
             }
@@ -386,6 +394,12 @@ pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
             Target::name("tutorial_next_btn"),
         )
         .on_enter(|canvas| {
+            // If this profile already finished the tutorial, skip straight to
+            // the menu.
+            if crate::profile::profile().lock().unwrap().tutorial_done {
+                canvas.load_scene("menu");
+                return;
+            }
             let cam = Camera::new((VW, VH), (VW, VH));
             canvas.set_camera(cam);
             tutorial_apply_page(canvas, 0);
@@ -393,6 +407,13 @@ pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
             canvas.register_custom_event("tutorial_next".into(), |c| {
                 let page = c.get_i32("tutorial_page");
                 if page >= 2 {
+                    // Mark the tutorial complete on the active profile.
+                    {
+                        let p = crate::profile::profile();
+                        let mut g = p.lock().unwrap();
+                        g.tutorial_done = true;
+                    }
+                    crate::profile::save_profile();
                     c.load_scene("menu");
                 } else {
                     tutorial_apply_page(c, page + 1);
@@ -433,6 +454,151 @@ fn menu_mode_selector_img() -> image::RgbaImage {
         }
     }
     img
+}
+
+/// Select a profile slot, apply its persistent state to the run vars, and then
+/// continue to the tutorial (if not yet done) or straight to the menu.
+fn select_profile_and_continue(canvas: &mut Canvas, idx: usize) {
+    crate::profile::select_profile(idx);
+    let p = crate::profile::profile();
+    let (tutorial_done, extra_hearts, c_char, c_rope, c_bg, c_trail) = {
+        let g = p.lock().unwrap();
+        (g.tutorial_done, g.permanent_extra_hearts, g.cosmetic_char, g.cosmetic_rope, g.cosmetic_bg, g.cosmetic_trail)
+    };
+    // Permanent extra hearts are read into the run on game start; push them now
+    // so the first run already benefits.
+    canvas.set_var(crate::constants::META_EXTRA_HEARTS_VAR, extra_hearts as i32);
+    // Apply the profile's saved cosmetics.
+    canvas.set_var("player_char_selected", c_char as i32);
+    canvas.set_var("player_rope_selected", c_rope as i32);
+    canvas.set_var("player_bg_selected", c_bg as i32);
+    canvas.set_var("player_trail_selected", c_trail as i32);
+    // Pre-mark already-unlocked achievements so they aren't re-triggered.
+    canvas.set_var(GOLD_MASTER_UNLOCKED_VAR, crate::profile::profile_has_achievement("gold_master"));
+    if tutorial_done {
+        canvas.load_scene("menu");
+    } else {
+        canvas.load_scene("tutorial");
+    }
+}
+
+/// Apply the profile title + slot labels using the canvas's current virtual
+/// scale. Called on enter AND re-applied every frame while `profile_text_dirty`
+/// is set, because at boot the canvas isn't sized yet — `virtual_scale()` returns
+/// 1.0 on the first on_enter, which makes the labels render far too large and
+/// misaligned. Re-applying after layout has sized the canvas fixes the layout.
+pub(crate) fn apply_profile_text(canvas: &mut Canvas) {
+    let Some(font) = ui_font() else { return; };
+    let s = canvas.virtual_scale();
+    if let Some(obj) = canvas.get_game_object_mut("profile_title") {
+        obj.set_drawable(Box::new(ui_text_spec("SELECT PROFILE", &font, 64.0 * s, Color(220, 235, 255, 255), 1200.0 * s)));
+    }
+    let profiles = crate::profile::all_profiles();
+    for i in 0..crate::profile::SLOT_COUNT {
+        let p = profiles.get(i).cloned().unwrap_or_default();
+        let tut = if p.tutorial_done { "Tutorial done" } else { "New" };
+        let label = format!("{}   \u{2022}   Meta {}   \u{2022}   {}", p.name, p.meta_currency, tut);
+        if let Some(obj) = canvas.get_game_object_mut(&format!("profile_slot_text_{i}")) {
+            obj.set_drawable(Box::new(ui_text_spec(&label, &font, 32.0 * s, Color(210, 225, 245, 255), 1080.0 * s)));
+        }
+    }
+}
+
+/// Profile selection screen shown before the menu. Lists the save slots; picking
+/// one loads it (meta / permanent upgrades / achievements / tutorial state) and
+/// continues to the tutorial or the menu.
+pub fn build_profile_scene(ctx: &mut Context) -> Scene {
+    let bg = GameObject::new_rect(ctx, "profile_bg".into(),
+        Some(bright_background_2(VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+    let bg_tint = GameObject::new_rect(ctx, "profile_bg_tint".into(),
+        Some(tint_overlay(VW + 800.0, VH, Color(50, 80, 150, 150))),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+    let mut scene = Scene::new("profile")
+        .with_object("profile_bg", bg)
+        .with_object("profile_bg_tint", bg_tint);
+
+    let title = GameObject::build("profile_title")
+        .size(1200.0, 120.0)
+        .position((VW - 1200.0) * 0.5, VH * 0.10)
+        .tag("ui")
+        .build(ctx);
+    scene = scene.with_object("profile_title", title);
+
+    // Slot buttons + text.
+    for i in 0..crate::profile::SLOT_COUNT {
+        let id = format!("profile_slot_{i}");
+        let txt_id = format!("profile_slot_text_{i}");
+        let y = VH * (0.26 + i as f32 * 0.15);
+        let btn = GameObject::new_rect(ctx, id.clone().into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (1080.0, 120.0), 0.0), image: solid(45, 50, 80, 220).into(), color: None }),
+            (1080.0, 120.0), ((VW - 1080.0) * 0.5, y),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        scene = scene.with_object(&id, btn);
+        let txt = GameObject::build(&txt_id)
+            .size(1080.0, 120.0)
+            .position((VW - 1080.0) * 0.5, y + (120.0 - 40.0) * 0.5)
+            .tag("ui")
+            .build(ctx);
+        scene = scene.with_object(&txt_id, txt);
+    }
+
+    let mut scene = scene.on_enter(|canvas| {
+        // Reset the camera to a known zoom-1.0 state so the slot bands and their
+        // labels render in the same coordinate space (mirrors the gameover scene;
+        // inheriting a leftover camera from the menu can shift UI text sideways).
+        canvas.set_camera(Camera::new((VW, VH), (VW, VH)));
+        // Register the click handler once (guard against re-registration).
+        if !matches!(canvas.get_var("profile_events_registered"), Some(Value::Bool(true))) {
+            canvas.on_mouse_press(move |c, btn, pos| {
+                if !c.is_scene("profile") || btn != MouseButton::Left {
+                    return;
+                }
+                let world = c.screen_to_world(pos);
+                for i in 0..crate::profile::SLOT_COUNT {
+                    if let Some(obj) = c.get_game_object(&format!("profile_slot_{i}")) {
+                        if world.0 >= obj.position.0 && world.0 <= obj.position.0 + obj.size.0
+                            && world.1 >= obj.position.1 && world.1 <= obj.position.1 + obj.size.1
+                        {
+                            select_profile_and_continue(c, i);
+                            return;
+                        }
+                    }
+                }
+            });
+            canvas.set_var("profile_events_registered", true);
+        }
+
+        // Title + slot labels. Applied here AND re-applied via on_update while
+        // profile_text_dirty is set, so the boot scene gets the correct scale.
+        apply_profile_text(canvas);
+        canvas.set_var("profile_text_dirty", true);
+
+        // Re-apply labels once the canvas has been sized (fixes the boot scene,
+        // where virtual_scale() is still 1.0 when on_enter runs) or resized
+        // (the font size / width bake in virtual_scale() at set time, so they
+        // must be re-applied when the scale changes to keep the labels aligned
+        // with the virtual-coordinate bands). Tracks the last-applied scale in
+        // a canvas var (no captured Cell) so it stays register-once safe.
+        if !matches!(canvas.get_var("profile_text_update_registered"), Some(Value::Bool(true))) {
+            canvas.on_update(move |c| {
+                if !c.is_scene("profile") { return; }
+                let s = c.virtual_scale();
+                let dirty = matches!(c.get_var("profile_text_dirty"), Some(Value::Bool(true)));
+                let last = match c.get_var("profile_text_last_scale") {
+                    Some(Value::F32(v)) => v,
+                    _ => -1.0f32,
+                };
+                if !dirty && (last - s).abs() < 0.0001 { return; }
+                c.set_var("profile_text_last_scale", s);
+                apply_profile_text(c);
+                c.set_var("profile_text_dirty", false);
+            });
+            canvas.set_var("profile_text_update_registered", true);
+        }
+    });
+
+    scene
 }
 
 pub fn build_menu_scene(ctx: &mut Context) -> Scene {
@@ -574,10 +740,12 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
     let achievements_btn = make_row_btn(ctx, "menu_achievements_btn", VW/2.0 - 440.0, [100, 60, 160, 230], [200, 60, 240, 230]);
     let stats_btn        = make_row_btn(ctx, "menu_stats_btn",         VW/2.0 - 140.0, [160, 90, 40, 230],  [240, 180, 40, 230]);
     let daily_btn        = make_row_btn(ctx, "menu_daily_btn",         VW/2.0 + 160.0, [40, 120, 80, 230],  [40, 220, 180, 230]);
+    let profile_btn      = make_row_btn(ctx, "menu_profile_btn",       VW/2.0 + 460.0, [70, 70, 100, 230], [170, 200, 240, 230]);
 
     let menu_achievements_text = GameObject::build("menu_achievements_text").size(280.0, 90.0).position(VW/2.0 - 440.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
     let menu_stats_text = GameObject::build("menu_stats_text").size(280.0, 90.0).position(VW/2.0 - 140.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
     let menu_daily_text = GameObject::build("menu_daily_text").size(280.0, 90.0).position(VW/2.0 + 160.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
+    let menu_profile_text = GameObject::build("menu_profile_text").size(280.0, 90.0).position(VW/2.0 + 460.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
 
     let scene = Scene::new("menu")
         .with_object("menu_bg",             bg)
@@ -598,9 +766,11 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .with_object("menu_achievements_btn",    achievements_btn)
         .with_object("menu_stats_btn",           stats_btn)
         .with_object("menu_daily_btn",           daily_btn)
+        .with_object("menu_profile_btn",         profile_btn)
         .with_object("menu_achievements_text",   menu_achievements_text)
         .with_object("menu_stats_text",          menu_stats_text)
-        .with_object("menu_daily_text",          menu_daily_text);
+        .with_object("menu_daily_text",          menu_daily_text)
+        .with_object("menu_profile_text",        menu_profile_text);
 
     // Embed shop objects at y=0..VH (camera pans from VH to 0 to reveal them)
     shop::extend_with_shop(ctx, scene)
@@ -660,6 +830,14 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 button: Some(MouseButton::Left),
             },
             Target::name("menu_daily_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "goto_profile".into() },
+                target: Target::name("menu_profile_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("menu_profile_btn"),
         )
         .on_enter(|canvas| {
             // Returning to main menu is the only transition that stops in-game music.
@@ -791,6 +969,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                                 ("menu_achievements_text", "ACHIEVEMENTS",                            22.0, Color(220, 180, 255, 255),      280.0),
                                 ("menu_stats_text",        "STATS",                                   26.0, Color(255, 210, 160, 255),      280.0),
                                 ("menu_daily_text",        "DAILY REWARD",                            22.0, Color(180, 255, 200, 255),      280.0),
+                                ("menu_profile_text",      "PROFILES",                                26.0, Color(200, 225, 250, 255),      280.0),
                             ] {
                                 if let Some(obj) = c.get_game_object_mut(id) {
                                     obj.set_drawable(Box::new(ui_text_spec(text, &font, sz * s, col, w * s)));
@@ -831,9 +1010,11 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                         ("menu_achievements_btn",  VW / 2.0 - 440.0),
                         ("menu_stats_btn",         VW / 2.0 - 140.0),
                         ("menu_daily_btn",         VW / 2.0 + 160.0),
+                        ("menu_profile_btn",       VW / 2.0 + 460.0),
                         ("menu_achievements_text", VW / 2.0 - 440.0),
                         ("menu_stats_text",        VW / 2.0 - 140.0),
                         ("menu_daily_text",        VW / 2.0 + 160.0),
+                        ("menu_profile_text",      VW / 2.0 + 460.0),
                     ] {
                         if let Some(obj) = c.get_game_object_mut(name) { obj.position.0 = off + base_x; }
                     }
@@ -866,6 +1047,14 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     c.set_var("menu_in_shop", false);
                 }
             });
+            // Buy a permanent extra heart with the active profile's meta currency.
+            canvas.register_custom_event("buy_perm_heart".into(), |c| {
+                if c.get_i32("shop_active_category") != 4 { return; }
+                let bought = crate::profile::buy_permanent_heart();
+                if bought {
+                    shop::show_carousel(c, 4);
+                }
+            });
             // Confirm selection for the active category and return to categories.
             canvas.register_custom_event("shop_select".into(), |c| {
                 let sel = c.get_i32("shop_selected");
@@ -877,6 +1066,14 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     3 => c.set_var("player_trail_selected", sel),
                     _ => {}
                 }
+                // Persist the chosen cosmetics to the active profile.
+                let (ch, rp, bg, tr) = (
+                    c.get_i32("player_char_selected").max(0) as u32,
+                    c.get_i32("player_rope_selected").max(0) as u32,
+                    c.get_i32("player_bg_selected").max(0) as u32,
+                    c.get_i32("player_trail_selected").max(0) as u32,
+                );
+                crate::profile::save_cosmetics(ch, rp, bg, tr);
                 shop::show_categories(c);
             });
             // Category button events — each opens the carousel for that category.
@@ -889,6 +1086,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             canvas.register_custom_event("goto_achievements".into(), |c| c.load_scene("achievements"));
             canvas.register_custom_event("goto_stats".into(), |c| c.load_scene("stats"));
             canvas.register_custom_event("goto_daily_reward".into(), |c| c.load_scene("daily_reward"));
+            canvas.register_custom_event("goto_profile".into(), |c| c.load_scene("profile"));
         })
 }
 

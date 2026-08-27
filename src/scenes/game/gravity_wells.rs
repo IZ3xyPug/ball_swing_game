@@ -57,6 +57,17 @@ pub fn tick_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>, _frame: u32) {
         }
     }
 
+    // Defensive: any live well that has lost its animation (e.g. only its base
+    // purple ring image is showing) gets the correct on/off sprite applied, so
+    // no well can sit as a static purple circle.
+    for (id, _, active) in &timers {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            if obj.animated_sprite.is_none() {
+                obj.set_animation(if *active { gwellon_template() } else { gwelloff_template() });
+            }
+        }
+    }
+
     // Disconnect player from grab node when close to an active well center.
     let s = st.lock().unwrap();
     let hooked = s.hooked;

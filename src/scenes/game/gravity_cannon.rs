@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::state::*;
+use super::helpers::center_warp_on_player;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -91,6 +92,31 @@ fn barrel_mouth_world(pos: (f32, f32), rotation_deg: f32) -> (f32, f32) {
     (cx + barrel_len * rad.cos(), cy + barrel_len * rad.sin())
 }
 
+/// The resting barrel rotation for a cannon, accounting for gravity flip.
+/// Normal gravity points the barrel up (-90°); flipped gravity mirrors it (+90°).
+fn cannon_default_rotation(flipped: bool) -> f32 {
+    if flipped {
+        CANNON_DEFAULT_ROTATION + 180.0
+    } else {
+        CANNON_DEFAULT_ROTATION
+    }
+}
+
+/// Mirror all live gravity cannons for a gravity flip: mirror Y position and
+/// bob base, and flip the barrel rotation so the cannon points the gravity way.
+/// Called from `apply_flip_transform` when gravity flips.
+pub fn flip_cannons(c: &mut Canvas, s: &mut State) {
+    for phase in s.cannon_phases.iter_mut() {
+        phase.flipped = !phase.flipped;
+        phase.base_y = VH - phase.base_y - GRAVITYCANNON_H;
+        phase.rotation = cannon_default_rotation(phase.flipped);
+        if let Some(obj) = c.get_game_object_mut(&phase.id) {
+            obj.position.1 = VH - obj.position.1 - obj.size.1;
+            obj.rotation = phase.rotation;
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Spawning
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +132,7 @@ pub fn spawn_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let base_y = lcg_range(&mut s.seed, VH * 0.25, VH * 0.65);
         let bob_phase = lcg_range(&mut s.seed, 0.0, std::f32::consts::TAU);
         let Some(id) = s.cannon_free.pop() else { break; };
+        let flipped = s.gravity_dir < 0.0;
         s.cannon_live.push(id.clone());
         s.cannon_rightmost = x;
         s.cannon_phases.push(CannonPhase {
@@ -113,7 +140,8 @@ pub fn spawn_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             state:     CannonState::Idle,
             base_y,
             bob_phase,
-            rotation:  CANNON_DEFAULT_ROTATION,
+            rotation:  cannon_default_rotation(flipped),
+            flipped,
         });
         drop(s);
 
@@ -121,7 +149,7 @@ pub fn spawn_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let bob_y = base_y; // starts at base; bob applied each tick
             obj.position = (x - GRAVITYCANNON_W * 0.5, bob_y - GRAVITYCANNON_H * 0.5);
             obj.momentum = (0.0, 0.0);
-            obj.rotation = CANNON_DEFAULT_ROTATION;
+            obj.rotation = cannon_default_rotation(flipped);
             obj.layer = 30;
             obj.visible = true;
             set_cannon_frame(c, &id, CANNON_DEFAULT_FRAME_INDEX);
@@ -187,6 +215,7 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         player_hooked,
         coin_count,
         ft_active,
+        ft_prompt,
         phases,
     ) = {
         let s = st.lock().unwrap();
@@ -196,6 +225,7 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.hooked,
             s.coin_count,
             s.cannon_ft_active,
+            s.cannon_ft_prompt,
             s.cannon_phases.clone(),
         )
     };
@@ -287,15 +317,45 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     s.vx = 0.0;
                     s.vy = 0.0;
                 }
+                // Receiving cannon: while the fast-travel warp flash plays, hold
+                // ~45° to the LEFT of rest (barrel up-left) so the player is
+                // clearly "caught" on the upper left; once it fades, settle to
+                // the fire angle and only then advance the capture pulse (so the
+                // final charge/fire is from the correct rest angle, rotating
+                // forward/right to launch).
+                let rest = cannon_default_rotation(phase.flipped);
+                let warp_active = matches!(c.get_var("warp_flash_ticks"), Some(Value::I32(v)) if v > 0);
+                let revealing = matches!(c.get_var("cannon_ft_reveal_ticks"), Some(Value::I32(v)) if v > 0);
+                if warp_active || revealing {
+                    phase.rotation = rest - 45.0;
+                    if revealing {
+                        let mut v = match c.get_var("cannon_ft_reveal_ticks") { Some(Value::I32(n)) => n, _ => 0 };
+                        v = v.saturating_sub(1);
+                        c.set_var("cannon_ft_reveal_ticks", v);
+                    }
+                    updated_phases.push(phase);
+                    continue;
+                }
+                phase.rotation += (rest - phase.rotation) * 0.30;
+                let settled = (phase.rotation - rest).abs() < 3.0;
                 let mut new_seq = seq_idx;
                 let mut new_timer = frame_timer;
-                if new_timer == 0 {
+                if !settled {
+                    // Keep holding the player until the cannon has rotated to rest.
+                } else if new_timer == 0 {
                     if new_seq + 1 < 5 {
                         new_seq += 1;
                         new_timer = CANNON_CAPTURE_TICKS_PER_FRAME;
                         set_cannon_frame(c, &phase.id, capture_pulse_frame(new_seq));
                     } else {
-                        phase.state = CannonState::Charging { ticks: CANNON_CHARGE_TICKS };
+                        // Pulse complete. If the player can afford fast-travel,
+                        // hold and wait for the press-F choice instead of
+                        // charging straight into a launch.
+                        if ft_prompt {
+                            phase.state = CannonState::WaitingChoice { ticks: CANNON_CHOICE_WAIT_TICKS };
+                        } else {
+                            phase.state = CannonState::Charging { ticks: CANNON_CHARGE_TICKS };
+                        }
                         updated_phases.push(phase);
                         continue;
                     }
@@ -303,6 +363,32 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     new_timer -= 1;
                 }
                 phase.state = CannonState::Capturing { seq_idx: new_seq, frame_timer: new_timer };
+            }
+
+            CannonState::WaitingChoice { mut ticks } => {
+                let obj_pos = c.get_game_object(&phase.id).map(|o| o.position);
+                if let Some(pos) = obj_pos {
+                    let mouth = barrel_mouth_world(pos, phase.rotation);
+                    let mut s = st.lock().unwrap();
+                    s.px = mouth.0;
+                    s.py = mouth.1;
+                    s.vx = 0.0;
+                    s.vy = 0.0;
+                }
+                if ft_active {
+                    // Player pressed F: accept fast-travel — run the full
+                    // launch (rotate/charge then fire) before the warp so the
+                    // cannon clearly launches the player, THEN fast-travel.
+                    phase.state = CannonState::Charging { ticks: CANNON_CHARGE_TICKS };
+                } else if ticks == 0 {
+                    // Timed out: clear the prompt and launch normally.
+                    let mut s = st.lock().unwrap();
+                    s.cannon_ft_prompt = false;
+                    s.cannon_ft_active = false;
+                    phase.state = CannonState::Charging { ticks: CANNON_CHARGE_TICKS };
+                } else {
+                    phase.state = CannonState::WaitingChoice { ticks: ticks - 1 };
+                }
             }
 
             CannonState::Charging { ticks } => {
@@ -393,7 +479,7 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
 
             CannonState::Recovering { ticks } => {
-                let target = CANNON_DEFAULT_ROTATION;
+                let target = cannon_default_rotation(phase.flipped);
                 let diff = target - phase.rotation;
                 let step = diff / ticks.max(1) as f32;
                 phase.rotation += step;
@@ -453,11 +539,69 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
+/// Draw a thin translucent line for the speed-line warp effect.
+fn draw_line(img: &mut image::RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, c: [u8; 4]) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let steps = (dx.abs().max(dy.abs())).ceil().max(1.0) as u32;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = (x0 + dx * t).round() as i32;
+        let y = (y0 + dy * t).round() as i32;
+        if x >= 0 && y >= 0 && (x as u32) < img.width() && (y as u32) < img.height() {
+            let x = x as u32;
+            let y = y as u32;
+            img.put_pixel(x, y, image::Rgba(c));
+            if x + 1 < img.width() {
+                img.put_pixel(x + 1, y, image::Rgba(c));
+            }
+        }
+    }
+}
+
+/// Radial "warp speed" streaks used as the fast-travel arrival overlay.
+fn speed_lines_img(w: u32, h: u32, alpha: u8) -> image::RgbaImage {
+    let mut img = image::RgbaImage::new(w, h);
+    let cx = w as f32 * 0.5;
+    let cy = h as f32 * 0.5;
+    let mut seed = 0x1234_5678u64;
+    let min_dim = w.min(h) as f32;
+    let max_dim = w.max(h) as f32;
+    let count = 110;
+    for _ in 0..count {
+        let ang = lcg(&mut seed) * std::f32::consts::TAU;
+        let inner = (0.04 + 0.10 * lcg(&mut seed)) * min_dim;
+        let outer = (0.45 + 0.55 * lcg(&mut seed)) * max_dim;
+        let ca = ang.cos();
+        let sa = ang.sin();
+        let x0 = cx + ca * inner;
+        let y0 = cy + sa * inner;
+        let x1 = cx + ca * outer;
+        let y1 = cy + sa * outer;
+        let streak = [
+            (170 + (lcg(&mut seed) * 60.0) as u8),
+            235,
+            255,
+            alpha,
+        ];
+        draw_line(&mut img, x0, y0, x1, y1, streak);
+    }
+    img
+}
+
 /// Hyper-transit: consume the coin cost, teleport the player far ahead, grant a
 /// random run-long buff, rewind the spawn frontiers so the destination world is
-/// generated, and give a short no-grab grace so the player settles first.
+/// generated, and end at an existing procedurally-generated gravity cannon
+/// (spawning one only if none is nearby), where the player is held in stasis and
+/// launched normally. Also plays a high-speed warp overlay.
+/// Hyper-transit: consume the coin cost, grant a random run-long buff and rewind
+/// the spawn frontiers so the destination world is generated. The actual
+/// teleport and receiving-cannon are deferred: first an *outgoing* speed-line
+/// phase plays centred on the player at the launching cannon, then a white
+/// screen flash hides the cut, then a *reverse* speed-line phase plays centred
+/// on the player at the receiving cannon (see `tick_cannon_warp`).
 fn fast_travel_player(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (dest_x, dest_y) = {
+    let (dest_x, dest_y, lx, ly) = {
         let mut s = st.lock().unwrap();
         let dest_x = s.px + CANNON_FAST_TRAVEL_DISTANCE;
         let dest_y = (VH * 0.5).clamp(60.0, VH - 60.0);
@@ -476,8 +620,6 @@ fn fast_travel_player(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         s.cannon_ft_active = false;
         s.cannon_ft_prompt = false;
-        s.cannon_captured = false;
-        s.cannon_capture_id = String::new();
         s.cannon_fast_travel_grace = CANNON_FAST_TRAVEL_GRACE;
         s.hooked = false;
         s.active_hook = String::new();
@@ -485,8 +627,14 @@ fn fast_travel_player(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.vy = 0.0;
         s.in_space_mode = false;
         s.space_launch_active = false;
+        // Normalize gravity at the destination: a space_rift gravity flip that
+        // was active when fast-travel fired must not stick after arrival.
+        s.gravity_dir = 1.0;
+        s.flip_timer = 0;
 
-        // Rewind spawn frontiers so the destination world is already generated.
+        // Rewind spawn frontiers AND clear the stale pre-generated pending
+        // queue so hooks/tether nodes/obstacles regenerate around the
+        // destination instead of staying far ahead.
         let backfill_x = dest_x - GEN_AHEAD * 0.3;
         s.rightmost_x = s.rightmost_x.min(backfill_x);
         s.pad_rightmost = s.pad_rightmost.min(backfill_x);
@@ -498,23 +646,137 @@ fn fast_travel_player(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.gate_rightmost = s.gate_rightmost.min(backfill_x);
         s.gwell_rightmost = s.gwell_rightmost.min(backfill_x);
         s.turret_rightmost = s.turret_rightmost.min(backfill_x);
-        s.cannon_rightmost = s.cannon_rightmost.min(backfill_x);
         s.rocket_pad_rightmost = s.rocket_pad_rightmost.min(backfill_x);
-        if s.pending.is_empty() {
-            let mut seed = s.seed;
-            let mut gen_head_x = s.gen_head_x.min(backfill_x);
-            let mut gen_head_y = s.gen_head_y;
-            let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
-            s.seed = seed;
-            s.gen_head_x = gen_head_x;
-            s.gen_head_y = gen_head_y;
-            s.pending.extend(batch);
+        s.pending.clear();
+        let mut seed = s.seed;
+        let mut gen_head_x = s.gen_head_x.min(backfill_x);
+        let mut gen_head_y = s.gen_head_y;
+        let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
+        s.seed = seed;
+        s.gen_head_x = gen_head_x;
+        s.gen_head_y = gen_head_y;
+        s.pending.extend(batch);
+        // Cannons: land on an existing procedural cannon ahead if one is close,
+        // otherwise plant one here. Keep the spawner from double-planting.
+        s.cannon_rightmost = dest_x;
+        // The state holds the player at the launching cannon's mouth (set by the
+        // firing state); use that as the outgoing speed-line centre.
+        (dest_x, dest_y, s.px, s.py)
+    };
+
+    // Remember the destination + the launch centre so the deferred teleport and
+    // the incoming warp can use them after the outgoing speed-line phase.
+    c.set_var("cannon_warp_dx", Value::F32(dest_x));
+    c.set_var("cannon_warp_dy", Value::F32(dest_y));
+    c.set_var("cannon_warp_cx", Value::F32(lx));
+    c.set_var("cannon_warp_cy", Value::F32(ly));
+
+    // Outgoing warp speed lines, centred on the player at the launching cannon.
+    if let Some(obj) = c.get_game_object_mut("warp_flash") {
+        obj.size = (VW, VH);
+        obj.position = (lx - VW * 0.5, ly - VH * 0.5);
+        obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: speed_lines_img(VW as u32, VH as u32, 235).into(), color: None });
+        obj.visible = true;
+    }
+    c.set_var("cannon_warp_phase", Value::I32(1));
+    c.set_var("warp_flash_ticks", CANNON_WARP_OUT_TICKS);
+    c.set_var("cannon_ft_reveal", false);
+    c.set_var("cannon_ft_reveal_ticks", 0i32);
+}
+
+/// Perform the actual fast-travel teleport: pick/plant the receiving cannon,
+/// capture the player at it, and snap the camera. Called at the outgoing →
+/// incoming warp transition, hidden behind the white flash.
+fn perform_cannon_warp_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (dest_x, dest_y, receiving_id) = {
+        let mut s = st.lock().unwrap();
+        let dest_x = match c.get_var("cannon_warp_dx") {
+            Some(Value::F32(v)) => v,
+            _ => s.px + CANNON_FAST_TRAVEL_DISTANCE,
+        };
+        let dest_y = match c.get_var("cannon_warp_dy") {
+            Some(Value::F32(v)) => v,
+            _ => VH * 0.5,
+        };
+
+        // Prefer an existing procedurally-generated cannon ahead of the
+        // destination so we don't end up with two cannons overlapping at exit.
+        let mut receiving_id: Option<String> = None;
+        let mut chosen_dest_x = dest_x;
+        let mut best: Option<(f32, String)> = None;
+        for phase in &s.cannon_phases {
+            if let Some(obj) = c.get_game_object(&phase.id) {
+                let cx = obj.position.0 + GRAVITYCANNON_W * 0.5;
+                if cx >= dest_x - 800.0 {
+                    let d = (cx - dest_x).abs();
+                    if best.as_ref().map_or(true, |(bd, _)| d < *bd) {
+                        best = Some((cx, phase.id.clone()));
+                    }
+                }
+            }
+        }
+        if let Some((cx, id)) = best {
+            // Land on this cannon: capture the player at it and launch normally.
+            receiving_id = Some(id.clone());
+            chosen_dest_x = cx;
+            let mut windup_rot = 0.0;
+            for phase in s.cannon_phases.iter_mut() {
+                if phase.id == id {
+                    phase.state = CannonState::Capturing { seq_idx: 0, frame_timer: CANNON_CAPTURE_TICKS_PER_FRAME };
+                    // Arrive ~45° LEFT of rest so the cannon clearly catches the
+                    // player on the upper-left, then rotates forward/right to fire.
+                    phase.rotation = cannon_default_rotation(phase.flipped) - 45.0;
+                    windup_rot = phase.rotation;
+                }
+            }
+            if let Some(obj) = c.get_game_object_mut(&id) {
+                obj.layer = LAYER_CANNON_ACTIVE;
+                obj.visible = true;
+                obj.rotation = windup_rot;
+            }
+            s.cannon_captured = true;
+            s.cannon_capture_id = id.clone();
+        } else if let Some(id) = s.cannon_free.pop() {
+            let base_y = dest_y + 60.0; // place the barrel mouth just above centre
+            let flipped = s.gravity_dir < 0.0;
+            let windup = cannon_default_rotation(flipped) - 45.0;
+            s.cannon_live.push(id.clone());
+            s.cannon_phases.push(CannonPhase {
+                id:        id.clone(),
+                state:     CannonState::Capturing { seq_idx: 0, frame_timer: CANNON_CAPTURE_TICKS_PER_FRAME },
+                base_y,
+                bob_phase: 0.0,
+                rotation:  windup,
+                flipped,
+            });
+            s.cannon_captured = true;
+            s.cannon_capture_id = id.clone();
+            receiving_id = Some(id.clone());
+            set_cannon_frame(c, &id, CANNON_DEFAULT_FRAME_INDEX);
+            if let Some(obj) = c.get_game_object_mut(&id) {
+                obj.position = (dest_x - GRAVITYCANNON_W * 0.5, base_y - GRAVITYCANNON_H * 0.5);
+                obj.momentum = (0.0, 0.0);
+                obj.rotation = windup;
+                obj.layer = LAYER_CANNON_ACTIVE;
+                obj.visible = true;
+            }
+        } else {
+            s.cannon_captured = false;
+            s.cannon_capture_id = String::new();
         }
 
-        s.px = dest_x;
+        s.px = chosen_dest_x;
         s.py = dest_y;
-        (dest_x, dest_y)
+        (chosen_dest_x, dest_y, receiving_id)
     };
+
+    if let Some(id) = &receiving_id {
+        set_cannon_frame(c, id, CANNON_DEFAULT_FRAME_INDEX);
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = true;
+            obj.layer = LAYER_CANNON_ACTIVE;
+        }
+    }
 
     if let Some(obj) = c.get_game_object_mut("player") {
         obj.position = (dest_x - PLAYER_R, dest_y - PLAYER_R);
@@ -524,12 +786,88 @@ fn fast_travel_player(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     c.run(Action::Hide { target: Target::name("rope") });
     c.set_var("rope_visible_at_pause", false);
+
+    // Snap the camera to the receiver so the incoming speed lines are framed.
     if let Some(cam) = c.camera_mut() {
         cam.position = (dest_x - VW * 0.5, dest_y - VH * 0.5);
         cam.snap_zoom(1.0);
-        cam.flash_with(Color(120, 200, 255, 140), 0.4, FlashMode::Pulse, FlashEase::Sharp, 0.9, 0.0);
     }
 }
+
+/// Drive the two-phase fast-travel warp (outgoing speed lines → white flash —
+/// teleport → reverse speed lines). The overlay stays centred on the player so
+/// the speed-line origin tracks the ball throughout.
+pub fn tick_cannon_warp(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let phase = match c.get_var("cannon_warp_phase") {
+        Some(Value::I32(v)) => v,
+        _ => 0,
+    };
+    if phase == 0 {
+        return;
+    }
+    let ticks = match c.get_var("warp_flash_ticks") {
+        Some(Value::I32(v)) => v,
+        _ => 0,
+    };
+
+    if phase == 1 {
+        // Outgoing: hold the player still at the launching cannon mouth so they
+        // don't drift/fall while the speed lines play, then centre the overlay.
+        let (cx, cy) = {
+            let cx = match c.get_var("cannon_warp_cx") { Some(Value::F32(v)) => v, _ => 0.0 };
+            let cy = match c.get_var("cannon_warp_cy") { Some(Value::F32(v)) => v, _ => 0.0 };
+            (cx, cy)
+        };
+        {
+            let mut s = st.lock().unwrap();
+            s.px = cx;
+            s.py = cy;
+            s.vx = 0.0;
+            s.vy = 0.0;
+        }
+        if let Some(obj) = c.get_game_object_mut("player") {
+            obj.position = (cx - PLAYER_R, cy - PLAYER_R);
+            obj.momentum = (0.0, 0.0);
+            obj.gravity = 0.0;
+        }
+        center_warp_on_player(c);
+        if ticks <= 0 {
+            // Transition: the flash hides the cut, then teleport + incoming.
+            if let Some(cam) = c.camera_mut() {
+                cam.flash_with(Color(255, 255, 255, 215), 0.5, FlashMode::FadeOut, FlashEase::Smooth, 1.0, 0.10);
+                cam.shake(18.0, 0.35);
+            }
+            perform_cannon_warp_teleport(c, st);
+            // Centre the incoming reverse speed lines on the player at the
+            // destination before the next tick re-centres them.
+            let (dx, dy) = {
+                let dx = match c.get_var("cannon_warp_dx") { Some(Value::F32(v)) => v, _ => 0.0 };
+                let dy = match c.get_var("cannon_warp_dy") { Some(Value::F32(v)) => v, _ => 0.0 };
+                (dx, dy)
+            };
+            if let Some(obj) = c.get_game_object_mut("warp_flash") {
+                obj.position = (dx - VW * 0.5, dy - VH * 0.5);
+            }
+            c.set_var("cannon_warp_phase", Value::I32(2));
+            c.set_var("warp_flash_ticks", CANNON_WARP_IN_TICKS);
+        } else {
+            c.set_var("warp_flash_ticks", ticks - 1);
+        }
+    } else if phase == 2 {
+        // Incoming: reverse speed lines centred on the player at the receiver.
+        center_warp_on_player(c);
+        if ticks <= 0 {
+            // Warp done; hand control back so the receiving cannon settles/fires.
+            c.set_var("cannon_warp_phase", Value::I32(0));
+            if let Some(obj) = c.get_game_object_mut("warp_flash") {
+                obj.visible = false;
+            }
+        } else {
+            c.set_var("warp_flash_ticks", ticks - 1);
+        }
+    }
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Debug helpers
@@ -538,26 +876,28 @@ fn fast_travel_player(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// Force-spawn one gravity cannon just ahead of the player for testing.
 /// Bound to key G. No-op if the free pool is empty.
 pub fn debug_spawn_cannon(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (x, id, base_y) = {
+    let (x, id, base_y, flipped) = {
         let mut s = st.lock().unwrap();
         let Some(id) = s.cannon_free.pop() else { return; };
         let x   = s.px + VW * 0.25;
         let y   = VH  * 0.50;
+        let flipped = s.gravity_dir < 0.0;
         s.cannon_live.push(id.clone());
         s.cannon_phases.push(CannonPhase {
             id:        id.clone(),
             state:     CannonState::Idle,
             base_y:    y,
             bob_phase: 0.0,
-            rotation:  CANNON_DEFAULT_ROTATION,
+            rotation:  cannon_default_rotation(flipped),
+            flipped,
         });
-        (x, id, y)
+        (x, id, y, flipped)
     };
     set_cannon_frame(c, &id, CANNON_DEFAULT_FRAME_INDEX);
     if let Some(obj) = c.get_game_object_mut(&id) {
         obj.position = (x - GRAVITYCANNON_W * 0.5, base_y - GRAVITYCANNON_H * 0.5);
         obj.momentum = (0.0, 0.0);
-        obj.rotation = CANNON_DEFAULT_ROTATION;
+        obj.rotation = cannon_default_rotation(flipped);
         obj.layer    = 30;
         obj.visible  = true;
     }

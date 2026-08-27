@@ -21,7 +21,28 @@ pub fn tick_upgrades(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         return;
     }
     spawn_upgrade_nodes(c, st);
-    purchase_upgrades(c, st);
+    pulse_upgrade_nodes(c, st);
+    tick_upgrade_interaction(c, st);
+}
+
+/// Pulse the upgrade-node ring so it reads as a live pickup rather than a dead
+/// purple circle.
+fn pulse_upgrade_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let live: Vec<String> = st.lock().unwrap().upgrade_live.clone();
+    if live.is_empty() {
+        return;
+    }
+    let t = st.lock().unwrap().ticks as f32 * 0.08;
+    let pulse = (t.sin() + 1.0) * 0.5;
+    let w = 12.0 + 12.0 * pulse;
+    for id in &live {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            if !obj.visible {
+                continue;
+            }
+            obj.set_glow(GlowConfig { color: Color(C_UPGRADE.0, C_UPGRADE.1, C_UPGRADE.2, 175), width: w });
+        }
+    }
 }
 
 fn spawn_upgrade_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -54,85 +75,274 @@ fn spawn_upgrade_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.tags.retain(|t| t != "upgrade_heart" && t != "upgrade_breath" && t != "upgrade_momentum");
             obj.tags.push(ty.into());
         }
+        // Guarantee a hook node within tether range of the upgrade node so the
+        // player can always leave the upgrade dialogue (and post-dialogue
+        // stasis) by grabbing a node.
+        if let Some(hid) = { let mut s2 = st.lock().unwrap(); s2.pool_free.pop() } {
+            let hx = x + UPGRADE_R + HOOK_R + 60.0;
+            let hy = y;
+            let asteroid_mode = c.get_bool("asteroid_hooks_on");
+            if let Some(obj) = c.get_game_object_mut(&hid) {
+                obj.visible = true;
+                obj.position = (hx - HOOK_R, hy - HOOK_R);
+                obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+                obj.gravity = 0.0;
+                obj.momentum = (0.0, 0.0);
+                obj.rotation_momentum = 0.0;
+                obj.collision_mode = CollisionMode::NonPlatform;
+                obj.tags.retain(|t| t != BUFF_HOOK_TAG && t != SHIELD_HOOK_TAG && t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG);
+                obj.tags.push("hook".into());
+                if asteroid_mode {
+                    obj.set_animation(super::helpers::hook_artifact_anim());
+                    obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                } else {
+                    obj.set_image(super::helpers::hook_img(C_HOOK.0, C_HOOK.1, C_HOOK.2));
+                }
+            }
+            let mut s2 = st.lock().unwrap();
+            s2.live_hooks.push(hid);
+            if hx > s2.rightmost_x {
+                s2.rightmost_x = hx;
+            }
+        }
         s = st.lock().unwrap();
     }
 }
 
-fn purchase_upgrades(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (px, py, coins) = {
-        let s = st.lock().unwrap();
-        (s.px, s.py, s.coin_count)
-    };
-    let live: Vec<String> = st.lock().unwrap().upgrade_live.clone();
-    if live.is_empty() {
+// Run-persisting upgrade costs (cheap first buy, escalating per purchase this run).
+fn run_heart_cost(s: &State) -> u32 {
+    (UPGRADE_RUN_HEART_BASE as f32 * UPGRADE_RUN_HEART_GROWTH.powi(s.run_heart_buys as i32)).round() as u32
+}
+fn run_breath_cost(s: &State) -> u32 {
+    (UPGRADE_BREATH_BASE as f32 * UPGRADE_BREATH_GROWTH.powi(s.run_breath_buys as i32)).round() as u32
+}
+fn run_momentum_cost(s: &State) -> u32 {
+    (UPGRADE_MOMENTUM_BASE as f32 * UPGRADE_MOMENTUM_GROWTH.powi(s.run_momentum_buys as i32)).round() as u32
+}
+
+/// Current permanent-extra-heart price in meta currency.
+fn perm_heart_cost() -> u64 {
+    let g = crate::profile::profile();
+    let owned = g.lock().unwrap().permanent_extra_hearts;
+    crate::profile::permanent_heart_cost(owned)
+}
+
+// ── Dialogue interaction ─────────────────────────────────────────────────────
+
+/// Open the dialogue when the player touches a node (unless already in it).
+fn tick_upgrade_interaction(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    if st.lock().unwrap().upgrade_dialogue_active {
         return;
     }
-    let mut recycle: Vec<String> = Vec::new();
+    let (px, py) = {
+        let s = st.lock().unwrap();
+        (s.px, s.py)
+    };
+    let live: Vec<String> = st.lock().unwrap().upgrade_live.clone();
     for id in &live {
         let Some(obj) = c.get_game_object(id) else { continue; };
         if !obj.visible {
-            recycle.push(id.clone());
             continue;
         }
         let cx = obj.position.0 + obj.size.0 * 0.5;
         let cy = obj.position.1 + obj.size.1 * 0.5;
-        // Cull far-behind nodes.
-        let cutoff = px - VW * 3.0;
-        if obj.position.0 + obj.size.0 < cutoff {
-            recycle.push(id.clone());
-            continue;
-        }
         let rr = PLAYER_R + UPGRADE_R;
-        if (cx - px) * (cx - px) + (cy - py) * (cy - py) >= rr * rr {
-            continue;
+        if (cx - px) * (cx - px) + (cy - py) * (cy - py) < rr * rr {
+            open_dialogue(c, st, id.clone());
+            return;
         }
-        let is_heart = obj.tags.iter().any(|t| t == "upgrade_heart");
-        let is_breath = obj.tags.iter().any(|t| t == "upgrade_breath");
-        let is_momentum = obj.tags.iter().any(|t| t == "upgrade_momentum");
-        let extra = match c.get_var(META_EXTRA_HEARTS_VAR) {
-            Some(Value::I32(v)) => v.max(0),
-            _ => 0,
-        };
-        let cost = if is_heart {
-            (UPGRADE_HEART_BASE_COST as f32 * UPGRADE_HEART_GROWTH.powi(extra)).round() as u32
-        } else if is_breath {
-            UPGRADE_BREATH_COST
-        } else {
-            UPGRADE_MOMENTUM_COST
-        };
-        if coins < cost {
-            continue;
-        }
+    }
+}
 
-        {
+fn open_dialogue(c: &mut Canvas, st: &Arc<Mutex<State>>, node_id: String) {
+    // Record where to hold the player (the node is consumed straight away so it
+    // can never retrigger the dialogue while the player is still nearby).
+    let (nx, ny) = c.get_game_object(&node_id)
+        .map(|o| (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5))
+        .unwrap_or((0.0, 0.0));
+    {
+        let mut s = st.lock().unwrap();
+        s.upgrade_dialogue_active = true;
+        s.upgrade_dialogue_node = node_id.clone();
+        s.upgrade_hold_x = nx;
+        s.upgrade_hold_y = ny;
+        s.upgrade_hold_until_tether = false;
+        s.hooked = false;
+        s.active_hook = String::new();
+        s.vx = 0.0;
+        s.vy = 0.0;
+        // Consume the node: remove from live and return to the free pool so it
+        // can't be re-triggered.
+        s.upgrade_live.retain(|n| n != &node_id);
+        s.upgrade_free.push(node_id.clone());
+    }
+    if let Some(obj) = c.get_game_object_mut(&node_id) {
+        obj.visible = false;
+    }
+    // Soft-pause the world (like the start stasis) so hazards/comets can't kill
+    // the player while they're choosing. The pause menu is NOT opened.
+    c.set_var("game_paused", true);
+    c.run(Action::Hide { target: Target::name("rope") });
+    c.set_var("rope_visible_at_pause", false);
+    update_dialogue_text(c, st);
+}
+
+/// Close the dialogue; the player is held in stasis (world still paused) until
+/// they tether.
+fn close_dialogue(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    {
+        let mut s = st.lock().unwrap();
+        s.upgrade_dialogue_active = false;
+        s.upgrade_dialogue_node = String::new();
+        s.upgrade_hold_until_tether = true;
+        s.vx = 0.0;
+        s.vy = 0.0;
+    }
+    hide_dialogue(c);
+}
+
+/// Handle a dialogue key press. Returns true if the key was consumed.
+pub fn upgrade_dialogue_key(c: &mut Canvas, st: &Arc<Mutex<State>>, key: &Key) -> bool {
+    if !st.lock().unwrap().upgrade_dialogue_active {
+        return false;
+    }
+    let opt: u8 = match key {
+        Key::Character(ch) if ch == "1" => 1,
+        Key::Character(ch) if ch == "2" => 2,
+        Key::Character(ch) if ch == "3" => 3,
+        Key::Character(ch) if ch == "4" => 4,
+        Key::Character(ch) if ch == "5" => 5,
+        Key::Named(NamedKey::Escape) => 5,
+        _ => return false,
+    };
+    if opt == 5 {
+        close_dialogue(c, st);
+        return true;
+    }
+    buy_option(c, st, opt);
+    update_dialogue_text(c, st);
+    true
+}
+
+fn buy_option(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) {
+    match opt {
+        1 => {
+            let (cost, coins) = {
+                let s = st.lock().unwrap();
+                (run_heart_cost(&s), s.coin_count)
+            };
+            if coins < cost {
+                return;
+            }
             let mut s = st.lock().unwrap();
             s.coin_count -= cost;
-            if is_heart {
-                s.max_hearts += 1;
-                s.hearts += 1;
-                c.set_var(META_EXTRA_HEARTS_VAR, Value::I32(extra + 1));
-            } else if is_breath {
-                s.oxygen_drain_scale = UPGRADE_BREATH_DRAIN_SCALE.min(s.oxygen_drain_scale);
-            } else if is_momentum {
-                s.upgrade_momentum_bonus = true;
-            }
-            s.upgrade_live.retain(|n| n != id);
-            s.upgrade_free.push(id.clone());
-            drop(s);
-            if let Some(o) = c.get_game_object_mut(id) {
-                o.visible = false;
-            }
+            s.max_hearts += 1;
+            s.hearts += 1;
+            s.run_heart_buys += 1;
         }
+        2 => {
+            if !crate::profile::buy_permanent_heart() {
+                return;
+            }
+            let mut s = st.lock().unwrap();
+            s.max_hearts += 1;
+            s.hearts += 1;
+        }
+        3 => {
+            let (cost, coins) = {
+                let s = st.lock().unwrap();
+                (run_breath_cost(&s), s.coin_count)
+            };
+            if coins < cost {
+                return;
+            }
+            let mut s = st.lock().unwrap();
+            s.coin_count -= cost;
+            s.oxygen_drain_scale = UPGRADE_BREATH_DRAIN_SCALE.min(s.oxygen_drain_scale);
+            s.run_breath_buys += 1;
+        }
+        4 => {
+            let (cost, coins) = {
+                let s = st.lock().unwrap();
+                (run_momentum_cost(&s), s.coin_count)
+            };
+            if coins < cost {
+                return;
+            }
+            let mut s = st.lock().unwrap();
+            s.coin_count -= cost;
+            s.upgrade_momentum_bonus = true;
+            s.run_momentum_buys += 1;
+        }
+        _ => {}
     }
+}
 
-    if !recycle.is_empty() {
-        let mut s = st.lock().unwrap();
-        for id in recycle {
-            s.upgrade_live.retain(|n| n != &id);
-            s.upgrade_free.push(id.clone());
-            if let Some(o) = c.get_game_object_mut(&id) {
-                o.visible = false;
-            }
+// ── Dialogue text (HUD) ─────────────────────────────────────────────────────
+
+fn hide_dialogue(c: &mut Canvas) {
+    for name in [
+        "upgrade_dialogue_panel", "upgrade_dialogue_title", "upgrade_dialogue_meta",
+        "upgrade_opt_0", "upgrade_opt_1", "upgrade_opt_2", "upgrade_opt_3", "upgrade_opt_4",
+    ] {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible = false;
         }
     }
+}
+
+fn set_text(c: &mut Canvas, name: &str, text: &str, rgba: (u8, u8, u8, u8)) {
+    if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+        let s = c.virtual_scale();
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                text, &font, 30.0 * s, Color(rgba.0, rgba.1, rgba.2, rgba.3), 900.0 * s,
+            )));
+            obj.visible = true;
+        }
+    }
+}
+
+fn update_dialogue_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (coins, r_h_b, r_b_b, r_m_b) = {
+        let s = st.lock().unwrap();
+        (s.coin_count, s.run_heart_buys, s.run_breath_buys, s.run_momentum_buys)
+    };
+    let rhc = (UPGRADE_RUN_HEART_BASE as f32 * UPGRADE_RUN_HEART_GROWTH.powi(r_h_b as i32)).round() as u32;
+    let rbc = (UPGRADE_BREATH_BASE as f32 * UPGRADE_BREATH_GROWTH.powi(r_b_b as i32)).round() as u32;
+    let rmc = (UPGRADE_MOMENTUM_BASE as f32 * UPGRADE_MOMENTUM_GROWTH.powi(r_m_b as i32)).round() as u32;
+    let phc = perm_heart_cost();
+    let (meta, perm_owned) = {
+        let g = crate::profile::profile();
+        let p = g.lock().unwrap();
+        (p.meta_currency, p.permanent_extra_hearts)
+    };
+
+    if let Some(obj) = c.get_game_object_mut("upgrade_dialogue_panel") {
+        obj.visible = true;
+    }
+    set_text(c, "upgrade_dialogue_title", "UPGRADE NODE", (255, 255, 255, 255));
+    set_text(
+        c, "upgrade_dialogue_meta",
+        &format!("Coins: {coins}   \u{2022}   Meta: {meta}   \u{2022}   Perm. Hearts: {perm_owned}"),
+        (200, 220, 255, 230),
+    );
+
+    let line = |afford: bool, body: String| {
+        if afford {
+            (body, (215u8, 255u8, 225u8, 255u8))
+        } else {
+            (format!("{body}   [not enough]"), (150u8, 160u8, 180u8, 200u8))
+        }
+    };
+
+    let (t0, c0) = line(coins >= rhc, format!("1)  Extra Heart (this run)  \u{2014}  {rhc} coins"));
+    set_text(c, "upgrade_opt_0", &t0, c0);
+    let (t1, c1) = line(meta >= phc, format!("2)  +1 Permanent Heart  \u{2014}  {phc} meta"));
+    set_text(c, "upgrade_opt_1", &t1, c1);
+    let (t2, c2) = line(coins >= rbc, format!("3)  Controlled Breathing (run)  \u{2014}  {rbc} coins"));
+    set_text(c, "upgrade_opt_2", &t2, c2);
+    let (t3, c3) = line(coins >= rmc, format!("4)  Momentum (run)  \u{2014}  {rmc} coins"));
+    set_text(c, "upgrade_opt_3", &t3, c3);
+    set_text(c, "upgrade_opt_4", "5)  Close  (Esc)", (215, 230, 255, 255));
 }

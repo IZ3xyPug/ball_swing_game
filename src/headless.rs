@@ -249,6 +249,12 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         // into the arena (with tether nodes) regardless of player position.
         canvas.set_var("force_boss_warp", true);
     }
+    if weakpoint_check {
+        // The boss battle starts when the player tethers a node. The auto-player
+        // holds space continuously so it never issues a fresh grab during the
+        // entry stasis — bypass the tether so the validation can proceed.
+        canvas.set_var("debug_boss_stasis_down", true);
+    }
     // Use mouse-targeted grabbing so the bot can steer toward ahead hooks
     // instead of always grabbing the nearest (which causes oscillation).
     canvas.set_var("grab_from_mouse", true);
@@ -292,8 +298,10 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         });
 
         let (hold, target) = if weakpoint_check && !weakpoint_checked && boss_visible {
-            // Deterministic weakpoint validation: force a buff and pin the player
+            // Deterministic weakpoint validation: force a buff, drop the boss
+            // forcefield (as if all generators were destroyed), and pin the player
             // on a weakpoint each frame so the contact logic fires.
+            canvas.set_var("debug_boss_forcefield_down", true);
             let bc = boss_center.unwrap();
             let (ox, oy) = crate::constants::BOSS_WEAKPOINT_OFFSETS[0];
             if let Some(p) = canvas.get_game_object_mut("player") {

@@ -59,9 +59,9 @@ fn compute_bg_images() -> BgImages {
     let palettes: Vec<image::RgbaImage> = SHOP_BG_COLORS.iter().map(|&(pr, pg, pb)| {
         let mut tinted = grad_start.clone();
         for px in tinted.pixels_mut() {
-            px[0] = (px[0] as f32 * 0.55 + pr as f32 * 0.45).min(255.0) as u8;
-            px[1] = (px[1] as f32 * 0.55 + pg as f32 * 0.45).min(255.0) as u8;
-            px[2] = (px[2] as f32 * 0.55 + pb as f32 * 0.45).min(255.0) as u8;
+            px[0] = (px[0] as f32 * 0.30 + pr as f32 * 0.70).min(255.0) as u8;
+            px[1] = (px[1] as f32 * 0.30 + pg as f32 * 0.70).min(255.0) as u8;
+            px[2] = (px[2] as f32 * 0.30 + pb as f32 * 0.70).min(255.0) as u8;
         }
         composite_starfield_gradient(sf, &tinted, bg_w, bg_h, blend_h)
     }).collect();
@@ -221,6 +221,73 @@ fn clear_pause_state(c: &mut Canvas) {
     c.set_var("settings_dragging", -1i32);
     c.set_var("game_paused", false);
     hide_pause_ui(c);
+}
+
+/// Show the pause menu overlay + buttons (off-screen for the entrance slide).
+/// `from_stasis` records whether the pause was opened from a soft-pause stasis
+/// so that resume returns to the stasis rather than straight to gameplay.
+fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
+    c.set_var("pause_came_from_stasis", from_stasis);
+    c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
+    c.remove_emitter(PLAYER_TRAIL_MID_NAME);
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.visible = false;
+    }
+    let rope_was_visible = c.get_game_object("rope").map_or(false, |o| o.visible);
+    c.set_var("rope_visible_at_pause", rope_was_visible);
+    if let Some(obj) = c.get_game_object_mut("rope") {
+        obj.visible = false;
+    }
+    if let Some(obj) = c.get_game_object_mut("pause_overlay") {
+        obj.position = (0.0, -VH);
+        obj.visible = true;
+    }
+    for &(name, bx, by) in PAUSE_BTN_LAYOUT.iter() {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.position = (bx, by - VH);
+            obj.visible = true;
+        }
+    }
+    c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
+    c.set_var("pause_anim_frames", PAUSE_MENU_ANIM_FRAMES);
+    c.set_var("pause_animating", true);
+}
+
+/// Give the ball its tangential launch velocity and release the intro camera so
+/// the orbit-start handoff feels smooth. Used by both the space key and a mouse
+/// click to begin.
+fn launch_from_orbit(c: &mut Canvas, st: &Arc<Mutex<State>>, ticks: f32) {
+    const ORBIT_R: f32 = 240.0;
+    const ORBIT_OMEGA: f32 = 0.038;
+    let theta = -std::f32::consts::FRAC_PI_2 - ORBIT_OMEGA * ticks;
+    let vx = ORBIT_R * ORBIT_OMEGA * theta.sin();
+    let vy = -(ORBIT_R * ORBIT_OMEGA * theta.cos());
+    let (in_space, gdir) = {
+        let mut s = st.lock().unwrap();
+        s.vx = vx;
+        s.vy = vy;
+        s.hooked = false;
+        let gdir = s.gravity_dir;
+        let in_space = s.in_space_mode;
+        s.space_stasis_active = false;
+        (in_space, gdir)
+    };
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.momentum = (vx, vy);
+        obj.gravity = GRAVITY * gdir;
+    }
+    if let Some(obj) = c.get_game_object_mut("rope") {
+        obj.visible = false;
+    }
+    if !in_space {
+        if let Some(cam) = c.camera_mut() {
+            cam.zoom_anchor = None;
+            cam.follow(Some(Target::name("player")));
+            cam.snap_zoom(1.0);
+        }
+        c.set_var("start_follow_force_ticks", 180i32);
+        c.set_var("start_zoom_recover_ticks", 0i32);
+    }
 }
 
 const PAUSE_BTN_LAYOUT: [(&str, f32, f32); 5] = [
@@ -404,6 +471,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 canvas.on_key_press(move |c, key| {
                     if !c.is_scene("game") { return; }
 
+                    // ── Roguelike upgrade dialogue: route keys to the menu ──
+                    if let Some(state_arc) = persistent_state_key.lock().unwrap().as_ref().cloned() {
+                        if upgrades::upgrade_dialogue_key(c, &state_arc, key) {
+                            return;
+                        }
+                    }
+
                     if *key == Key::Character("1".into()) {
                         if is_game_paused(c) { return; }
 
@@ -478,6 +552,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 Key::Character(k) if k == "o" => { let _ = spawning::spawn_debug_special_hook(c, &state_arc);  return; }
                                 Key::Character(k) if k == "k" => { let _ = spawning::spawn_debug_extended_hook(c, &state_arc); return; }
                                 Key::Character(k) if k == "j" => { let _ = spawning::spawn_debug_comet(c, &state_arc);         return; }
+                                Key::Character(k) if k == "c" => {
+                                    // Debug: grant coins to test the cannon fast-travel.
+                                    let mut s = state_arc.lock().unwrap();
+                                    s.coin_count += 600;
+                                    return;
+                                }
                                 _ => {}
                             }
                         }
@@ -561,107 +641,54 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     if !is_pause && !is_space { return; }
 
                     if is_game_paused(c) {
-                        // Check before clearing the var whether this is an orbit-launch.
-                        let is_orbit_launch = c.get_bool("start_prompt_active");
-                        c.resume();
-                        c.set_var("pause_animating", false);
-                        c.set_var("pause_anim_frames", 0);
-                        c.set_var("game_paused", false);
-                        c.set_var("start_prompt_active", false);
-                        rebuild_player_trail(c, selected_trail_color(c));
-                        if let Some(obj) = c.get_game_object_mut("player") {
-                            obj.visible = true;
-                        }
-                        // Only restore rope if the player was hooked when pause started.
-                        let was_hooked = c.get_bool("rope_visible_at_pause");
-                        if let Some(obj) = c.get_game_object_mut("rope") {
-                            obj.visible = was_hooked;
-                        }
-                        // Hide pause overlay and buttons
-                        hide_pause_ui(c);
-                        c.set_var("settings_open", false);
-                        c.set_var("settings_dragging", -1i32);
-
-                        // If launching from orbit start, give the ball its tangential velocity
-                        // and release the intro zoom so tick_zoom takes over naturally.
-                        if is_orbit_launch {
-                            let ticks = c.get_i32("start_orbit_ticks").max(0) as f32;
-                            const ORBIT_R: f32 = 240.0;
-                            const ORBIT_OMEGA: f32 = 0.038;
-                            let theta = -std::f32::consts::FRAC_PI_2 - ORBIT_OMEGA * ticks;
-                            // CCW visual in Y-down: vx = r*ω*sin(θ), vy = -r*ω*cos(θ)
-                            let vx = ORBIT_R * ORBIT_OMEGA * theta.sin();
-                            let vy = -(ORBIT_R * ORBIT_OMEGA * theta.cos());
-                            let in_space;
-                            let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
-                            if let Some(state_arc) = state_opt {
-                                let mut s = state_arc.lock().unwrap();
-                                s.vx = vx;
-                                s.vy = vy;
-                                s.hooked = false;
-                                let gdir = s.gravity_dir;
-                                in_space = s.in_space_mode;
-                                s.space_stasis_active = false;
-                                drop(s);
+                        let full_pause = c.is_paused();
+                        if full_pause {
+                            // Full pause menu open — resume.
+                            let from_stasis = matches!(c.get_var("pause_came_from_stasis"), Some(Value::Bool(true)));
+                            c.set_var("pause_came_from_stasis", false);
+                            c.resume();
+                            c.set_var("pause_animating", false);
+                            c.set_var("pause_anim_frames", 0);
+                            hide_pause_ui(c);
+                            c.set_var("settings_open", false);
+                            c.set_var("settings_dragging", -1i32);
+                            if from_stasis {
+                                // Return to the soft-pause stasis (keep soft pause).
+                                c.set_var("game_paused", true);
+                                rebuild_player_trail(c, selected_trail_color(c));
                                 if let Some(obj) = c.get_game_object_mut("player") {
-                                    obj.momentum = (vx, vy);
-                                    obj.gravity = GRAVITY * gdir;
+                                    obj.visible = true;
                                 }
                             } else {
-                                in_space = false;
-                            }
-                            if let Some(obj) = c.get_game_object_mut("rope") {
-                                obj.visible = false;
-                            }
-                            if !in_space {
-                                // Release intro zoom anchor; tick_zoom will lerp back to normal.
-                                if let Some(cam) = c.camera_mut() {
-                                    cam.zoom_anchor = None;
-                                    cam.follow(Some(Target::name("player")));
-                                    cam.snap_zoom(1.0);
+                                // Return to gameplay.
+                                c.set_var("game_paused", false);
+                                c.set_var("start_prompt_active", false);
+                                rebuild_player_trail(c, selected_trail_color(c));
+                                if let Some(obj) = c.get_game_object_mut("player") {
+                                    obj.visible = true;
                                 }
-                                // Force follow briefly to avoid any intro camera target desync.
-                                c.set_var("start_follow_force_ticks", 180i32);
-                                // Slow zoom recovery so the handoff feels smooth instead of abrupt.
-                                c.set_var("start_zoom_recover_ticks", 0i32);
+                                let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
+                                if let Some(obj) = c.get_game_object_mut("rope") {
+                                    obj.visible = was_hooked;
+                                }
                             }
-                            // In space stasis: space_zone::tick_space_camera manages the camera.
+                        } else if is_pause {
+                            // Soft-pause stasis: P opens the pause menu (full pause).
+                            open_pause_menu(c, true);
+                        } else if is_space {
+                            // Soft-pause stasis: the run begins after HOLDING
+                            // space/mouse for START_HOLD_TICKS (measured in the
+                            // on_update `start_prompt_active` branch), not on a
+                            // single press.
                         }
                     } else if is_pause {
+                        // Gameplay: open the pause menu (full pause).
                         let animating = matches!(
                             c.get_var("pause_animating"),
                             Some(Value::Bool(true))
                         );
                         if animating { return; }
-
-                        c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
-                        c.remove_emitter(PLAYER_TRAIL_MID_NAME);
-                        if let Some(obj) = c.get_game_object_mut("player") {
-                            obj.visible = false;
-                        }
-                        // Remember rope state before hiding so unpause can restore it.
-                        let rope_was_visible = c
-                            .get_game_object("rope")
-                            .map_or(false, |o| o.visible);
-                        c.set_var("rope_visible_at_pause", rope_was_visible);
-                        if let Some(obj) = c.get_game_object_mut("rope") {
-                            obj.visible = false;
-                        }
-                        // Start overlay + buttons off-screen for slide animation
-                        if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-                            obj.position = (0.0, -VH);
-                            obj.visible = true;
-                        }
-                        // Buttons also start off-screen (shifted up by VH)
-                        for &(name, bx, by) in PAUSE_BTN_LAYOUT.iter() {
-                            if let Some(obj) = c.get_game_object_mut(name) {
-                                obj.position = (bx, by - VH);
-                                obj.visible = true;
-                            }
-                        }
-                        c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
-                        c.set_var("pause_anim_frames", PAUSE_MENU_ANIM_FRAMES);
-                        c.set_var("pause_animating", true);
+                        open_pause_menu(c, false);
                     }
                 });
                 canvas.set_var("pause_key_registered", true);
@@ -672,6 +699,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("pause_animating", false);
             canvas.set_var("game_paused", false);
             canvas.set_var("start_prompt_active", false);
+            // These are read by the pause-menu code and may be hit before
+            // open_pause_menu ever runs (e.g. during a respawn stasis), so
+            // initialise them here to avoid a get_bool missing-key panic.
+            canvas.set_var("pause_came_from_stasis", false);
+            canvas.set_var("rope_visible_at_pause", false);
             canvas.set_var("manual_flip_queued", false);
             canvas.set_var("mouse_grab_queued", false);
             canvas.set_var("mouse_release_queued", false);
@@ -735,10 +767,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             let coin_spawn_anim = coin_anim_template.clone();
             let coin_spawn_image = coin_static_sprite.clone();
 
-            // Permanent meta-progression earned via upgrade nodes.
-            let meta_extra_hearts = match canvas.get_var(META_EXTRA_HEARTS_VAR) {
-                Some(Value::I32(v)) => v.max(0),
-                _ => 0,
+            // Permanent meta-progression (saved in the profile). Permanent extra
+            // hearts persist across restarts; cache them into the canvas var so
+            // the rest of the game reads the same source.
+            let meta_extra_hearts = {
+                let g = crate::profile::profile();
+                let p = g.lock().unwrap();
+                canvas.set_var(META_EXTRA_HEARTS_VAR, Value::I32(p.permanent_extra_hearts as i32));
+                p.permanent_extra_hearts as i32
             };
             let start_max_hearts = crate::constants::MAX_HEARTS + meta_extra_hearts;
 
@@ -862,6 +898,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_active:       false,
                 boss_entry_ticks:  0, boss_spawned:      false,
                 boss_cleared:      false, boss_hp:           crate::constants::BOSS_MAX_HP,
+                boss_approach_nodes_spawned: false,
+                boss_stasis_active: false, boss_stasis_ticks: 0, boss_stasis_hook: String::new(),
                 boss_phase:        0.0, boss_vx:           0.0,
                 boss_vy:           0.0, boss_shoot_timer:  crate::constants::BOSS_SHOOT_INTERVAL,
                 boss_bolt_live:    Vec::new(), boss_bolt_free:    boss_bolt_free.clone(),
@@ -888,12 +926,24 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 player_buff:       0,
                 buff_timer:        0,
                 buff_hit_flash:    0,
+                buff_absorbs:      crate::constants::BUFF_ABSORB_MAX,
                 upgrade_live:      Vec::new(),
                 upgrade_free:      upgrade_free.clone(),
                 upgrade_rightmost: SPAWN_X + VW * 1.4,
                 oxygen_drain_scale: 1.0,
                 oxygen_drain_accum: 0.0,
                 upgrade_momentum_bonus: false,
+                run_heart_buys: 0,
+                run_breath_buys: 0,
+                run_momentum_buys: 0,
+                upgrade_dialogue_active: false,
+                upgrade_dialogue_node: String::new(),
+                upgrade_hold_x: 0.0,
+                upgrade_hold_y: 0.0,
+                upgrade_hold_until_tether: false,
+                space_visited: false,
+                boss_killed: false,
+                space_coins_collected: 0,
                 flare_cooldown:    FLARE_INTERVAL,
                 flare_warn:        0,
                 flare_active:      false,
@@ -964,6 +1014,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     obj.visible = true;
                 }
 
+                if let Some(obj) = canvas.get_game_object_mut("cannon_prompt_text") {
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        "PRESS  F  :  FAST TRAVEL",
+                        &font,
+                        44.0 * s,
+                        Color(170, 240, 255, 255),
+                        1500.0 * s,
+                    )));
+                    obj.visible = false;
+                }
+
                 if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
                     obj.set_drawable(Box::new(ui_text_left_spec(
                         GOLD_MASTER_TITLE,
@@ -971,6 +1032,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         46.0 * s,
                         Color(250, 225, 120, 255),
                         1080.0 * s,
+                    )));
+                    obj.visible = false;
+                }
+
+                if let Some(obj) = canvas.get_game_object_mut("boss_name_text") {
+                    obj.set_drawable(Box::new(ui_text_spec(
+                        BOSS_NAME,
+                        &font,
+                        42.0 * s,
+                        Color(200, 60, 220, 255),
+                        1000.0 * s,
                     )));
                     obj.visible = false;
                 }
@@ -1073,6 +1145,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             canvas.set_var("start_prompt_active", true);
             canvas.set_var("game_paused", true);
+            // Reset the hold-to-start counter so a fresh run (incl. a retry
+            // click) must again hold for START_HOLD_TICKS.
+            canvas.set_var("start_hold_ticks", 0i32);
+            // Clear any mouse hold left over from the click that navigated here
+            // (e.g. the game-over RETRY button) so it can't count toward the
+            // hold-to-start, and reset the grab edge detector so the first
+            // launched frame always sees the held input as a fresh press and
+            // auto-grabs — regardless of the stale `_was_down` state carried
+            // over from a previous run.
+            canvas.set_var("mouse_left_held", false);
+            canvas.set_var("input_needs_edge_reset", true);
             // Do not hard-pause the engine here: hard-pause skips
             // apply_camera_transform, which can leave stale zoom from
             // the previous scene on screen. We gate gameplay with
@@ -1128,11 +1211,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 // Click handlers
                 canvas.register_custom_event("pause_resume_click".into(), |c| {
                     if !c.get_bool("game_paused") { return; }
+                    let from_stasis = matches!(c.get_var("pause_came_from_stasis"), Some(Value::Bool(true)));
                     clear_pause_state(c);
-                    rebuild_player_trail(c, selected_trail_color(c));
-                    if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
-                    let was_hooked = c.get_bool("rope_visible_at_pause");
-                    if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
+                    if from_stasis {
+                        // Return to the soft-pause stasis (keep soft pause).
+                        c.set_var("pause_came_from_stasis", false);
+                        c.set_var("game_paused", true);
+                        rebuild_player_trail(c, selected_trail_color(c));
+                        if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
+                    } else {
+                        rebuild_player_trail(c, selected_trail_color(c));
+                        if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
+                        let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
+                        if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
+                    }
                 });
                 canvas.register_custom_event("pause_restart_click".into(), |c| {
                     if !c.get_bool("game_paused") { return; }
@@ -1364,6 +1456,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let mut scroll_init = false;
                 let mut prev_scroll_in_space: Option<bool> = None;
                 let mut prev_player_center: Option<(f32, f32)> = None;
+                let mut prev_warp_flash = false;
 
                 canvas.on_update(move |c: &mut Canvas| {
                     if !c.is_scene("game") { return; }
@@ -1496,6 +1589,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 }
                                 c.set_var("pause_animating", false);
                                 c.set_var("game_paused", true);
+                                // The pause menu must not be dimmed by a boss
+                                // darkness phase; restore full brightness.
+                                if c.has_lighting() {
+                                    c.set_ambient(Color(255, 255, 255, 255), 1.0);
+                                }
                                 c.pause();
                             }
                             return;
@@ -1504,6 +1602,39 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     if is_game_paused(c) {
+                        // ── Hold space/mouse to begin ──────────────────────────
+                        // The run begins only after HOLDING space/mouse for
+                        // START_HOLD_TICKS, so a stray or retry click doesn't
+                        // instantly launch + grab.
+                        if c.get_bool("start_prompt_active") {
+                            let space_held = c.key("space");
+                            let mouse_held = matches!(c.get_var("mouse_left_held"), Some(Value::Bool(true)));
+                            let hold = space_held || mouse_held;
+                            let h = match c.get_var("start_hold_ticks") { Some(Value::I32(v)) => v, _ => 0 };
+                            if hold {
+                                c.set_var("start_hold_ticks", h + 1);
+                                if h + 1 >= START_HOLD_TICKS {
+                                    // Launch the run.
+                                    let ticks = c.get_i32("start_orbit_ticks").max(0) as f32;
+                                    c.set_var("pause_anim_frames", 0);
+                                    c.set_var("game_paused", false);
+                                    c.set_var("start_prompt_active", false);
+                                    hide_pause_ui(c);
+                                    rebuild_player_trail(c, selected_trail_color(c));
+                                    if let Some(obj) = c.get_game_object_mut("player") {
+                                        obj.visible = true;
+                                    }
+                                    let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
+                                    if let Some(obj) = c.get_game_object_mut("rope") {
+                                        obj.visible = was_hooked;
+                                    }
+                                    launch_from_orbit(c, &st, ticks);
+                                    return;
+                                }
+                            } else {
+                                c.set_var("start_hold_ticks", 0);
+                            }
+                        }
                         // ── Orbit animation while waiting for "hold space to begin" ──
                         if c.get_bool("start_prompt_active") {
                             let ticks = c.get_i32("start_orbit_ticks").max(0) as f32;
@@ -1552,6 +1683,31 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                         obj.momentum = (0.0, 0.0);
                                         obj.rotation_momentum = 0.0;
                                     }
+                                }
+                            }
+                        }
+                        // ── Upgrade dialogue / post-dialogue hold ────────
+                        // World is paused here; hold the player at the node so
+                        // they can choose without falling (or being hit).
+                        {
+                            let (dialogue, hold) = {
+                                let s = st.lock().unwrap();
+                                (s.upgrade_dialogue_active, s.upgrade_hold_until_tether)
+                            };
+                            if dialogue {
+                                let (nx, ny) = {
+                                    let s = st.lock().unwrap();
+                                    (s.upgrade_hold_x, s.upgrade_hold_y)
+                                };
+                                if let Some(p) = c.get_game_object_mut("player") {
+                                    p.position = (nx - PLAYER_R, ny - PLAYER_R);
+                                    p.momentum = (0.0, 0.0);
+                                    p.gravity = 0.0;
+                                }
+                            } else if hold {
+                                if let Some(p) = c.get_game_object_mut("player") {
+                                    p.momentum = (0.0, 0.0);
+                                    p.gravity = 0.0;
                                 }
                             }
                         }
@@ -1698,13 +1854,77 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Turrets ──────────────────────────────────────────
                     turrets::tick_turrets(c, &st);
 
+                    // ── Cannon fast-travel warp (two-phase speed lines) ────
+                    gravity_cannon::tick_cannon_warp(c, &st);
                     // ── Gravity cannons ───────────────────────────────────
                     gravity_cannon::tick_cannons(c, &st);
+
+                    // ── Cannon fast-travel prompt ─────────────────────────
+                    // Show "PRESS F: FAST TRAVEL" while the player is held and
+                    // can afford the hyper-transit; hide it otherwise.
+                    {
+                        let show = st.lock().unwrap().cannon_ft_prompt;
+                        if let Some(obj) = c.get_game_object_mut("cannon_prompt_text") {
+                            obj.visible = show;
+                        }
+                    }
                     // ── Boss fight ────────────────────────────────────────
                     boss::tick_boss(c, &st);
 
                     // ── Roguelike upgrade nodes (spend coins) ──────────────
                     upgrades::tick_upgrades(c, &st);
+
+                    // ── Upgrade dialogue / post-dialogue stasis hold ───────
+                    // (The world is soft-paused while this is true, so this is a
+                    // backstop: hold the player at the stored node position.)
+                    {
+                        let (dialogue, hold) = {
+                            let s = st.lock().unwrap();
+                            (s.upgrade_dialogue_active, s.upgrade_hold_until_tether)
+                        };
+                        if dialogue {
+                            let (nx, ny) = {
+                                let s = st.lock().unwrap();
+                                (s.upgrade_hold_x, s.upgrade_hold_y)
+                            };
+                            if let Some(p) = c.get_game_object_mut("player") {
+                                p.position = (nx - PLAYER_R, ny - PLAYER_R);
+                                p.momentum = (0.0, 0.0);
+                                p.gravity = 0.0;
+                            }
+                            {
+                                let mut s = st.lock().unwrap();
+                                s.px = nx;
+                                s.py = ny;
+                                s.vx = 0.0;
+                                s.vy = 0.0;
+                            }
+                        } else if hold {
+                            if let Some(p) = c.get_game_object_mut("player") {
+                                p.momentum = (0.0, 0.0);
+                                p.gravity = 0.0;
+                            }
+                        }
+                    }
+
+                    // ── Fast-travel reveal flash ──────────────────────────
+                    // When the warp speed-lines end, fire a white screen flash
+                    // so the caught player is revealed (rather than a hard cut),
+                    // and hold the receiving cannon at its windup for a few
+                    // ticks during the reveal before it settles.
+                    {
+                        let warp_now = matches!(c.get_var("warp_flash_ticks"), Some(Value::I32(v)) if v > 0);
+                        if prev_warp_flash && !warp_now {
+                            if matches!(c.get_var("cannon_ft_reveal"), Some(Value::Bool(true))) {
+                                c.set_var("cannon_ft_reveal", false);
+                                c.set_var("cannon_ft_reveal_ticks", 8i32);
+                                if let Some(cam) = c.camera_mut() {
+                                    cam.flash_with(Color(255, 255, 255, 215), 0.5, FlashMode::FadeOut, FlashEase::Smooth, 1.0, 0.10);
+                                }
+                            }
+                        }
+                        prev_warp_flash = warp_now;
+                    }
 
                     // ── Space zone ────────────────────────────────────────
                     super::space_zone::tick_space_zone(c, &st, frame_counter);
@@ -1957,8 +2177,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             drop(s);
                             let over = super::hearts::lose_heart(c, &st);
                             if !over {
-                                // Respawn at the last auto-progress checkpoint.
-                                super::hearts::respawn(c, &st);
+                                // In the boss arena, reset into the stasis orbit
+                                // (boss progress preserved) instead of respawning
+                                // at the outer checkpoint (which would strand the
+                                // player at the wall, unable to re-enter).
+                                if st.lock().unwrap().boss_active {
+                                    boss::reset_boss_after_fall(c, &st);
+                                } else {
+                                    super::hearts::respawn(c, &st);
+                                }
                                 return;
                             }
                             // Last heart spent → fall through to game over.
@@ -1968,8 +2195,25 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         c.set_var("last_distance", s.distance);
                         c.set_var("last_score", s.score as i32);
                         c.set_var("last_coins", s.coin_count as i32);
+                        // Award permanent meta currency at the end of a run,
+                        // based on distance travelled (normal-zone only — space
+                        // X distance does NOT count) plus flat bonuses for
+                        // visiting space and defeating the boss.
+                        let distance_meta = (s.distance as u64 / 5000); // 1 per 5000px
+                        let space_bonus = if s.space_visited { 20 } else { 0 };
+                        // Boss meta is awarded (and shown) at the moment of the
+                        // victory stasis — don't double it at run end.
+                        let boss_bonus = 0;
+                        let meta_gain = distance_meta + space_bonus + boss_bonus;
+                        if meta_gain > 0 {
+                            crate::profile::award_meta_currency(meta_gain);
+                        }
                         s.dead = true;
                         drop(s);
+                        // Boss darkness must not carry into the game-over menu.
+                        if c.has_lighting() {
+                            c.set_ambient(Color(255, 255, 255, 255), 1.0);
+                        }
                         if let Some(cam) = c.camera_mut() {
                             cam.snap_zoom(1.0);
                         }

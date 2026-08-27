@@ -26,11 +26,23 @@ fn sv(c: &mut Canvas, name: &str, v: bool) {
     if let Some(obj) = c.get_game_object_mut(name) { obj.visible = v; }
 }
 
+/// Ensure a space hook has its asteroid GIF animation applied. Pool objects are
+/// created with no image and get their GIF lazily, so any hook that is placed
+/// (entry stasis, planet/gwell neighbours) must set it or it renders invisible.
+fn ensure_hook_anim(obj: &mut GameObject) {
+    if obj.animated_sprite.is_none() {
+        if let Some(anim) = super::bootstrap::hook_asteroid_anim_for_spawn() {
+            obj.set_animation(anim);
+        }
+    }
+}
+
 static BLACKHOLE1_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
 static WORMHOLE2_TEMPLATE:  OnceLock<AnimatedSprite> = OnceLock::new();
 static GWELLOFF_TEMPLATE:   OnceLock<AnimatedSprite> = OnceLock::new();
 
-fn blackhole1_template() -> AnimatedSprite {
+/// A clone of the black-hole gif animation (used for the boss teleport marker too).
+pub fn blackhole1_template() -> AnimatedSprite {
     BLACKHOLE1_TEMPLATE.get_or_init(|| {
         AnimatedSprite::new(include_bytes!("../../../assets/blackhole1.gif"), (256.0, 256.0), BLACKHOLE_FPS)
             .expect("blackhole1.gif decode")
@@ -322,6 +334,8 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let mut s = st.lock().unwrap();
         s.in_space_mode       = true;
+        s.space_visited       = true;
+        s.space_coins_collected = 0;
         s.space_launch_active  = false; // consumed — cannot re-enter without another pad
         s.space_settle_done    = false; // arm the momentum-zero trigger for this visit
         s.space_oxygen        = SPACE_OXYGEN_TICKS;
@@ -439,6 +453,9 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
             obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
             obj.visible  = true;
+            // Make the entry stasis hook visible immediately (pool objects have
+            // no image until their GIF is applied).
+            ensure_hook_anim(obj);
             if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
         }
 
@@ -702,7 +719,10 @@ fn tick_space_camera(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let target_cam_y = py - visible_h * 0.5 - SPACE_CAM_Y_LEAD;
 
     // Manual lerp (not clamped to 0 like the engine's lerp_toward)
-    let new_cam_y = space_cam_y + (target_cam_y - space_cam_y) * SPACE_CAM_LERP_IN;
+    let mut new_cam_y = space_cam_y + (target_cam_y - space_cam_y) * SPACE_CAM_LERP_IN;
+    // Clamp so the bottom of the viewport never dips into the normal zone
+    // (y > 0): bottom = cam_y + visible_h, so cam_y must stay <= -visible_h.
+    new_cam_y = new_cam_y.min(-visible_h);
 
     st.lock().unwrap().space_cam_y = new_cam_y;
 
@@ -760,8 +780,25 @@ fn tick_space_oxygen(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if needs_return {
-        // Extraction loop: oxygen out ⇒ eject back to the surface with the coins
-        // collected, instead of a hard death. (Bank-vs-greed can refine later.)
+        // Oxygen-out PENALTY: lose the coins collected in this space visit and
+        // take a heart. Coins are only kept on a voluntary bottom-border exit.
+        let over = {
+            let mut s = st.lock().unwrap();
+            let lost = s.space_coins_collected;
+            s.coin_count = s.coin_count.saturating_sub(lost);
+            s.space_coins_collected = 0;
+            drop(s);
+            super::hearts::lose_heart(c, st)
+        };
+        if over {
+            // Out of hearts: oxygen death.
+            let mut s = st.lock().unwrap();
+            s.space_extract = false;
+            s.space_oxygen = 0;
+            drop(s);
+            c.set_var("died_to_oxygen", true);
+            return;
+        }
         let mut s = st.lock().unwrap();
         s.space_extract = true;
         s.space_oxygen = 0;
@@ -1283,6 +1320,7 @@ fn spawn_space_planets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
                     obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
                     obj.visible  = true;
+                    ensure_hook_anim(obj);
                     if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
                 }
                 s = st.lock().unwrap();
@@ -1376,6 +1414,7 @@ fn spawn_space_oxygen_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let r = SPACE_OXYGEN_PICKUP_R;
             obj.position = (x - r, y - r);
             obj.size = (r * 2.0, r * 2.0);
+            obj.rotation = 90.0; // canister drawn upright; rotate 90° CW so it reads as a canister
             obj.visible = true;
             obj.gravity = 0.0;
             obj.momentum = (0.0, 0.0);
@@ -1495,6 +1534,7 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.position = (hx - HOOK_ARTIFACT_R, hy - HOOK_ARTIFACT_R);
                     obj.size     = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
                     obj.visible  = true;
+                    ensure_hook_anim(obj);
                     if let Some(sprite) = &mut obj.animated_sprite { sprite.reset(); sprite.set_fps(0.001); }
                 }
                 s = st.lock().unwrap();
@@ -2265,7 +2305,10 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             .get_game_object(name)
             .map(score_for_space_coin_obj)
             .unwrap_or(SPACE_CATCOIN_SCORE);
-        s.score = s.score.saturating_add(add * score_mult);
+        let add = add * score_mult;
+        s.score = s.score.saturating_add(add);
+        s.coin_count = s.coin_count.saturating_add(add); // bank: kept on voluntary exit
+        s.space_coins_collected = s.space_coins_collected.saturating_add(add);
         s.space_coin_live.retain(|n| n != name);
         s.space_coin_spent.push(name.clone()); // won't respawn until next space entry
     }
@@ -2301,7 +2344,10 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 .get_game_object(name)
                 .map(score_for_space_coin_obj)
                 .unwrap_or(SPACE_CATCOIN_BLUE_SCORE);
-            s.score = s.score.saturating_add(add * score_mult);
+            let add = add * score_mult;
+            s.score = s.score.saturating_add(add);
+            s.coin_count = s.coin_count.saturating_add(add); // bank
+            s.space_coins_collected = s.space_coins_collected.saturating_add(add);
             s.space_blue_coin_live.retain(|n| n != name);
             s.space_blue_coin_spent.push(name.clone());
         }
@@ -2313,7 +2359,10 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 .get_game_object(name)
                 .map(score_for_space_coin_obj)
                 .unwrap_or(SPACE_CATCOIN_BLUE_SCORE);
-            s.score = s.score.saturating_add(add * score_mult);
+            let add = add * score_mult;
+            s.score = s.score.saturating_add(add);
+            s.coin_count = s.coin_count.saturating_add(add); // bank
+            s.space_coins_collected = s.space_coins_collected.saturating_add(add);
             s.space_red_coin_live.retain(|n| n != name);
             s.space_red_coin_spent.push(name.clone()); // won't respawn until next space entry
         }

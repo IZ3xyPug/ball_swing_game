@@ -1,5 +1,6 @@
 use quartz::*;
-use std::collections::VecDeque;
+use image::AnimationDecoder;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use crate::constants::*;
 use crate::images::*;
@@ -403,10 +404,22 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
                     "PURCHASABLE", &font, 100.0 * s, Color(255, 255, 255, 255), 1600.0 * s,
                 )));
             }
+            // Permanent upgrade: buy an extra starting heart with meta currency.
+            let (owned, meta) = {
+                let p = crate::profile::profile();
+                let g = p.lock().unwrap();
+                (g.permanent_extra_hearts, g.meta_currency)
+            };
+            let cost = crate::profile::permanent_heart_cost(owned);
+            let label = if meta >= cost {
+                format!("\u{25BC}  BUY PERMANENT HEART  ({cost} META)   OWNS {owned}   HAS {meta}")
+            } else {
+                format!("PERMANENT HEART  OWNS {owned}   \u{2022}   NEED {cost} META   \u{2022}   HAS {meta}")
+            };
             if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
                 obj.set_drawable(Box::new(ui_text_spec(
-                    "COMING SOON",
-                    &font, 48.0 * s, Color(180, 160, 220, 200), 1200.0 * s,
+                    &label,
+                    &font, 40.0 * s, Color(210, 235, 255, 255), 1500.0 * s,
                 )));
             }
             if let Some(obj) = c.get_game_object_mut("shop_back_text") {
@@ -684,8 +697,88 @@ fn bg_preview_img(idx: usize) -> Arc<image::RgbaImage> {
     cache[idx.min(cache.len().saturating_sub(1))].clone()
 }
 
+/// Cached animated calico ball for the character preview (slow playback).
+fn cached_calico_ball_anim() -> Option<AnimatedSprite> {
+    static CACHE: OnceLock<Option<AnimatedSprite>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        AnimatedSprite::new(
+            include_bytes!("../assets/calicoball.gif"),
+            (110.0, 110.0),
+            CALICO_FPS,
+        ).ok()
+    }).clone()
+}
+
+/// Alpha-blend a filled circle onto `img` so the shop trail can tint/fade
+/// without opaque, blocky squares.
+fn draw_circle_alpha(img: &mut image::RgbaImage, cx: f32, cy: f32, r: f32, c: [u8; 4]) {
+    let rr = r * r;
+    let ca = c[3] as f32 / 255.0;
+    let x0 = (cx - r).floor().max(0.0) as u32;
+    let x1 = ((cx + r).ceil().min(img.width() as f32)) as u32;
+    let y0 = (cy - r).floor().max(0.0) as u32;
+    let y1 = ((cy + r).ceil().min(img.height() as f32)) as u32;
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let dx = px as f32 + 0.5 - cx;
+            let dy = py as f32 + 0.5 - cy;
+            if dx * dx + dy * dy <= rr {
+                let p = img.get_pixel_mut(px, py);
+                let ba = p[3] as f32 / 255.0;
+                let outa = ca + ba * (1.0 - ca);
+                if outa > 0.0 {
+                    p[0] = ((c[0] as f32 * ca + p[0] as f32 * ba * (1.0 - ca)) / outa).round() as u8;
+                    p[1] = ((c[1] as f32 * ca + p[1] as f32 * ba * (1.0 - ca)) / outa).round() as u8;
+                    p[2] = ((c[2] as f32 * ca + p[2] as f32 * ba * (1.0 - ca)) / outa).round() as u8;
+                    p[3] = (outa * 255.0).round() as u8;
+                }
+            }
+        }
+    }
+}
+
+/// Decode `energy_hook_1.gif` and tint each frame toward the selected rope
+/// colour with a mild colour overlay, preserving the energy-hook aesthetic.
+fn tint_energy_hook_gif(color: (u8, u8, u8), size: (f32, f32)) -> Option<AnimatedSprite> {
+    use std::io::Cursor;
+    let bytes = include_bytes!("../assets/energy_hook_1.gif");
+    let cursor = Cursor::new(bytes);
+    let decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
+    let (cr, cg, cb) = color;
+    let frames: Vec<image::RgbaImage> = decoder.into_frames()
+        .filter_map(|f| f.ok())
+        .map(|f| {
+            let mut img = f.into_buffer();
+            for px in img.pixels_mut() {
+                if px[3] == 0 { continue; }
+                px[0] = (px[0] as f32 * 0.65 + cr as f32 * 0.35).min(255.0) as u8;
+                px[1] = (px[1] as f32 * 0.65 + cg as f32 * 0.35).min(255.0) as u8;
+                px[2] = (px[2] as f32 * 0.65 + cb as f32 * 0.35).min(255.0) as u8;
+            }
+            img
+        })
+        .collect();
+    if frames.is_empty() { return None; }
+    Some(AnimatedSprite::from_frames(frames, size, 8.0))
+}
+
+/// Cached, per-colour recoloured energy-hook animation for the rope preview.
+fn energy_hook_preview(color: (u8, u8, u8), size: (f32, f32)) -> Option<AnimatedSprite> {
+    static CACHE: OnceLock<Mutex<HashMap<(u8, u8, u8), Option<AnimatedSprite>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap();
+    if let Some(a) = guard.get(&color) {
+        return a.clone();
+    }
+    let anim = tint_energy_hook_gif(color, size);
+    guard.insert(color, anim.clone());
+    anim
+}
+
 /// Per-frame shop preview: an orbiting ball with the selected character/trail
-/// colour, plus a background preview for the background category.
+/// colour, plus a background preview for the background category. The trail
+/// mirrors the gameplay loop's particle trail (round, tapering, trailing behind
+/// the ball) and the ROPES category shows a recoloured energy-hook animation.
 pub fn tick_shop_preview(c: &mut Canvas) {
     if !matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) { return; }
     let cat = c.get_i32("shop_active_category");
@@ -716,6 +809,24 @@ pub fn tick_shop_preview(c: &mut Canvas) {
     }
     set_visible(c, "shop_preview_bg", false);
 
+    // Ropes category: preview the recoloured energy-hook animation, not a ball.
+    if cat == 1 {
+        set_visible(c, "shop_preview_ball", false);
+        let c2 = SHOP_ROPE_COLORS[sel.min(SHOP_ROPE_COLORS.len() - 1)];
+        if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
+            // energy_hook_1.gif is 32×64 (1:2) — show it at a beam aspect.
+            let (w, h) = (160.0f32, 320.0f32);
+            obj.size = (w, h);
+            obj.position = (pcx - w * 0.5, pcy - h * 0.5);
+            if let Some(mut anim) = energy_hook_preview(c2, (w, h)) {
+                anim.set_fps(6.0);
+                obj.set_animation(anim);
+            }
+            obj.visible = true;
+        }
+        return;
+    }
+
     // Advance the orbit.
     let angle = c.get_f32("shop_preview_angle") + 0.045;
     c.set_var("shop_preview_angle", angle);
@@ -725,27 +836,39 @@ pub fn tick_shop_preview(c: &mut Canvas) {
 
     let (ball_rgb, trail_rgb) = match cat {
         0 => (SHOP_CHARS[sel.min(SHOP_CHARS.len() - 1)], (235, 235, 255)),
-        1 => {
-            let c2 = SHOP_ROPE_COLORS[sel.min(SHOP_ROPE_COLORS.len() - 1)];
-            (c2, c2)
-        }
         3 => ((235, 235, 235), SHOP_TRAIL_COLORS[sel.min(SHOP_TRAIL_COLORS.len() - 1)]),
         _ => ((235, 235, 235), (255, 255, 255)),
     };
 
-    // Orbit ball with the selected colour (drawn on the top layer).
+    // Orbit ball. Calico (cat 0, sel 0) shows the balled-up animated cat in
+    // slow motion; every other option is a solid coloured circle sized to the
+    // calico's visible pixel extent (its full 110 frame has ~104px of cat) so
+    // they read at the same scale.
     if let Some(obj) = c.get_game_object_mut("shop_preview_ball") {
-        let d = 110.0;
+        let d = if cat == 0 && sel == 0 { 110.0 } else { 88.0 };
+        obj.size = (d, d);
         obj.position = (bx - d * 0.5, by - d * 0.5);
-        obj.set_image(Image {
-            shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
-            image: circle_cached((d * 0.5) as u32, ball_rgb.0, ball_rgb.1, ball_rgb.2),
-            color: None,
-        });
+        if cat == 0 && sel == 0 {
+            if obj.animated_sprite.is_none() {
+                if let Some(mut anim) = cached_calico_ball_anim() {
+                    anim.set_fps(4.0); // slow playback while selected
+                    obj.set_animation(anim);
+                }
+            }
+        } else {
+            obj.animated_sprite = None;
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                image: circle_cached((d * 0.5) as u32, ball_rgb.0, ball_rgb.1, ball_rgb.2),
+                color: None,
+            });
+            obj.update_image_shape();
+        }
         obj.visible = true;
     }
 
-    // Long/trail streak drawn behind the ball (lower layer).
+    // Particle-style trail drawn behind the ball on a lower layer, sized to the
+    // same ball-to-trail ratio as the in-game emitter (nice round fade).
     let points = {
         let tail = PREVIEW_TAIL.get_or_init(|| Mutex::new(VecDeque::new()));
         let mut t = tail.lock().unwrap();
@@ -759,14 +882,17 @@ pub fn tick_shop_preview(c: &mut Canvas) {
         let w = 700u32;
         let h = 300u32;
         let mut img = image::RgbaImage::new(w, h);
+        let max_r = 34.0_f32; // trail radius sized so it reads clearly behind the smaller circles
+        let len = points.len().max(2) as f32;
         for (i, p) in points.iter().enumerate() {
-            let px = ((p.0 - pcx) + w as f32 * 0.5) as i32;
-            let py = ((p.1 - pcy) + h as f32 * 0.5) as i32;
-            let alpha = (40.0 + i as f32 / points.len().max(1) as f32 * 215.0) as u8;
-            let half = 7u32;
-            draw_rect(&mut img, (px - half as i32).max(0) as u32, (py - half as i32).max(0) as u32,
-                half * 2, half * 2, [trail_rgb.0, trail_rgb.1, trail_rgb.2, alpha]);
+            let t = (i as f32 + 1.0) / len;
+            let px = (p.0 - pcx) + w as f32 * 0.5;
+            let py = (p.1 - pcy) + h as f32 * 0.5;
+            let r = max_r * (0.30 + 0.70 * t);
+            let alpha = (36.0 + t * 200.0).min(255.0) as u8;
+            draw_circle_alpha(&mut img, px, py, r, [trail_rgb.0, trail_rgb.1, trail_rgb.2, alpha]);
         }
+        obj.animated_sprite = None; // clear any lingering rope-animation sprite
         obj.position = (pcx - w as f32 * 0.5, pcy - h as f32 * 0.5);
         obj.size = (w as f32, h as f32);
         obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None });
@@ -1003,5 +1129,13 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
                 button: Some(MouseButton::Left),
             },
             Target::name("shop_select_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "buy_perm_heart".into() },
+                target: Target::name("shop_instr_text"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("shop_instr_text"),
         )
 }

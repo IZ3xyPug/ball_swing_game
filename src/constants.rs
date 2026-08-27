@@ -43,11 +43,11 @@ pub const AIRSHIELD_ANIM_FPS:        f32 = 16.0;
 /// How far ahead of the player world objects are pre-generated (px).
 /// Increase → more objects buffered ahead (smoother at high speed, more memory).
 /// Decrease → objects may pop in visibly when moving fast.
-pub const GEN_AHEAD:      f32 = VW * 2.5;
+pub const GEN_AHEAD:      f32 = VW * 3.5;
 
 /// Max hooks the generator places per game tick (frame).
 /// Higher = faster queue fill but more CPU per frame.
-pub const HOOKS_SPAWN_BUDGET_PER_TICK:    usize = 2;
+pub const HOOKS_SPAWN_BUDGET_PER_TICK:    usize = 20;
 pub const PADS_SPAWN_BUDGET_PER_TICK:     usize = 2;
 pub const SPINNERS_SPAWN_BUDGET_PER_TICK: usize = 2;
 pub const FLIPS_SPAWN_BUDGET_PER_TICK:    usize = 1;
@@ -59,7 +59,7 @@ pub const COIN_BATCHES_BUDGET_PER_TICK:   usize = 1;
 
 /// How many hooks the pending queue is filled to per batch call.
 /// Increase → longer lookahead, smoother streaming.
-pub const MAX_HOOKS_LIVE: usize = 10;
+pub const MAX_HOOKS_LIVE: usize = 40;
 
 /// Object pool size. Must be ≥ (MAX_HOOKS_LIVE + starter hooks).
 /// Increasing this is safe; decreasing below ~20 will cause pool starvation.
@@ -69,6 +69,10 @@ pub const HOOK_POOL_SIZE: usize = 68;
 /// This is the single most impactful spacing constant.
 /// Increase → harder (longer reach required). Decrease → easier.
 pub const HOOK_FIXED_X_GAP: f32 = 1250.0;
+/// How long the player must HOLD space/mouse at the start prompt before the run
+/// begins (ticks; 90 = 1.5 s at 60 fps). Prevents a stray/retry click from
+/// instantly launching + grabbing.
+pub const START_HOLD_TICKS: i32 = 90;
 
 /// World Y bounds for grab points.
 /// HOOK_Y_MIN is the top of the playable zone (negative = above the horizon).
@@ -99,10 +103,31 @@ pub const HOOK_MIN_REACH: f32 = ROPE_LEN_MAX * 0.5; // 300.0
 pub const HOOK_MAX_REACH: f32 = ROPE_LEN_MAX; // 600.0
 
 /// Horizontal stride range per hop (px).
-/// Intentionally set large to create long gaps between hooks.
-/// This can exceed HOOK_MAX_REACH and break strict reachability by design.
-pub const HOOK_X_STRIDE_MIN: f32 = 1160.0;
-pub const HOOK_X_STRIDE_MAX: f32 = 1340.0;
+/// Kept within `HOOK_MAX_REACH` so consecutive hooks are always reachable and
+/// there is never a large un-survivable break between grab nodes (the player
+/// can survive with proper planning). Tightened 2026-08-26 after large gaps
+/// left a spinner/pad as the only catch.
+pub const HOOK_X_STRIDE_MIN: f32 = 560.0;
+pub const HOOK_X_STRIDE_MAX: f32 = 700.0;
+
+// ── Difficulty curve ──────────────────────────────────────────────────────────
+// The world ramps in difficulty with distance. Hook spacing stretches slightly
+// and vertical variance grows, but strides stay within reach so there is never
+// an un-survivable gap. Additional hazards (spinners/pads/wells) are spawned at
+// their own increasing rate elsewhere in the spawner.
+
+/// Distance (px) over which difficulty ramps from 0.0 → 1.0.
+pub const DIFFICULTY_RAMP_DISTANCE: f32 = 30_000.0;
+/// Extra horizontal stride added per hop at max difficulty. Kept modest so
+/// strides stay within the rope-reach envelope (HOOK_STRIDE_HARD_MAX) and never
+/// create an un-survivable gap.
+pub const DIFFICULTY_STRIDE_BONUS: f32 = 60.0;
+/// Extra vertical variance (ΔY magnitude) added per hop at max difficulty.
+pub const DIFFICULTY_Y_BONUS: f32 = 240.0;
+/// Upper bound on horizontal stride even at max difficulty. At/above the rope
+/// reach the vertical budget → 0, so cap slightly under ROPE_LEN_MAX to keep
+/// playable vertical variation.
+pub const HOOK_STRIDE_HARD_MAX: f32 = ROPE_LEN_MAX * 1.0;
 
 // ── Generation — Bounce Pads ──────────────────────────────────────────────────
 
@@ -494,7 +519,7 @@ pub const BULLET_POOL_SIZE:     usize = 64;
 // ── Boss fight ────────────────────────────────────────────────────────────────
 pub const BOSS_THRESHOLD_X:      f32   = 20_000.0; // player X that triggers boss zone entry
 pub const BOSS_ZONE_X1:          f32   = 20_000.0; // left wall of boss arena
-pub const BOSS_ZONE_X2:          f32   = 27_000.0; // right wall of boss arena
+pub const BOSS_ZONE_X2:          f32   = 34_000.0; // right wall of boss arena (doubled)
 pub const BOSS_ENTRY_DELAY_TICKS: u32  = 180;      // 3 seconds before boss appears
 pub const BOSS_SIZE:             f32   = 360.0;    // width and height of boss body
 pub const BOSS_MAX_HP:           i32   = 20;
@@ -508,7 +533,7 @@ pub const BOSS_FLOAT_SPEED:      f32   = 2.8;      // kept for reference
 pub const BOSS_HP_BAR_W:         f32   = 900.0;
 pub const BOSS_HP_BAR_H:         f32   = 50.0;
 /// Gravity multiplier applied to the player while inside the boss arena.
-pub const BOSS_GRAVITY_SCALE:    f32   = 0.42;
+pub const BOSS_GRAVITY_SCALE:    f32   = 0.05;
 /// Number of decorative asteroid GIFs placed around the boss arena.
 pub const BOSS_ASTEROID_COUNT:   usize = 16; // 4 cols × 4 rows
 /// Radius within which a hit counts as on a weakpoint.
@@ -549,22 +574,43 @@ pub const BOSS_LUNGE_TELEGRAPH:   u32   = 90;
 
 // ── Gravity cannon hyper-transit (fast travel) ────────────────────────────────
 /// Coin cost to use a cannon as fast travel.
-pub const CANNON_FAST_TRAVEL_COST:      u32   = 600;
+pub const CANNON_FAST_TRAVEL_COST:      u32   = 300;
 /// How far ahead a cannon fast-travel launches the player (px).
 pub const CANNON_FAST_TRAVEL_DISTANCE:  f32   = VW * 3.0;
 /// Ticks of no-grab grace after arriving at the receiver.
 pub const CANNON_FAST_TRAVEL_GRACE:     u32   = 45;
+/// Outgoing warp speed-line phase length (before the teleport).
+pub const CANNON_WARP_OUT_TICKS:        i32   = 22;
+/// Incoming (reverse) warp speed-line phase length (after the teleport).
+pub const CANNON_WARP_IN_TICKS:         i32   = 28;
 // Movement pattern speeds for lissajous figure-8
 pub const BOSS_PHASE_X_SPEED:    f32   = 0.024;    // radians per tick (horizontal sweep)
 pub const BOSS_PHASE_Y_SPEED:    f32   = 0.048;    // radians per tick (vertical — 2× for figure-8)
 pub const BOSS_ARENA_HALF_W:     f32   = (BOSS_ZONE_X2 - BOSS_ZONE_X1) * 0.52; // amplitude — uses 52% for full traversal
 pub const BOSS_ARENA_CENTER_X:   f32   = (BOSS_ZONE_X1 + BOSS_ZONE_X2) * 0.5;
 pub const BOSS_Y_CENTER:         f32   = -2500.0;  // HUD Y ≈ -2500 (upper sky)
-pub const BOSS_Y_AMPLITUDE:      f32   = 400.0;    // ±400 Y, boss sweeps -2900..−2100
+pub const BOSS_Y_AMPLITUDE:      f32   = 700.0;    // boss sweeps a wider vertical band
 pub const C_BOSS_BODY:           (u8,u8,u8) = (60, 20, 200);   // deep purple
 pub const C_BOSS_BOLT:           (u8,u8,u8) = (255, 110, 20);  // hot orange
 pub const C_BOSS_HP_FILL:        (u8,u8,u8) = (220, 40,  40);  // red fill
 pub const C_BOSS_HP_BG:          (u8,u8,u8) = (40,  10,  10);  // dark bg
+/// Ominous name for the first boss (fits the sun/devourer theme).
+pub const BOSS_NAME: &str = "THE SUN DEVOURER";
+/// Lower bound on camera zoom while the boss fight is active. The Dune-style
+/// height zoom would otherwise pull the camera way out on the tall arena; this
+/// keeps the boss readable (less zoomed out).
+pub const BOSS_CAM_MIN_ZOOM:      f32   = 0.8;
+/// Diameter of the portal wormhole shown as the player is warped into the boss
+/// arena (matches the visible wormhole portal used elsewhere).
+pub const BOSS_WORMHOLE_D:        f32   = 1000.0;
+/// Diameter of the huge black-hole threshold marker at the boss teleport, so the
+/// player has a clear visual that they are heading into something special.
+pub const BOSS_MARKER_D:          f32   = 3200.0;
+/// Y-centre of the boss teleport threshold marker (covers the approach path).
+pub const BOSS_MARKER_Y:          f32   = 1000.0;
+/// How far before the boss threshold dedicated approach grapple nodes are
+/// placed, so the player always has a swing path up to the portal.
+pub const BOSS_APPROACH_RANGE:    f32   = 6000.0;
 
 // ── Comets ────────────────────────────────────────────────────────────────────
 pub const COMET_POOL_SIZE:        usize = 8;
@@ -625,7 +671,9 @@ pub const RESPAWN_ORBIT_R: f32 = 240.0;
 pub const HEART_W: f32 = 96.0;
 pub const HEART_H: f32 = 88.0;
 pub const HEART_GAP: f32 = 30.0;
-pub const HEART_HUD_X: f32 = 40.0;
+// Placed to the right of the coin counter (which occupies x 26..666) so the two
+// HUDs don't compete for the same top-left corner.
+pub const HEART_HUD_X: f32 = 700.0;
 pub const HEART_HUD_Y: f32 = 40.0;
 pub const C_HEART_FULL:  (u8, u8, u8) = (240,  70,  80);
 pub const C_HEART_EMPTY: (u8, u8, u8) = ( 60,  34,  38);
@@ -639,6 +687,8 @@ pub const BUFF_HOOK_MIN_X_GAP: f32 = 6000.0;
 pub const BUFF_HOOK_TAG: &str = "buff_node";
 /// How long a buff lasts (ticks). 600 = 10 s at 60 fps.
 pub const BUFF_DURATION_TICKS: u32 = 600;
+/// How many boss projectiles a buff can absorb before it ends early.
+pub const BUFF_ABSORB_MAX: u32 = 3;
 /// Momentum cap granted while a buff is active (above the normal 56).
 pub const BUFF_MOMENTUM_CAP: f32 = 84.0;
 /// Buff node base colour (cyan — placeholder).
@@ -676,21 +726,23 @@ pub const ROCKET_PAD_H:            f32   = 125.0;
 /// Velocity applied to the player on rocket pad contact.
 /// Must be large enough to clear the normal game zone entirely and reach
 /// SPACE_ENTRY_Y. No natural swing + zero-g can match this force.
-pub const ROCKET_PAD_LAUNCH_VY:    f32   = -130.0;
+pub const ROCKET_PAD_LAUNCH_VY:    f32   = -165.0;
 pub const ROCKET_PAD_LAUNCH_VX:    f32   = 22.0;
 pub const C_ROCKET_PAD:            (u8,u8,u8) = (60, 220, 255);
 pub const C_ROCKET_PAD_GLOW:       (u8,u8,u8) = (120, 240, 255);
 
 // ── Space zone ────────────────────────────────────────────────────────────────
 /// Player py must drop below this (negative y) to enter space mode.
-pub const SPACE_ENTRY_Y:           f32 = -(VH * 1.35);
+pub const SPACE_ENTRY_Y:           f32 = -(VH * 2.40);
 /// Depth at which the entry catch planet is centered and momentum is zeroed.
 /// Must be below (more negative than) SPACE_ENTRY_Y by enough that the player
 /// reaches it while still moving upward. Planet radius + gravity_influence_mult
 /// together ensure gravity pulls from here all the way back to SPACE_ENTRY_Y.
-pub const SPACE_SETTLE_Y:          f32 = -(VH * 2.1);  // ~-4536 at VH=2160
+pub const SPACE_SETTLE_Y:          f32 = -(VH * 3.15);
 /// Player py rising back above this (less negative) while in space triggers return.
-pub const SPACE_RETURN_Y:          f32 = -(VH * 0.05);
+/// Pushed well up (into deep -y) so the space zone ends far above the normal
+/// zone and normal-zone content can never bleed into the space view.
+pub const SPACE_RETURN_Y:          f32 = -(VH * 1.10);
 /// If player drifts this far left of the space entry anchor, rescue-teleport.
 pub const SPACE_LEFT_BOUNDARY_MARGIN: f32 = VW * 0.95;
 /// Target X range (relative to entry anchor) for left-boundary rescue teleport.
@@ -731,8 +783,8 @@ pub const SPACE_ASTEROID_SPAWN_BUDGET:  usize = 3;
 // Space planet parameters
 pub const SPACE_PLANET_GAP_MIN:         f32 = 1400.0;
 pub const SPACE_PLANET_GAP_MAX:         f32 = 3200.0;
-pub const SPACE_PLANET_Y_MIN:           f32 = -(VH * 4.0);
-pub const SPACE_PLANET_Y_MAX:           f32 = -(VH * 0.55);
+pub const SPACE_PLANET_Y_MIN:           f32 = -(VH * 5.0);
+pub const SPACE_PLANET_Y_MAX:           f32 = -(VH * 1.7);
 pub const SPACE_PLANET_RADIUS_SM_MIN:   f32 = 120.0;
 pub const SPACE_PLANET_RADIUS_SM_MAX:   f32 = 220.0;
 pub const SPACE_PLANET_RADIUS_LG_MIN:   f32 = 280.0;
@@ -747,12 +799,12 @@ pub const SPACE_HOOK_GAP_MAX:  f32 = 920.0;
 // Three vertical bands — shallow (entry), mid, and deep space.
 // Each hook spawn tick picks one band randomly, ensuring recovery
 // points are available even if the player flies deep into space.
-pub const SPACE_HOOK_Y_SHALLOW_MIN: f32 = -(VH * 3.2);
-pub const SPACE_HOOK_Y_SHALLOW_MAX: f32 = -(VH * 0.42);
-pub const SPACE_HOOK_Y_MID_MIN:     f32 = -(VH * 5.5);
-pub const SPACE_HOOK_Y_MID_MAX:     f32 = -(VH * 3.0);
-pub const SPACE_HOOK_Y_DEEP_MIN:    f32 = -(VH * 9.0);
-pub const SPACE_HOOK_Y_DEEP_MAX:    f32 = -(VH * 5.0);
+pub const SPACE_HOOK_Y_SHALLOW_MIN: f32 = -(VH * 4.2);
+pub const SPACE_HOOK_Y_SHALLOW_MAX: f32 = -(VH * 1.8);
+pub const SPACE_HOOK_Y_MID_MIN:     f32 = -(VH * 6.5);
+pub const SPACE_HOOK_Y_MID_MAX:     f32 = -(VH * 4.0);
+pub const SPACE_HOOK_Y_DEEP_MIN:    f32 = -(VH * 10.0);
+pub const SPACE_HOOK_Y_DEEP_MAX:    f32 = -(VH * 6.0);
 // Keep old names as aliases so nothing else breaks
 pub const SPACE_HOOK_Y_MIN: f32 = SPACE_HOOK_Y_SHALLOW_MIN;
 pub const SPACE_HOOK_Y_MAX: f32 = SPACE_HOOK_Y_SHALLOW_MAX;
@@ -768,10 +820,10 @@ pub const SPACE_HOOK_SUN_GAP_MAX:    f32 = 260.0;
 // Space coin parameters
 pub const SPACE_COIN_GAP_MIN:  f32 = 1400.0;
 pub const SPACE_COIN_GAP_MAX:  f32 = 2600.0;
-pub const SPACE_COIN_SCORE:    u32 = 1000;
-pub const SPACE_CATCOIN_SCORE:      u32 = SPACE_COIN_SCORE * 2;
-pub const SPACE_CATCOIN_BLUE_SCORE: u32 = SPACE_COIN_SCORE * 5;
-pub const SPACE_CATCOIN_RED_SCORE:  u32 = SPACE_COIN_SCORE * 25;
+pub const SPACE_COIN_SCORE:    u32 = 5;
+pub const SPACE_CATCOIN_SCORE:      u32 = 5;
+pub const SPACE_CATCOIN_BLUE_SCORE: u32 = 10;
+pub const SPACE_CATCOIN_RED_SCORE:  u32 = 25;
 pub const SPACE_CATCOIN_BLUE_CHANCE: f32 = 0.22;
 pub const SPACE_CATCOIN_RED_CHANCE:  f32 = 0.08;
 pub const SPACE_COIN_ANIM_FPS: f32 = 6.0;
@@ -779,8 +831,8 @@ pub const SPACE_COIN_R:        f32 = 27.0;
 pub const SPACE_COIN_FORMATION_COUNT: usize = 4;
 pub const SPACE_COIN_FORMATION_SPACING: f32 = 210.0;
 pub const SPACE_COIN_FORMATION_ARC_RISE: f32 = 62.0;
-pub const SPACE_COIN_FORMATION_Y_MIN: f32 = -(VH * 3.6);
-pub const SPACE_COIN_FORMATION_Y_MAX: f32 = -(VH * 0.95);
+pub const SPACE_COIN_FORMATION_Y_MIN: f32 = -(VH * 4.6);
+pub const SPACE_COIN_FORMATION_Y_MAX: f32 = -(VH * 1.9);
 pub const SPACE_PLANET_HOOK_GUIDE_COINS: usize = 4;
 pub const SPACE_PLANET_HOOK_GUIDE_RED_CHANCE: f32 = 0.20;
 pub const SPACE_PLANET_HOOK_GUIDE_T_MIN: f32 = 0.20;
@@ -807,17 +859,22 @@ pub const SPACE_OXYGEN_PICKUP_SPAWN_BUDGET: usize = 1;
 pub const SPACE_OXYGEN_PICKUP_Y_MIN: f32 = -(VH * 3.6);
 pub const SPACE_OXYGEN_PICKUP_Y_MAX: f32 = -(VH * 0.9);
 
-// ── Roguelike upgrade nodes (spend coins for boosts) ──────────────────────────
+// ── Roguelike upgrade nodes (spend coins for run boosts) ─────────────────────
 pub const UPGRADE_POOL_SIZE: usize = 12;
-pub const UPGRADE_GAP_MIN: f32 = 15000.0;
-pub const UPGRADE_GAP_MAX: f32 = 26000.0;
+pub const UPGRADE_GAP_MIN: f32 = 30000.0;
+pub const UPGRADE_GAP_MAX: f32 = 55000.0;
 pub const UPGRADE_R: f32 = 96.0;
 pub const UPGRADE_SPAWN_BUDGET_PER_TICK: usize = 1;
-/// Permanent extra-heart purchase: base cost × growth^(extra_hearts already owned).
-pub const UPGRADE_HEART_BASE_COST: u32 = 2500;
-pub const UPGRADE_HEART_GROWTH: f32 = 2.0;
-pub const UPGRADE_BREATH_COST: u32 = 1500;
-pub const UPGRADE_MOMENTUM_COST: u32 = 2000;
+/// Run-persisting upgrades: cheap first buy, escalating per purchase this run.
+pub const UPGRADE_RUN_HEART_BASE: u32 = 200;
+pub const UPGRADE_RUN_HEART_GROWTH: f32 = 2.0;
+pub const UPGRADE_BREATH_BASE: u32 = 150;
+pub const UPGRADE_BREATH_GROWTH: f32 = 1.6;
+pub const UPGRADE_MOMENTUM_BASE: u32 = 200;
+pub const UPGRADE_MOMENTUM_GROWTH: f32 = 1.6;
+/// Permanent extra-heart upgrade (persists across runs; meta currency, exponential).
+pub const UPGRADE_PERM_HEART_BASE: u64 = 5000;
+pub const UPGRADE_PERM_HEART_GROWTH: f32 = 2.5;
 /// "Controlled breathing" — oxygen drains at this fraction of normal.
 pub const UPGRADE_BREATH_DRAIN_SCALE: f32 = 0.72;
 /// Momentum cap while the momentum upgrade is owned.
@@ -825,6 +882,9 @@ pub const UPGRADE_MOMENTUM_CAP: f32 = 70.0;
 pub const C_UPGRADE: (u8, u8, u8) = (200, 120, 255);
 /// Game var holding how many permanent extra hearts are owned.
 pub const META_EXTRA_HEARTS_VAR: &str = "meta_extra_hearts";
+/// Meta currency awarded (and shown) when the boss is defeated, for permanent
+/// roguelike upgrades.
+pub const META_BOSS_REWARD: u64 = 50;
 
 // Black hole parameters
 pub const SPACE_BLACKHOLE_GAP_MIN:       f32 = 5000.0;
@@ -851,10 +911,11 @@ pub const SPACE_ASTEROID_GAP_MIN:        f32 = 1300.0;
 pub const SPACE_ASTEROID_GAP_MAX:        f32 = 2800.0;
 // Small asteroids float near the hook zone; large ones drift higher.
 // Y is interpolated between these two bands based on normalised size.
-pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -700.0;  // small, closest to action
-pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -400.0;
-pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -2200.0; // large, highest (visible zoomed-out)
-pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -900.0;
+// Both bands sit well above SPACE_RETURN_Y so nothing crowds the normal zone.
+pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -3400.0;  // small, mid-space
+pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -2600.0;
+pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -4400.0; // large, highest (visible zoomed-out)
+pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -2800.0;
 pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
 pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 480.0;
 /// Base outward knockback speed applied to player when hit by a space asteroid.
@@ -1024,9 +1085,12 @@ pub const CANNON_PULL_RADIUS:            f32   = 520.0;
 pub const CANNON_PULL_ACCEL:             f32   = 2.80;   // per-tick pull at strongest
 pub const CANNON_PULL_SPEED_CAP:         f32   = 72.0;   // cap speed while being pulled
 pub const CANNON_CAPTURE_TICKS_PER_FRAME: u32  = 5;     // pulse frames 8→7→6→7→8
+/// How long the cannon holds the player for the fast-travel choice before the
+/// default launch fires. 120 ticks ≈ 2 s at 60 fps.
+pub const CANNON_CHOICE_WAIT_TICKS:      u32   = 120;
 pub const CANNON_CHARGE_TICKS:           u32   = 40;    // hold player in barrel
 pub const CANNON_CHARGE_ROTATION_DEG:    f32   = 50.0;  // CW rotation during charge
-pub const CANNON_FIRE_TICKS_PER_FRAME:   u32   = 3;     // frames 8→0
+pub const CANNON_FIRE_TICKS_PER_FRAME:   u32   = 5;     // frames 8→0 (slower so the launch reads clearly)
 pub const CANNON_LAUNCH_VX:              f32   = 124.0; // very long forward shot
 pub const CANNON_LAUNCH_VY:              f32   = -38.0; // stronger upward arc
 pub const CANNON_GRAVITY_DAMP_TICKS:     u32   = 180;   // longer reduced gravity after launch

@@ -8,10 +8,12 @@ use crate::constants::*;
 use crate::state::*;
 use crate::images::circle_cached;
 use super::bootstrap::hook_asteroid_anim_for_spawn;
+use super::helpers::center_warp_on_player;
 use crate::scenes::game::space_zone::wormhole2_template;
 
 pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_zone_entry(c, st);
+    tick_boss_stasis(c, st);
     tick_boss_appearance(c, st);
     tick_boss_movement(c, st);
     tick_boss_asteroid_drift(c, st);
@@ -19,6 +21,7 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_darkness(c, st);
     tick_boss_weakpoints(c, st);
     tick_warp_flash(c, st);
+    tick_boss_forcefield(c, st);
     tick_generators(c, st);
     tick_barrier(c, st);
     tick_desperation(c, st);
@@ -26,6 +29,30 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_bolt_player_collision(c, st);
     tick_boss_player_hits_boss(c, st);
     tick_boss_hud(c, st);
+    tick_boss_indicators(c, st);
+    tick_boss_lights(c, st);
+    tick_buff_node_elec(c, st);
+}
+
+/// Push a small electricity effect over each buff tether node so they read as
+/// distinct from the regular grab nodes (the same round electricity the player
+/// gets while buffed).
+fn tick_buff_node_elec(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let nodes: Vec<(f32, f32)> = {
+        let s = st.lock().unwrap();
+        s.live_hooks.iter().filter_map(|id| {
+            let obj = c.get_game_object(id)?;
+            if obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) {
+                Some((obj.position.0 + obj.size.0 * 0.5, obj.position.1 + obj.size.1 * 0.5))
+            } else {
+                None
+            }
+        }).collect()
+    };
+    if nodes.is_empty() { return; }
+    for (cx, cy) in nodes {
+        super::fx::push_electric_fx(c, (cx, cy), (HOOK_R * 2.6, HOOK_R * 2.6), (0.6, 0.95, 1.0, 0.7));
+    }
 }
 
 /// Position the weakpoint marker rings on the boss body, visible only while the
@@ -93,6 +120,17 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Only fire in normal game, not space mode.
     if s.in_space_mode || s.space_launch_active { return; }
     if s.dead { return; }
+
+    // Spawn the pre-portal approach grapple nodes once, as the player nears the
+    // boss threshold, so there is always a swing path up to the portal. Drop the
+    // lock first because the spawner takes its own.
+    if !s.boss_active && !s.boss_approach_nodes_spawned
+        && s.px >= BOSS_THRESHOLD_X - BOSS_APPROACH_RANGE
+    {
+        drop(s);
+        spawn_boss_approach_nodes(c, st);
+        s = st.lock().unwrap();
+    }
 
     // Boss entry: reach the threshold, or be force-warped (debug/test harness).
     // Safe read: `get_bool` panics if the var is unset in a normal boss run.
@@ -225,6 +263,14 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
 
+        // The player has crossed into the boss arena — hide the threshold marker.
+        if let Some(obj) = c.get_game_object_mut("boss_threshold_marker") {
+            obj.visible = false;
+        }
+        if let Some(obj) = c.get_game_object_mut("boss_marker_arrow") {
+            obj.visible = false;
+        }
+
         // Apply reduced gravity to player for the boss zone.
         if let Some(obj) = c.get_game_object_mut("player") {
             // Preserve sign (flipped gravity support).
@@ -242,6 +288,10 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         warp_player_into_arena(c, st);
         // Last-boss set dressing: barrier + generators.
         spawn_generators_and_barrier(c, st);
+        // Hold the player in a stasis orbit around a safe tether node so they
+        // can get their bearings before the battle starts. Tether to a node to
+        // begin (see `tick_boss_stasis`).
+        enter_boss_stasis(c, st);
         return;
     }
 
@@ -335,59 +385,97 @@ fn place_boss_asteroids(c: &mut Canvas, asteroid_ids: &[String]) {
     }
 }
 
+/// Activate a single arena tether node (image, tags, glow) and register it live.
+fn activate_arena_tether_node(c: &mut Canvas, s: &mut State, id: String, hx: f32, hy: f32, is_buff: bool) {
+    s.live_hooks.push(id.clone());
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.visible = true;
+        obj.position = (hx - HOOK_R, hy - HOOK_R);
+        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.tags.retain(|t| t != "arena_node" && t != BUFF_HOOK_TAG);
+        obj.tags.push("arena_node".into());
+        if !obj.tags.iter().any(|t| t == "hook") {
+            obj.tags.push("hook".into());
+        }
+        if is_buff {
+            obj.tags.push(BUFF_HOOK_TAG.into());
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                image: circle_cached(HOOK_R as u32, C_BUFF_HOOK.0, C_BUFF_HOOK.1, C_BUFF_HOOK.2),
+                color: None,
+            });
+            obj.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 16.0 });
+        } else {
+            obj.set_image(Image {
+                shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
+                image: circle_cached(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2),
+                color: None,
+            });
+            obj.clear_glow();
+        }
+        obj.clear_highlight();
+    } else {
+        s.live_hooks.retain(|n| n != &id);
+        s.pool_free.push(id);
+    }
+}
+
 /// Spawn a small grid of climbable grab nodes spanning the arena X and the
 /// upper-sky boss Y band (+300 down to −3600), so the player can swing up to
-/// reach the boss at y ≈ −2500.
+/// reach the boss at y ≈ −2500. Adds staggered gap-fill nodes between the main
+/// columns so there are no large horizontal gaps.
 fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let zone_w = BOSS_ZONE_X2 - BOSS_ZONE_X1;
-    let cols = 4;
-    let rows = 5;
+    let cols = 5;
+    let rows = 6;
     let total = cols * rows;
     for i in 0..total {
         let Some(id) = s.pool_free.pop() else { break; };
         let col = i % cols;
         let row = i / cols;
         let frac = row as f32 / (rows - 1).max(1) as f32;
-        let hy = 300.0 - frac * 3900.0; // +300 … −3600
+        let hy = 300.0 - frac * 4400.0; // +300 … −4100
         let hx = BOSS_ZONE_X1 + zone_w * (0.5 + (col as f32 - (cols as f32 - 1.0) * 0.5) * 0.22);
         // Every third node is a buff node so the player can get a buff mid-fight.
-        let is_buff = i % 3 == 0;
-        s.live_hooks.push(id.clone());
-        if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.visible = true;
-            obj.position = (hx - HOOK_R, hy - HOOK_R);
-            obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-            obj.gravity = 0.0;
-            obj.momentum = (0.0, 0.0);
-            obj.rotation_momentum = 0.0;
-            obj.collision_mode = CollisionMode::NonPlatform;
-            obj.tags.retain(|t| t != "arena_node" && t != BUFF_HOOK_TAG);
-            obj.tags.push("arena_node".into());
-            if !obj.tags.iter().any(|t| t == "hook") {
-                obj.tags.push("hook".into());
-            }
-            if is_buff {
-                obj.tags.push(BUFF_HOOK_TAG.into());
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                    image: circle_cached(HOOK_R as u32, C_BUFF_HOOK.0, C_BUFF_HOOK.1, C_BUFF_HOOK.2),
-                    color: None,
-                });
-                obj.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 16.0 });
-            } else {
-                obj.set_image(Image {
-                    shape: ShapeType::Ellipse(0.0, (HOOK_R * 2.0, HOOK_R * 2.0), 0.0),
-                    image: circle_cached(HOOK_R as u32, C_HOOK.0, C_HOOK.1, C_HOOK.2),
-                    color: None,
-                });
-                obj.clear_glow();
-            }
-            obj.clear_highlight();
-        } else {
-            s.live_hooks.retain(|n| n != &id);
-            s.pool_free.push(id);
+        activate_arena_tether_node(c, &mut *s, id, hx, hy, i % 3 == 0);
+    }
+
+    // Staggered gap-fill nodes in the wide gaps between the main columns:
+    // one near the bottom, one at mid height, one nearer the top.
+    let gap_fracs = [0.17, 0.39, 0.61, 0.83];
+    let gap_ys = [-3600.0, -2000.0, 500.0];
+    for gf in gap_fracs {
+        let gx = BOSS_ZONE_X1 + zone_w * gf;
+        for &gy in &gap_ys {
+            let Some(id) = s.pool_free.pop() else { break; };
+            activate_arena_tether_node(c, &mut *s, id, gx, gy, false);
         }
+    }
+}
+
+/// Reveal the boss threshold marker once the player approaches the portal. The
+/// procedural hooks now cover the approach densely (after the stride tightening
+/// in constants.rs), so no extra approach nodes are placed here.
+fn spawn_boss_approach_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if s.boss_approach_nodes_spawned {
+        return;
+    }
+    s.boss_approach_nodes_spawned = true;
+    drop(s);
+
+    // Reveal the huge black-hole threshold marker so the player knows they are
+    // heading into something special.
+    if let Some(obj) = c.get_game_object_mut("boss_threshold_marker") {
+        obj.visible = true;
+    }
+    if let Some(obj) = c.get_game_object_mut("boss_marker_arrow") {
+        obj.visible = true;
     }
 }
 
@@ -419,11 +507,13 @@ fn warp_player_into_arena(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     c.run(Action::Hide { target: Target::name("rope") });
     c.set_var("rope_visible_at_pause", false);
-    // Show the wormhole gif over the player during the warp.
+    // Show the wormhole gif over the player during the warp — a defined-size
+    // portal so the opening reads as a visible wormhole (not an invisible
+    // full-screen smear). tick_warp_flash re-centres it on the player.
     if let Some(obj) = c.get_game_object_mut("warp_flash") {
         obj.set_animation(wormhole2_template());
-        obj.size = (VW, VH);
-        obj.position = (warp_x - VW * 0.5, warp_y - VH * 0.5);
+        obj.size = (BOSS_WORMHOLE_D, BOSS_WORMHOLE_D);
+        obj.position = (warp_x - BOSS_WORMHOLE_D * 0.5, warp_y - BOSS_WORMHOLE_D * 0.5);
         obj.visible = true;
     }
     c.set_var("warp_flash_ticks", 40i32);
@@ -439,8 +529,200 @@ fn warp_player_into_arena(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
-/// Count down and hide the boss-arena wormhole warp overlay.
+/// Enter a stasis orbit around a safe tether node after teleporting into the
+/// boss arena. The battle stays inactive while the player orbits so they can
+/// get their bearings; tethering to a node (grabbing it) ends the stasis and
+/// starts the fight (see `tick_boss_stasis`).
+fn enter_boss_stasis(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (warp_x, warp_y) = (BOSS_ARENA_CENTER_X, 200.0);
+    let mut s = st.lock().unwrap();
+    s.boss_stasis_active = true;
+    s.boss_stasis_ticks = 0;
+    s.boss_stasis_hook = String::new();
+
+    // Pick the tether node nearest the warp point as the "safe node".
+    let mut best: Option<(f32, f32, f32, String)> = None;
+    for id in &s.live_hooks {
+        if let Some(obj) = c.get_game_object(id) {
+            let hcx = obj.position.0 + obj.size.0 * 0.5;
+            let hcy = obj.position.1 + obj.size.1 * 0.5;
+            let d2 = (hcx - warp_x).powi(2) + (hcy - warp_y).powi(2);
+            if best.as_ref().map(|(bd, _, _, _)| d2 < *bd).unwrap_or(true) {
+                best = Some((d2, hcx, hcy, id.clone()));
+            }
+        }
+    }
+    let (_, hx, hy, hook_id) = best.unwrap_or((0.0, warp_x, warp_y, String::new()));
+    s.boss_stasis_hook = hook_id;
+
+    // Position the player at the top of the orbit around the safe node.
+    s.hook_x = hx;
+    s.hook_y = hy;
+    s.px = hx;
+    s.py = hy - RESPAWN_ORBIT_R;
+    s.vx = 0.0;
+    s.vy = 0.0;
+    s.hooked = false;
+    s.active_hook = String::new();
+    s.rope_len = RESPAWN_ORBIT_R;
+    drop(s);
+
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.position = (hx - PLAYER_R, (hy - RESPAWN_ORBIT_R) - PLAYER_R);
+        obj.momentum = (0.0, 0.0);
+        obj.visible = true;
+    }
+
+    // Show a prompt telling the player to tether to begin.
+    if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+        let scale = c.virtual_scale();
+        if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
+            obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                "TETHER TO A NODE TO BEGIN",
+                &font,
+                52.0 * scale,
+                Color(200, 235, 255, 255),
+                1300.0 * scale,
+            )));
+            obj.visible = true;
+        }
+    }
+}
+
+/// Drive the boss stasis orbit each tick. While the player is in stasis, keep
+/// them circling the safe node so they can survey the arena; the moment they
+/// tether (grab a node) the stasis ends and the battle starts. A debug var
+/// (`debug_boss_stasis_down`) bypasses the tether for headless validation.
+fn tick_boss_stasis(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active || !s.boss_stasis_active { return; }
+
+    // The player tethered to a node (or a debug bypass): end stasis, start.
+    let force_down = matches!(c.get_var("debug_boss_stasis_down"), Some(Value::Bool(true)));
+    if s.hooked || force_down {
+        let victory = s.boss_hp <= 0;
+        s.boss_stasis_active = false;
+        s.boss_stasis_hook.clear();
+        if !victory {
+            // Make the boss spawn on the next appearance tick.
+            s.boss_entry_ticks = BOSS_ENTRY_DELAY_TICKS;
+        }
+        drop(s);
+        if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
+            obj.visible = false;
+        }
+        if victory {
+            complete_boss_finish(c, st);
+        }
+        return;
+    }
+
+    // Otherwise hold the player in a slow counter-clockwise orbit around the
+    // safe node so they can look around before deciding to tether.
+    let ticks = s.boss_stasis_ticks;
+    s.boss_stasis_ticks = ticks + 1;
+    let (hx, hy) = (s.hook_x, s.hook_y);
+    const ORBIT_OMEGA: f32 = 0.038;
+    let theta = -std::f32::consts::FRAC_PI_2 - ORBIT_OMEGA * ticks as f32;
+    let px = hx + RESPAWN_ORBIT_R * theta.cos();
+    let py = hy + RESPAWN_ORBIT_R * theta.sin();
+    s.px = px;
+    s.py = py;
+    s.vx = 0.0;
+    s.vy = 0.0;
+    drop(s);
+
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.position = (px - PLAYER_R, py - PLAYER_R);
+        obj.momentum = (0.0, 0.0);
+    }
+}
+
+/// After a fall in the boss arena, reset the player into the stasis orbit while
+/// preserving boss progress (HP, generators, final phase). The boss is unspawned
+/// so it stops attacking during the orbit; it re-appears once the player tethers
+/// to resume the fight.
+pub fn reset_boss_after_fall(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    {
+        let mut s = st.lock().unwrap();
+        s.boss_spawned = false;
+        s.boss_stasis_active = true;
+        // Clear any active darkness so the stasis orbit is visible.
+        s.boss_dark_active = false;
+        s.boss_dark_ticks = 0;
+    }
+    if let Some(obj) = c.get_game_object_mut("boss") {
+        obj.visible = false;
+        obj.position = (-6000.0, -6000.0);
+        obj.momentum = (0.0, 0.0);
+    }
+    if c.has_lighting() {
+        c.set_ambient(Color(255, 255, 255, 255), 1.0);
+    }
+    // Re-enter the stasis orbit (positions/orbits the player, shows the prompt).
+    enter_boss_stasis(c, st);
+}
+
+/// Keep the boss, its bolts, and the arena tether nodes lit so they remain
+/// faintly visible (and add ambience) during the darkness phase. Lights are
+/// attached to their objects so they follow automatically; bolts are only lit
+/// while active, and the boss light only while it is spawned.
+fn tick_boss_lights(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    if !c.has_lighting() { return; }
+    let (active, spawned) = {
+        let s = st.lock().unwrap();
+        (s.boss_active, s.boss_spawned)
+    };
+    if !active {
+        return;
+    }
+
+    // Boss: faint purple light (no shadow cast — small ambient fill).
+    if c.get_light("boss_light").is_none() {
+        let mut ls = LightSource::new("boss_light", (0.0, 0.0), Color(170, 90, 230, 255), 1500.0, 0.32);
+        ls.casts_shadows = false;
+        c.add_light(ls);
+        c.attach_light("boss_light", "boss", (0.0, 0.0));
+    }
+    c.set_light_enabled("boss_light", spawned);
+
+    // Bolts: faint orange light, lit only while the bolt is visible.
+    for i in 0..BOSS_BOLT_POOL_SIZE {
+        let lid = format!("boss_bolt_light_{i}");
+        if c.get_light(&lid).is_none() {
+            let mut ls = LightSource::new(lid.clone(), (0.0, 0.0), Color(255, 120, 30, 255), 620.0, 0.5);
+            ls.casts_shadows = false;
+            c.add_light(ls);
+            c.attach_light(&lid, &format!("boss_bolt_{i}"), (0.0, 0.0));
+        }
+        let vis = c.get_game_object(&format!("boss_bolt_{i}")).map(|o| o.visible).unwrap_or(false);
+        c.set_light_enabled(&lid, vis);
+    }
+
+    // Arena tether nodes: faint cyan light so the player can navigate in the dark.
+    let hooks: Vec<String> = {
+        let s = st.lock().unwrap();
+        s.live_hooks.clone()
+    };
+    for id in &hooks {
+        let lid = format!("boss_node_light_{id}");
+        if c.get_light(&lid).is_none() {
+            let mut ls = LightSource::new(lid.clone(), (0.0, 0.0), Color(110, 230, 255, 255), 520.0, 0.45);
+            ls.casts_shadows = false;
+            c.add_light(ls);
+            c.attach_light(&lid, id, (0.0, 0.0));
+        }
+        c.set_light_enabled(&lid, true);
+    }
+}
+
+/// Count down and hide the boss-arena wormhole warp overlay. The cannon
+/// fast-travel warp manages its own two-phase overlay via `cannon_warp_phase`,
+/// so skip it here.
 fn tick_warp_flash(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
+    if matches!(c.get_var("cannon_warp_phase"), Some(Value::I32(v)) if v > 0) {
+        return;
+    }
     let t = match c.get_var("warp_flash_ticks") {
         Some(Value::I32(v)) => v,
         _ => 0,
@@ -448,6 +730,9 @@ fn tick_warp_flash(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
     if t <= 0 {
         return;
     }
+    // Keep the warp origin centred on the player so the speed lines converge on
+    // the ball, not the middle of the screen.
+    center_warp_on_player(c);
     c.set_var("warp_flash_ticks", t - 1);
     if t - 1 <= 0 {
         if let Some(obj) = c.get_game_object_mut("warp_flash") {
@@ -501,6 +786,42 @@ fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 /// Damage generators (buffed player hits, or the boss crashing into them), and
 /// drop the barrier once all are down (entering the final bait-and-bail phase).
+/// Show the boss forcefield ring while the generators are still up, and the
+/// arena boundary forcefield while the boss fight is active.
+fn tick_boss_forcefield(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (active, spawned, generators_up, hp) = {
+        let s = st.lock().unwrap();
+        let gens_up = !s.boss_generator_hp.is_empty() && s.boss_generator_hp.iter().any(|&hp| hp > 0);
+        (s.boss_active, s.boss_spawned, gens_up, s.boss_hp)
+    };
+    let fighting = active && hp > 0;
+
+    for id in ["boss_boundary_b", "boss_boundary_t", "boss_boundary_l", "boss_boundary_r"] {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            obj.visible = fighting;
+        }
+    }
+
+    let boss_center = c.get_game_object("boss")
+        .map(|o| (o.position.0 + BOSS_SIZE * 0.5, o.position.1 + BOSS_SIZE * 0.5));
+
+    if let Some(obj) = c.get_game_object_mut("boss_forcefield") {
+        if fighting && spawned && generators_up {
+            if let Some((bcx, bcy)) = boss_center {
+                let d = BOSS_SIZE * 1.5;
+                obj.position = (bcx - d * 0.5, bcy - d * 0.5);
+                obj.size = (d, d);
+                obj.update_image_shape();
+                obj.visible = true;
+            } else {
+                obj.visible = false;
+            }
+        } else {
+            obj.visible = false;
+        }
+    }
+}
+
 fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (px, py, buffed, boss_pos) = {
         let s = st.lock().unwrap();
@@ -670,21 +991,73 @@ fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH.max(s.boss_lunge_telegraph);
 }
 
-/// End the boss fight cleanly (used by the sun finisher). Hides the boss/hud/
-/// generators/barrier and rewinds the spawn frontiers so normal play resumes.
+/// Boss defeated: award a chunk of meta currency, hide the boss/generators, and
+/// drop the player back into a stasis orbit with a congratulations message. The
+/// actual end-of-fight cleanup (rewind frontiers, `boss_active=false`) happens
+/// once the player tethers out of the victory stasis (`complete_boss_finish`).
 fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let generator_ids;
     {
         let mut s = st.lock().unwrap();
         s.boss_hp = 0;
-        s.boss_active = false;
         s.boss_spawned = false;
-        s.boss_cleared = false;
+        s.boss_stasis_active = true;
+        s.boss_stasis_hook.clear();
         s.boss_entry_ticks = 0;
         s.boss_barrier_up = false;
         s.boss_final_phase = false;
         s.boss_lunge_ticks = 0;
         s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH;
+        s.boss_killed = true;
+        generator_ids = s.boss_generators.clone();
+    }
+
+    // Award meta currency for the permanent-roguelike upgrade pool.
+    crate::profile::award_meta_currency(META_BOSS_REWARD);
+
+    for id in generator_ids {
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.visible = false;
+            obj.position = (-6000.0, -6000.0);
+        }
+    }
+    if let Some(obj) = c.get_game_object_mut("boss") {
+        obj.visible = false;
+        obj.position = (-6000.0, -6000.0);
+        obj.momentum = (0.0, 0.0);
+    }
+    if let Some(obj) = c.get_game_object_mut("boss_barrier") {
+        obj.visible = false;
+    }
+    if c.has_lighting() {
+        c.set_ambient(Color(255, 255, 255, 255), 1.0);
+    }
+
+    // Drop the player into the victory stasis orbit, then set the congrats text.
+    enter_boss_stasis(c, st);
+    if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+        let scale = c.virtual_scale();
+        if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
+            obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                &format!("CONGRATULATIONS! You defeated {BOSS_NAME}!  +{META_BOSS_REWARD} META"),
+                &font,
+                46.0 * scale,
+                Color(255, 230, 140, 255),
+                1400.0 * scale,
+            )));
+            obj.visible = true;
+        }
+    }
+}
+
+/// Complete the end-of-fight cleanup once the player tethers out of the victory
+/// stasis: rewind spawn frontiers and hand control back to normal play.
+fn complete_boss_finish(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    {
+        let mut s = st.lock().unwrap();
+        s.boss_active = false;
+        s.boss_spawned = false;
+        s.boss_cleared = false;
         let backfill_x = s.px - GEN_AHEAD * 0.35;
         s.rightmost_x = s.rightmost_x.min(backfill_x);
         s.pad_rightmost = s.pad_rightmost.min(backfill_x);
@@ -707,27 +1080,15 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.gen_head_y = gen_head_y;
             s.pending.extend(batch);
         }
-        generator_ids = s.boss_generators.clone();
-    }
-    for id in generator_ids {
-        if let Some(obj) = c.get_game_object_mut(&id) {
-            obj.visible = false;
-            obj.position = (-6000.0, -6000.0);
-        }
-    }
-    if let Some(obj) = c.get_game_object_mut("boss") {
-        obj.visible = false;
-        obj.position = (-6000.0, -6000.0);
-        obj.momentum = (0.0, 0.0);
     }
     if let Some(obj) = c.get_game_object_mut("boss_hp_bar") {
         obj.visible = false;
     }
-    if let Some(obj) = c.get_game_object_mut("boss_barrier") {
-        obj.visible = false;
-    }
     if c.has_lighting() {
-        c.set_ambient(Color(255, 255, 255, 255), 1.0);
+        c.set_light_enabled("boss_light", false);
+        for i in 0..BOSS_BOLT_POOL_SIZE {
+            c.set_light_enabled(&format!("boss_bolt_light_{i}"), false);
+        }
     }
     c.set_var("boss_mode_cleared", true);
 }
@@ -736,7 +1097,7 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn tick_boss_appearance(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    if !s.boss_active || s.boss_spawned { return; }
+    if !s.boss_active || s.boss_spawned || s.boss_stasis_active { return; }
 
     s.boss_entry_ticks = s.boss_entry_ticks.saturating_add(1);
     if s.boss_entry_ticks < BOSS_ENTRY_DELAY_TICKS { return; }
@@ -783,10 +1144,10 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let x_liss = (phase * 3.0).sin();
     let y_liss = (phase * 2.0 + 0.5).sin();
 
-    // Map to arena bounds: X = [-1,1] → [20000, 27000], Y = [-1,1] → [-4000, 1200]
+    // Map to arena bounds: X = [-1,1] → [20000, 34000], Y = [-1,1] → [-6000, 2400]
     let tx_base = BOSS_ARENA_CENTER_X + x_liss * BOSS_ARENA_HALF_W * 0.95;
-    let y_min = -4000.0;
-    let y_max = 1200.0;
+    let y_min = -6000.0;
+    let y_max = 2400.0;
     let y_center = (y_min + y_max) * 0.5;
     let y_half_range = (y_max - y_min) * 0.5;
     let ty_base = y_center + y_liss * y_half_range * 0.92;
@@ -863,8 +1224,8 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.boss_vx = -s.boss_vx.abs() * 0.65;
     }
 
-    let boundary_y_min = -4000.0;
-    let boundary_y_max = 1200.0;
+    let boundary_y_min = -6000.0;
+    let boundary_y_max = 2400.0;
     if ny < boundary_y_min {
         ny = boundary_y_min;
         s.boss_vy = s.boss_vy.abs() * 0.75;
@@ -1021,29 +1382,46 @@ fn tick_boss_bolt_player_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for id in &hit_ids {
         s.boss_bolt_live.retain(|(n, _, _, _)| n != id);
         s.boss_bolt_free.push(id.clone());
-    }
-
-    let unhook = s.hooked;
-    let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
-    let gdir = s.gravity_dir;
-    if unhook {
-        s.hooked = false;
-        s.active_hook = String::new();
-    }
-    drop(s);
-
-    if unhook {
-        c.run(Action::Hide { target: Target::name("rope") });
-        if let Some(obj) = c.get_game_object_mut("player") {
-            obj.gravity = GRAVITY * gravity_scale * gdir * BOSS_GRAVITY_SCALE;
-        }
-    }
-
-    for id in &hit_ids {
         if let Some(obj) = c.get_game_object_mut(id) {
             obj.visible = false;
             obj.position = (-7000.0, -7000.0);
         }
+    }
+
+    // A boss bolt normally breaks the tether and costs a heart. While buffed,
+    // the buff absorbs up to BUFF_ABSORB_MAX hits with no damage; after the last
+    // one it ends early. Refreshing the buff resets the absorb count.
+    let absorb = s.player_buff > 0 && s.buff_absorbs > 0;
+    if absorb {
+        s.buff_absorbs -= 1;
+        s.buff_hit_flash = 6;
+        if s.buff_absorbs == 0 {
+            s.player_buff = 0;
+            s.buff_timer = 0;
+        }
+        drop(s);
+        // Brief cyan flash so the absorb reads clearly.
+        if let Some(cam) = c.camera_mut() {
+            cam.flash_with(Color(110, 230, 255, 200), 0.25, FlashMode::Pulse, FlashEase::Sharp, 0.7, 0.0);
+        }
+        return;
+    }
+
+    // A boss bolt breaks the tether and costs a heart.
+    let hooked = s.hooked;
+    if hooked {
+        s.hooked = false;
+        s.active_hook = String::new();
+    }
+    drop(s);
+    if hooked {
+        c.run(Action::Hide { target: Target::name("rope") });
+    }
+    let _over = super::hearts::lose_heart(c, st);
+    // Restore light boss gravity after the hit.
+    if let Some(obj) = c.get_game_object_mut("player") {
+        let gdir = st.lock().unwrap().gravity_dir;
+        obj.gravity = GRAVITY * BOSS_GRAVITY_SCALE * gdir;
     }
 }
 
@@ -1082,13 +1460,19 @@ fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let nx = dx / len;
     let ny = dy / len;
 
-    let (nwx, nwy, did_unhook) = if buffed && near_weakpoint {
-        // Buffed weakpoint hit: damage the boss and launch the player away.
+    // Boss is forcefield-protected until ALL generators are destroyed.
+    // (A debug var can force it down for headless weakpoint validation.)
+    let forcefield_debug = matches!(c.get_var("debug_boss_forcefield_down"), Some(Value::Bool(true)));
+    let generators_down = forcefield_debug
+        || (!s.boss_generator_hp.is_empty() && s.boss_generator_hp.iter().all(|&hp| hp <= 0));
+
+    let (nwx, nwy, did_unhook) = if buffed && near_weakpoint && generators_down {
+        // Buffed weakpoint hit with the forcefield down: damage the boss.
         s.boss_hp -= 1;
         s.buff_hit_flash = 20;
         (nx * 26.0, ny * 26.0, false)
     } else {
-        // Unprotected contact: hard knockback + tether disconnect.
+        // Forcefield still up (or unprotected contact): knockback, no damage.
         let unhook = s.hooked;
         if unhook {
             s.hooked = false;
@@ -1230,5 +1614,83 @@ fn tick_boss_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if let Some(obj) = c.get_game_object_mut("boss_hp_bar") {
         obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (BOSS_HP_BAR_W, BOSS_HP_BAR_H), 0.0), image: img.into(), color: None });
         obj.visible = fill > 0.0;
+    }
+}
+
+// ── Off-screen objective indicators ──────────────────────────────────────────
+
+/// Place a HUD arrow at the screen edge pointing at a world position. If the
+/// world position is on screen the arrow is hidden. `cleft`/`ctop`/`zoom` are
+/// the camera's world-space top-left and zoom.
+fn place_off_arrow(c: &mut Canvas, id: &str, wx: f32, wy: f32, cleft: f32, ctop: f32, zoom: f32) {
+    let sx = (wx - cleft) * zoom;
+    let sy = (wy - ctop) * zoom;
+    let on_screen = sx >= 0.0 && sx <= VW && sy >= 0.0 && sy <= VH;
+    let Some(obj) = c.get_game_object_mut(id) else { return; };
+    if on_screen {
+        obj.visible = false;
+        return;
+    }
+    // Aim from screen centre toward the target.
+    let dx = sx - VW * 0.5;
+    let dy = sy - VH * 0.5;
+    obj.rotation = dy.atan2(dx).to_degrees();
+    // Clamp to the viewport rim so the arrow sits at the edge.
+    let margin = 90.0;
+    obj.position = (sx.clamp(margin, VW - margin), sy.clamp(margin, VH - margin));
+    obj.visible = true;
+}
+
+/// Off-screen indicators during the fight: the boss-name banner, an edge arrow
+/// pointing at the boss, and (only while the player is buffed) edge arrows
+/// pointing at any off-screen generators that still have HP.
+fn tick_boss_indicators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (active, spawned, buff, gens_down) = {
+        let s = st.lock().unwrap();
+        let gens_down = !s.boss_generator_hp.is_empty() && s.boss_generator_hp.iter().all(|&hp| hp <= 0);
+        (s.boss_active, s.boss_spawned, s.player_buff, gens_down)
+    };
+
+    // Hide everything when the fight is not running.
+    if !active || !spawned {
+        if let Some(obj) = c.get_game_object_mut("boss_name_text") { obj.visible = false; }
+        if let Some(obj) = c.get_game_object_mut("boss_off_arrow") { obj.visible = false; }
+        for i in 0..BOSS_GENERATOR_COUNT {
+            if let Some(obj) = c.get_game_object_mut(&format!("gen_arrow_{i}")) { obj.visible = false; }
+        }
+        return;
+    }
+
+    let (cleft, ctop, zoom) = c.camera()
+        .map(|cam| (cam.position.0, cam.position.1, cam.zoom.max(0.1)))
+        .unwrap_or((0.0, 0.0, 1.0));
+
+    // Boss-name banner: visible for the length of the fight.
+    if let Some(obj) = c.get_game_object_mut("boss_name_text") { obj.visible = true; }
+
+    // Arrow pointing at the boss when it is off-screen.
+    if let Some(boss) = c.get_game_object("boss") {
+        let bx = boss.position.0 + BOSS_SIZE * 0.5;
+        let by = boss.position.1 + BOSS_SIZE * 0.5;
+        place_off_arrow(c, "boss_off_arrow", bx, by, cleft, ctop, zoom);
+    } else {
+        if let Some(obj) = c.get_game_object_mut("boss_off_arrow") { obj.visible = false; }
+    }
+
+    // Generator objective arrows, only while the player is buffed and any
+    // generator is still alive to destroy.
+    let show_gens = buff > 0 && !gens_down;
+    for i in 0..BOSS_GENERATOR_COUNT {
+        let id = format!("gen_arrow_{i}");
+        if show_gens {
+            if let Some(gen) = c.get_game_object(&format!("boss_gen_{i}")) {
+                let gw = BOSS_GENERATOR_R * 2.0;
+                place_off_arrow(c, &id, gen.position.0 + gw * 0.5, gen.position.1 + gw * 0.5, cleft, ctop, zoom);
+            } else if let Some(obj) = c.get_game_object_mut(&id) {
+                obj.visible = false;
+            }
+        } else if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.visible = false;
+        }
     }
 }
