@@ -76,7 +76,10 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
 
         let nearest = if let Some(player_obj) = c.get_game_object("player") {
             let reach_mult = if s.boss_active { 1.45 } else { 1.0 };
-            let normal_reach  = ROPE_LEN_MAX * reach_mult;
+            // LONG LINE ranks widen the catch radius. Generation is unaffected
+            // (see `gameplay::player_grab_reach`), so the upgrade makes the same
+            // world easier rather than spreading the world out to match.
+            let normal_reach  = crate::gameplay::player_grab_reach(&s) * reach_mult;
             let extended_reach = normal_reach * EXTENDED_HOOK_REACH_MULT;
             c.objects_in_radius(player_obj, extended_reach)
                 .into_iter()

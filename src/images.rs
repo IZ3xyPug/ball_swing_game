@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock, Mutex};
 use std::collections::HashMap;
 use crate::constants::*;
-use quartz::AnimatedSprite;
+use quartz::{AnimatedSprite, Image, ShapeType};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitives
@@ -1084,4 +1084,66 @@ pub fn pad_gif_frame0_cached() -> Arc<image::RgbaImage> {
             image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([0, 0, 0, 0]))
         }))
     }).clone()
+}
+
+// ── Solar flare imagery ──────────────────────────────────────────────────────
+
+/// Soft radial dome drawn over a shielded node. Bright at the rim and hollow in
+/// the middle, so the node itself and anything the player needs to see inside
+/// the shelter stay readable.
+pub fn shield_dome_img() -> Arc<image::RgbaImage> {
+    static IMG: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    IMG.get_or_init(|| {
+        const N: u32 = 256;
+        let c = (N as f32 - 1.0) * 0.5;
+        let mut img = image::RgbaImage::from_pixel(N, N, image::Rgba([0, 0, 0, 0]));
+        for y in 0..N {
+            for x in 0..N {
+                let dx = x as f32 - c;
+                let dy = y as f32 - c;
+                let d = (dx * dx + dy * dy).sqrt() / c;
+                if d > 1.0 {
+                    continue;
+                }
+                // Interior haze plus a bright rim band just inside the edge.
+                let haze = (1.0 - d).powf(2.2) * 0.30;
+                let rim = (1.0 - ((d - 0.93) / 0.07).abs()).max(0.0).powf(1.4);
+                let a = (haze + rim * 0.95).clamp(0.0, 1.0);
+                img.put_pixel(x, y, image::Rgba([255, 255, 255, (a * 255.0) as u8]));
+            }
+        }
+        Arc::new(img)
+    })
+    .clone()
+}
+
+/// The sweeping wavefront drawn across the screen during an active flare: a
+/// soft vertical band, brightest at its centre line.
+pub fn flare_front_img() -> Arc<image::RgbaImage> {
+    static IMG: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    IMG.get_or_init(|| {
+        const W: u32 = 128;
+        const H: u32 = 8;
+        let mut img = image::RgbaImage::from_pixel(W, H, image::Rgba([0, 0, 0, 0]));
+        for x in 0..W {
+            let t = (x as f32 / (W as f32 - 1.0) - 0.5).abs() * 2.0;
+            let a = (1.0 - t).powf(1.8);
+            for y in 0..H {
+                img.put_pixel(x, y, image::Rgba([255, 255, 255, (a * 255.0) as u8]));
+            }
+        }
+        Arc::new(img)
+    })
+    .clone()
+}
+
+/// Flat full-screen wash. Cached per colour because the flare re-tints it every
+/// frame as the telegraph ramps, and rebuilding a VW×VH buffer per frame would
+/// be absurd — the image is 1×1 and stretched by the rectangle shape.
+pub fn flare_overlay_img(r: u8, g: u8, b: u8, a: u8) -> Image {
+    Image {
+        shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0),
+        image: Arc::new(image::RgbaImage::from_pixel(1, 1, image::Rgba([r, g, b, a]))),
+        color: None,
+    }
 }

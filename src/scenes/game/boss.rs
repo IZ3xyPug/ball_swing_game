@@ -12,6 +12,13 @@ use super::helpers::center_warp_on_player;
 use crate::scenes::game::space_zone::wormhole2_template;
 
 pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Published every frame: several systems (distance tracking, the headless
+    // harness, the HUD) need to know an arena is active, and deriving it from
+    // boss HP is wrong during entry and victory stasis.
+    {
+        let active = st.lock().unwrap().boss_active;
+        c.set_var("boss_active", active);
+    }
     tick_boss_zone_entry(c, st);
     tick_boss_stasis(c, st);
     tick_boss_appearance(c, st);
@@ -111,12 +118,55 @@ fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Zone entry + arena clear ──────────────────────────────────────────────────
 
+// ── Arena placement ──────────────────────────────────────────────────────────
+//
+// The arena used to be two constants, so a run could only ever hold one fight.
+// It is now a per-fight region recorded on the canvas at entry, which is what
+// lets `mode::boss_trigger_distance` schedule several. The player is warped in
+// and out, so the region can sit anywhere — it does not have to be reachable by
+// swinging, and successive arenas simply step further along the X axis.
+
+/// Left and right walls of the arena for the fight currently being set up.
+fn arena_bounds(c: &Canvas) -> (f32, f32) {
+    let x1 = match c.get_var("boss_arena_x1") {
+        Some(Value::F32(v)) => v,
+        Some(Value::F64(v)) => v as f32,
+        _ => BOSS_ZONE_X1,
+    };
+    let x2 = match c.get_var("boss_arena_x2") {
+        Some(Value::F32(v)) => v,
+        Some(Value::F64(v)) => v as f32,
+        _ => BOSS_ZONE_X2,
+    };
+    (x1, x2)
+}
+
+/// Place the arena for fight `index`. Successive arenas are laid end to end
+/// with a wide gap, far past anything the normal generator will ever reach.
+fn place_arena(c: &mut Canvas, index: u32) {
+    let stride = (BOSS_ZONE_X2 - BOSS_ZONE_X1) + BOSS_ARENA_GAP;
+    let x1 = crate::mode::BOSS_ARENA_ORIGIN_X + stride * index as f32;
+    let x2 = x1 + (BOSS_ZONE_X2 - BOSS_ZONE_X1);
+    c.set_var("boss_arena_x1", Value::F32(x1));
+    c.set_var("boss_arena_x2", Value::F32(x2));
+}
+
 fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    // Only active when the player selected Boss Mode from the menu.
-    if !matches!(c.get_var("boss_mode_active"), Some(Value::Bool(true))) { return; }
-    // Once this run's boss is defeated, do not re-enter boss flow.
-    if matches!(c.get_var("boss_mode_cleared"), Some(Value::Bool(true))) { return; }
+    // Which fights this run has, and where, is the mode's business.
+    let mode = crate::mode::current_mode(c);
+    // `boss_mode_active` remains an override so the debug/test harness can force
+    // a fight in any mode.
+    let forced_mode = matches!(c.get_var("boss_mode_active"), Some(Value::Bool(true)));
+    if !mode.has_bosses() && !forced_mode { return; }
+
     let mut s = st.lock().unwrap();
+    // The distance that triggers the NEXT fight. `None` means this run has no
+    // fights left — the schedule is exhausted, so the boss flow is done.
+    let threshold = match crate::mode::boss_trigger_distance(mode, s.boss_index) {
+        Some(d) => SPAWN_X + d,
+        None if forced_mode => BOSS_THRESHOLD_X,
+        None => return,
+    };
     // Only fire in normal game, not space mode.
     if s.in_space_mode || s.space_launch_active { return; }
     if s.dead { return; }
@@ -125,7 +175,7 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // boss threshold, so there is always a swing path up to the portal. Drop the
     // lock first because the spawner takes its own.
     if !s.boss_active && !s.boss_approach_nodes_spawned
-        && s.px >= BOSS_THRESHOLD_X - BOSS_APPROACH_RANGE
+        && s.px >= threshold - BOSS_APPROACH_RANGE
     {
         drop(s);
         spawn_boss_approach_nodes(c, st);
@@ -135,7 +185,15 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Boss entry: reach the threshold, or be force-warped (debug/test harness).
     // Safe read: `get_bool` panics if the var is unset in a normal boss run.
     let force = matches!(c.get_var("force_boss_warp"), Some(Value::Bool(true)));
-    if !s.boss_active && (s.px >= BOSS_THRESHOLD_X || force) {
+    if !s.boss_active && (s.px >= threshold || force) {
+        // Remember where the level was left, so victory returns the player to
+        // the run rather than stranding them in the arena's stretch of X.
+        s.boss_return_x = s.px;
+        s.boss_return_y = s.py;
+        let index = s.boss_index;
+        drop(s);
+        place_arena(c, index);
+        let mut s = st.lock().unwrap();
         s.boss_active = true;
         s.boss_cleared = false;
         s.boss_entry_ticks = 0;
@@ -297,24 +355,25 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Clamp player inside boss zone while boss is alive.
     if s.boss_hp > 0 {
+        let (zx1, zx2) = arena_bounds(c);
         let half = PLAYER_R;
-        if s.px < BOSS_ZONE_X1 + half {
-            s.px = BOSS_ZONE_X1 + half;
+        if s.px < zx1 + half {
+            s.px = zx1 + half;
             s.vx = s.vx.max(0.0);
             drop(s);
             if let Some(obj) = c.get_game_object_mut("player") {
-                if obj.position.0 < BOSS_ZONE_X1 + half - PLAYER_R {
-                    obj.position.0 = BOSS_ZONE_X1 + half - PLAYER_R;
+                if obj.position.0 < zx1 + half - PLAYER_R {
+                    obj.position.0 = zx1 + half - PLAYER_R;
                 }
                 if obj.momentum.0 < 0.0 { obj.momentum.0 = 0.0; }
             }
-        } else if s.px > BOSS_ZONE_X2 - half {
-            s.px = BOSS_ZONE_X2 - half;
+        } else if s.px > zx2 - half {
+            s.px = zx2 - half;
             s.vx = s.vx.min(0.0);
             drop(s);
             if let Some(obj) = c.get_game_object_mut("player") {
-                if obj.position.0 > BOSS_ZONE_X2 - half - PLAYER_R {
-                    obj.position.0 = BOSS_ZONE_X2 - half - PLAYER_R;
+                if obj.position.0 > zx2 - half - PLAYER_R {
+                    obj.position.0 = zx2 - half - PLAYER_R;
                 }
                 if obj.momentum.0 > 0.0 { obj.momentum.0 = 0.0; }
             }
@@ -323,8 +382,9 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 fn place_boss_asteroids(c: &mut Canvas, asteroid_ids: &[String]) {
+    let (zx1, zx2) = arena_bounds(c);
     let anim = hook_asteroid_anim_for_spawn();
-    let zone_w = BOSS_ZONE_X2 - BOSS_ZONE_X1;
+    let zone_w = zx2 - zx1;
     const Y_TOP:  f32 = -3500.0;
     const Y_BOT:  f32 =  1500.0;
 
@@ -346,7 +406,7 @@ fn place_boss_asteroids(c: &mut Canvas, asteroid_ids: &[String]) {
         seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
         let rx = hash01(seed);
         let ry = hash01(seed ^ 0x9E37_79B9);
-        let x = BOSS_ZONE_X1 + rx * zone_w;
+        let x = zx1 + rx * zone_w;
         let y = Y_TOP + ry * (Y_BOT - Y_TOP);
         if points.iter().all(|(px, py)| {
             let dx = x - *px;
@@ -362,10 +422,10 @@ fn place_boss_asteroids(c: &mut Canvas, asteroid_ids: &[String]) {
         let need = asteroid_ids.len() - points.len();
         for i in 0..need {
             let t = (i as f32 + 0.5) / need as f32;
-            let x = BOSS_ZONE_X1 + zone_w * t + ((i as f32 * 173.0) % 500.0 - 250.0);
+            let x = zx1 + zone_w * t + ((i as f32 * 173.0) % 500.0 - 250.0);
             let y = Y_TOP + (Y_BOT - Y_TOP) * ((i as f32 * 0.618_033_95) % 1.0)
                 + ((i as f32 * 97.0) % 280.0 - 140.0);
-            points.push((x.clamp(BOSS_ZONE_X1, BOSS_ZONE_X2), y.clamp(Y_TOP, Y_BOT)));
+            points.push((x.clamp(zx1, zx2), y.clamp(Y_TOP, Y_BOT)));
         }
     }
 
@@ -429,8 +489,9 @@ fn activate_arena_tether_node(c: &mut Canvas, s: &mut State, id: String, hx: f32
 /// reach the boss at y ≈ −2500. Adds staggered gap-fill nodes between the main
 /// columns so there are no large horizontal gaps.
 fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (zx1, zx2) = arena_bounds(c);
     let mut s = st.lock().unwrap();
-    let zone_w = BOSS_ZONE_X2 - BOSS_ZONE_X1;
+    let zone_w = zx2 - zx1;
     let cols = 5;
     let rows = 6;
     let total = cols * rows;
@@ -440,7 +501,7 @@ fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let row = i / cols;
         let frac = row as f32 / (rows - 1).max(1) as f32;
         let hy = 300.0 - frac * 4400.0; // +300 … −4100
-        let hx = BOSS_ZONE_X1 + zone_w * (0.5 + (col as f32 - (cols as f32 - 1.0) * 0.5) * 0.22);
+        let hx = zx1 + zone_w * (0.5 + (col as f32 - (cols as f32 - 1.0) * 0.5) * 0.22);
         // Every third node is a buff node so the player can get a buff mid-fight.
         activate_arena_tether_node(c, &mut *s, id, hx, hy, i % 3 == 0);
     }
@@ -450,7 +511,7 @@ fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let gap_fracs = [0.17, 0.39, 0.61, 0.83];
     let gap_ys = [-3600.0, -2000.0, 500.0];
     for gf in gap_fracs {
-        let gx = BOSS_ZONE_X1 + zone_w * gf;
+        let gx = zx1 + zone_w * gf;
         for &gy in &gap_ys {
             let Some(id) = s.pool_free.pop() else { break; };
             activate_arena_tether_node(c, &mut *s, id, gx, gy, false);
@@ -745,7 +806,8 @@ fn tick_warp_flash(c: &mut Canvas, _st: &Arc<Mutex<State>>) {
 
 /// Position the barrier and generator nodes across the arena.
 fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let zone_w = BOSS_ZONE_X2 - BOSS_ZONE_X1;
+    let (zx1, zx2) = arena_bounds(c);
+    let zone_w = zx2 - zx1;
     {
         let mut s = st.lock().unwrap();
         s.boss_generators.clear();
@@ -763,7 +825,7 @@ fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for i in 0..BOSS_GENERATOR_COUNT {
         let id = format!("boss_gen_{i}");
         let frac = i as f32 / (BOSS_GENERATOR_COUNT - 1).max(1) as f32;
-        let gx = BOSS_ZONE_X1 + zone_w * (0.15 + frac * 0.7);
+        let gx = zx1 + zone_w * (0.15 + frac * 0.7);
         let gy = -700.0 - frac * 2200.0;
         {
             let mut s = st.lock().unwrap();
@@ -779,7 +841,7 @@ fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
     if let Some(obj) = c.get_game_object_mut("boss_barrier") {
-        obj.position = (BOSS_ZONE_X1, BOSS_BARRIER_Y);
+        obj.position = (zx1, BOSS_BARRIER_Y);
         obj.visible = true;
     }
 }
@@ -1053,6 +1115,33 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// Complete the end-of-fight cleanup once the player tethers out of the victory
 /// stasis: rewind spawn frontiers and hand control back to normal play.
 fn complete_boss_finish(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Put the player back where the level was left. Without this they stay at
+    // the arena's own stretch of X — fine when a run held exactly one fight and
+    // ended there, fatal now that a run holds several.
+    let (rx, ry) = {
+        let s = st.lock().unwrap();
+        (s.boss_return_x, s.boss_return_y)
+    };
+    {
+        let mut s = st.lock().unwrap();
+        s.px = rx;
+        s.py = ry;
+        s.vx = 0.0;
+        s.vy = 0.0;
+        s.hooked = false;
+        s.active_hook.clear();
+        s.hook_x = rx;
+        s.hook_y = ry;
+    }
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.position = (rx - PLAYER_R, ry - PLAYER_R);
+        obj.momentum = (0.0, 0.0);
+    }
+    if let Some(cam) = c.camera_mut() {
+        cam.position = (rx - VW * 0.5, ry - VH * 0.5);
+        cam.snap_zoom(1.0);
+    }
+
     {
         let mut s = st.lock().unwrap();
         s.boss_active = false;
@@ -1090,7 +1179,20 @@ fn complete_boss_finish(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             c.set_light_enabled(&format!("boss_bolt_light_{i}"), false);
         }
     }
-    c.set_var("boss_mode_cleared", true);
+
+    // Advance the schedule. A run holds several fights now, so clearing one
+    // arms the next rather than ending the boss flow for good — the schedule
+    // running out is what ends it (`boss_trigger_distance` returns None).
+    let mode = crate::mode::current_mode(c);
+    let (index, was_final) = {
+        let mut s = st.lock().unwrap();
+        let was_final = crate::mode::is_final_boss(mode, s.boss_index);
+        s.boss_index = s.boss_index.saturating_add(1);
+        (s.boss_index, was_final)
+    };
+    c.set_var("boss_index", Value::I32(index as i32));
+    c.set_var("boss_mode_cleared", was_final);
+    c.set_var("bosses_defeated", Value::I32(index as i32));
 }
 
 // ── Boss appearance after delay ───────────────────────────────────────────────
@@ -1123,6 +1225,7 @@ fn tick_boss_appearance(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // The asymmetric phase offset makes it feel less mechanical.
 
 fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (zx1, zx2) = arena_bounds(c);
     let (cur_x, cur_y) = if let Some(obj) = c.get_game_object("boss") {
         (obj.position.0 + BOSS_SIZE * 0.5, obj.position.1 + BOSS_SIZE * 0.5)
     } else {
@@ -1171,9 +1274,9 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         
         // Guide to opposite corner/edge
         let opposite_corner_x = if escape_dx > 0.0 {
-            BOSS_ZONE_X1 + BOSS_SIZE * 0.5
+            zx1 + BOSS_SIZE * 0.5
         } else {
-            BOSS_ZONE_X2 - BOSS_SIZE * 0.5
+            zx2 - BOSS_SIZE * 0.5
         };
         let opposite_corner_y = if escape_dy > 0.0 {
             y_min
@@ -1214,8 +1317,8 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut nx = cur_x + s.boss_vx;
     let mut ny = cur_y + s.boss_vy;
 
-    let x_min = BOSS_ZONE_X1 + BOSS_SIZE * 0.5;
-    let x_max = BOSS_ZONE_X2 - BOSS_SIZE * 0.5;
+    let x_min = zx1 + BOSS_SIZE * 0.5;
+    let x_max = zx2 - BOSS_SIZE * 0.5;
     if nx < x_min {
         nx = x_min;
         s.boss_vx = s.boss_vx.abs() * 0.65;
@@ -1243,6 +1346,7 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Drift boss arena asteroids ────────────────────────────────────────────────
 
 fn tick_boss_asteroid_drift(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (zx1, zx2) = arena_bounds(c);
     let s = st.lock().unwrap();
     if !s.boss_active { return; }
     let ids = s.boss_asteroids.clone();
@@ -1256,12 +1360,12 @@ fn tick_boss_asteroid_drift(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for id in &ids {
         if let Some(obj) = c.get_game_object_mut(id) {
             // Bounce off arena X walls.
-            if obj.position.0 < BOSS_ZONE_X1 {
+            if obj.position.0 < zx1 {
                 obj.momentum.0 = obj.momentum.0.abs();
-                obj.position.0 = BOSS_ZONE_X1;
-            } else if obj.position.0 + obj.size.0 > BOSS_ZONE_X2 {
+                obj.position.0 = zx1;
+            } else if obj.position.0 + obj.size.0 > zx2 {
                 obj.momentum.0 = -obj.momentum.0.abs();
-                obj.position.0 = BOSS_ZONE_X2 - obj.size.0;
+                obj.position.0 = zx2 - obj.size.0;
             }
             // Bounce off Y limits.
             if obj.position.1 < y_min {

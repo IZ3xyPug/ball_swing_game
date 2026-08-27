@@ -99,3 +99,31 @@ pub fn push_electric_fx(
     };
     c.push_mega_sprite(sprite);
 }
+
+/// Push a full spherical energy dome centred on `pos`.
+///
+/// Uses `BIT_ENERGY_DOME` rather than `BIT_AIR_SHIELD`: the air shield is a
+/// forward-facing arc keyed to velocity and reads as speed, while a player
+/// sheltering from a solar flare needs cover that visibly surrounds them.
+/// `tint` is (r, g, b, strength).
+pub fn push_energy_dome_fx(
+    c: &mut Canvas,
+    pos: (f32, f32),
+    scale: (f32, f32),
+    tint: (f32, f32, f32, f32),
+) {
+    let ((u, v), (su, sv)) = world_to_mega_uv(c, pos, scale);
+    let sprite = MegaShaderSprite {
+        image: flat_white(),
+        instance: MegaShaderInstance {
+            world_position: (u, v),
+            scale: (su, sv),
+            rotation: 0.0,
+            tint_color: tint,
+            bitmask: [MEGA_BIT_ENERGY_DOME, 0, 0, 0],
+            velocity: (0.0, 0.0),
+        },
+        shader_variant: 1,
+    };
+    c.push_mega_sprite(sprite);
+}

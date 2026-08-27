@@ -331,14 +331,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         boss_bolt_free, boss_asteroid_ids, comet_free, warn_free,
     } = pools;
 
-    // Starter hook positions (must match bootstrap.rs).
-    let starter_hooks: &[(f32, f32)] = &[
-        (START_HOOK_X,                              START_HOOK_Y),
-        (START_HOOK_X + HOOK_FIXED_X_GAP,           VH * 0.30),
-        (START_HOOK_X + HOOK_FIXED_X_GAP * 2.0,    VH * 0.46),
-        (START_HOOK_X + HOOK_FIXED_X_GAP * 3.0,    VH * 0.34),
-        (START_HOOK_X + HOOK_FIXED_X_GAP * 4.0,    VH * 0.52),
-    ];
+    let starter_hooks = crate::level_gen::starter_hooks();
 
     // Persistent state arc — created on first enter, reused on respawns.
     let persistent_state: Arc<Mutex<Option<Arc<Mutex<State>>>>> =
@@ -778,13 +771,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             };
             let start_max_hearts = crate::constants::MAX_HEARTS + meta_extra_hearts;
 
+            // Permanent upgrades resolve once, here, and travel with the run.
+            let perm = crate::profile::permanent_bonuses();
+
             let fresh_state = State {
                 px: start_px, py: start_py,
                 vx: 0.0, vy: 0.0,
                 hooked: false, hook_x: start_hook.0,
                 hook_y: start_hook.1, rope_len: start_rope_len,
                 active_hook: "hook_0".into(), distance: 0.0,
-                score: 0, coin_count: 0,
+                score: 0, coin_count: perm.start_coins,
                 gravity_dir: 1.0, score_time_awards: 0,
                 score_distance_awards: 0,
                 seed,
@@ -793,7 +789,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 rightmost_x,
                 gen_head_x,
                 gen_head_y,
-                last_hook_y: f32::NEG_INFINITY,
+                last_hook_x: starter_hooks.last().map(|(x, _)| *x).unwrap_or(f32::NEG_INFINITY),
+                last_hook_y: starter_hooks.last().map(|(_, y)| *y).unwrap_or(f32::NEG_INFINITY),
                 world_sampler: crate::poisson::PoissonSampler::new(600.0), dead: false,
                 ticks: 0, pad_live: Vec::new(),
                 pad_free: pad_free.clone(), pad_rightmost: SPAWN_X,
@@ -943,11 +940,25 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 upgrade_hold_until_tether: false,
                 space_visited: false,
                 boss_killed: false,
+                boss_index: 0,
+                boss_return_x: SPAWN_X,
+                boss_return_y: SPAWN_Y,
                 space_coins_collected: 0,
-                flare_cooldown:    FLARE_INTERVAL,
+                flare_cooldown:    FLARE_INTERVAL_EASY as u32,
                 flare_warn:        0,
                 flare_active:      false,
                 flare_active_ticks: 0,
+                flare_damage_timer: 0,
+                last_shield_x: SPAWN_X,
+                perm_reach_mult: perm.reach_mult,
+                perm_momentum_mult: perm.momentum_mult,
+                perm_magnet_mult: perm.magnet_mult,
+                perm_flare_wards: perm.flare_wards,
+                flare_wards_left: perm.flare_wards,
+                free_respawns_left: perm.free_respawns,
+                flares_fired: 0,
+                flare_hearts_lost: 0,
+                flare_ticks_sheltered: 0,
             };
 
             // Reuse persistent Arc across respawns.
@@ -1932,7 +1943,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Distance tracking ────────────────────────────────
                     {
                         let mut s = st.lock().unwrap();
-                        if !s.in_space_mode && !s.space_launch_active {
+                        // Boss arenas sit at their own stretch of world X, far
+                        // past the level, and the player is warped there — so
+                        // arena X is not progress. Counting it sent `distance`
+                        // (and with it the difficulty curve AND the boss
+                        // schedule) straight to maximum on the first fight.
+                        // It also matches the design intent: the hour-long
+                        // curve is an hour of SWINGING, boss fights excluded.
+                        if !s.in_space_mode && !s.space_launch_active && !s.boss_active {
                             let travelled = (s.px - SPAWN_X).max(0.0);
                             if travelled > s.distance {
                                 s.distance = travelled;
@@ -2204,7 +2222,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // Boss meta is awarded (and shown) at the moment of the
                         // victory stasis — don't double it at run end.
                         let boss_bonus = 0;
-                        let meta_gain = distance_meta + space_bonus + boss_bonus;
+                        // Mode scales the payout: Normal is the efficient way
+                        // to earn, Casual still funds progress (a mode that
+                        // pays nothing reads as a dead end), Boss Rush sits
+                        // just under Normal.
+                        let mode = crate::mode::current_mode(c);
+                        let raw = distance_meta + space_bonus + boss_bonus;
+                        let meta_gain = (raw as f32 * mode.meta_multiplier()).round() as u64;
                         if meta_gain > 0 {
                             crate::profile::award_meta_currency(meta_gain);
                         }

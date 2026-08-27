@@ -3,3 +3,10 @@
 /test_dir
 /saves
 /profile.txt
+
+# Editor and OS droppings that were previously committed.
+*.sw?
+.DS_Store
+
+# Build artifact — regenerated on demand.
+cache.db

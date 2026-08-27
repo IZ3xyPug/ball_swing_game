@@ -16,17 +16,17 @@ pub fn player_max_momentum(s: &State) -> f32 {
             1 => 1.18,
             _ => 1.36,
         };
-        let base = MOMENTUM_CAP * zone_mult;
+        let base = MOMENTUM_CAP * zone_mult * s.perm_momentum_mult;
         if s.upgrade_momentum_bonus {
-            base.max(UPGRADE_MOMENTUM_CAP)
+            base.max(UPGRADE_MOMENTUM_CAP * s.perm_momentum_mult)
         } else {
             base
         }
     }
 }
-pub fn zone_index_for_distance(distance: f32) -> usize {
-    ((distance / ZONE_DISTANCE_STEP) as usize).min(2)
-}
+/// Re-exported from `difficulty.rs`, which owns the curve. Kept here because
+/// most of the game already calls it by this path.
+pub use crate::difficulty::zone_index_for_distance;
 
 pub fn spinner_speed_for_zone(zone_idx: usize) -> f32 {
     let mult = match zone_idx {
@@ -163,4 +163,21 @@ pub fn apply_special_hook_boost(s: &mut State, hx: f32, hy: f32) {
         s.vx *= k;
         s.vy *= k;
     }
+}
+
+/// Tether reach for the current run, including the permanent LONG LINE ranks.
+///
+/// Generation is NOT scaled by this: the hop envelope is built from the base
+/// `ROPE_LEN_MAX`, so buying reach makes the same world easier to catch rather
+/// than making the world spread out to match. That is the whole point of a
+/// permanent upgrade — it has to be felt.
+#[inline]
+pub fn player_grab_reach(s: &State) -> f32 {
+    ROPE_LEN_MAX * s.perm_reach_mult
+}
+
+/// Coin pickup radius for the current run, including MAGNETISM ranks.
+#[inline]
+pub fn player_magnet_radius(s: &State) -> f32 {
+    COIN_MAGNET_RADIUS * s.perm_magnet_mult
 }

@@ -29,6 +29,10 @@ use crate::scenes::game::build_game_scene;
 
 /// Reach used by the auto-player when deciding whether a hook is grabbable.
 const AI_REACH: f32 = ROPE_LEN_MAX;
+/// How far the bot looks for shelter during a flare. Must exceed
+/// `FLARE_SHELTER_SEARCH_AHEAD` so the bot can see every shelter the flare
+/// system considered reachable when it decided to fire.
+const AI_SHELTER_SCAN: f32 = 8000.0;
 /// Release the rope once we're moving right this fast (px/tick).
 const AI_RELEASE_VX: f32 = 14.0;
 /// ...and once total speed clears this, so we don't release while nearly still.
@@ -56,6 +60,25 @@ pub struct EpisodeReport {
     pub hearts_lost: i64,
     pub hearts_end: i32,
     pub panicked: Option<String>,
+    /// Frames spent unhooked, inside the reachable band, with NO grab node
+    /// within `AI_REACH`.
+    ///
+    /// This is the "impossible stretch" instrument, and it is deliberately
+    /// independent of how well the bot plays: a starved frame means the world
+    /// offered the player nothing to reach for, whatever they did. It does not
+    /// have to be zero — the player is airborne between nodes by design — but a
+    /// run of consecutive starved frames is a hole in the level.
+    pub starved_frames: u64,
+    pub airborne_frames: u64,
+    /// Longest unbroken run of starved frames in the episode.
+    pub worst_starve_streak: u64,
+    /// Solar-flare telemetry. `flares_fired` counting up while
+    /// `flares_without_shelter` stays at zero is the check that matters: a
+    /// flare must never begin its telegraph with no reachable shielded node.
+    pub flares_fired: i32,
+    pub flare_hearts_lost: i32,
+    pub flare_saves: i32,
+    pub flares_without_shelter: i32,
 }
 
 #[derive(Debug, Default)]
@@ -77,6 +100,13 @@ pub struct AggregateReport {
     pub final_hearts_sum: i32,
     pub weakpoint_hits: u64,
     pub death_scene_histogram: std::collections::HashMap<String, u64>,
+    pub starved_frames: u64,
+    pub airborne_frames: u64,
+    pub worst_starve_streak: u64,
+    pub flares_fired: i32,
+    pub flare_hearts_lost: i32,
+    pub flare_saves: i32,
+    pub flares_without_shelter: i32,
 }
 
 // ── Canvas factory (mirrors App::new but boots straight into the game) ────────
@@ -105,7 +135,12 @@ struct Obs {
     vx: f32,
     vy: f32,
     hooked: bool,
-    hooks: Vec<(f32, f32)>,
+    /// (x, y, is_shielded) for every grab node within reach.
+    hooks: Vec<(f32, f32, bool)>,
+    /// Shielded nodes within a WIDE radius — well beyond grab reach. Routing to
+    /// shelter is a multi-hop problem, so the bot needs to see the destination
+    /// long before it can grab it.
+    shelters: Vec<(f32, f32)>,
 }
 
 fn get_i32_or(c: &Canvas, name: &str, default: i32) -> i32 {
@@ -133,8 +168,12 @@ fn observe(c: &Canvas) -> Option<Obs> {
         c.objects_in_radius(p, AI_REACH)
             .into_iter()
             .filter(|o| o.tags.iter().any(|t| t == "hook"))
-            .map(|o| (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5))
-            .filter(|(hx, hy)| {
+            .map(|o| (
+                o.position.0 + o.size.0 * 0.5,
+                o.position.1 + o.size.1 * 0.5,
+                o.tags.iter().any(|t| t == crate::constants::SHIELD_HOOK_TAG),
+            ))
+            .filter(|(hx, hy, _)| {
                 let dx = *hx - px;
                 let dy = *hy - py;
                 dx * dx + dy * dy <= AI_REACH * AI_REACH
@@ -144,13 +183,54 @@ fn observe(c: &Canvas) -> Option<Obs> {
         Vec::new()
     };
 
-    Some(Obs { px, py, vx, vy, hooked, hooks })
+    let shelters = if let Some(p) = c.get_game_object("player") {
+        c.objects_in_radius(p, AI_SHELTER_SCAN)
+            .into_iter()
+            .filter(|o| o.tags.iter().any(|t| t == crate::constants::SHIELD_HOOK_TAG))
+            .map(|o| (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Some(Obs { px, py, vx, vy, hooked, hooks, shelters })
 }
 
 // ── Auto-swing policy ─────────────────────────────────────────────────────────
 // Return (hold-space, target-hook). When free, steer toward the best ahead hook
 // (via mouse-targeted grab) so the bot chains forward instead of oscillating.
 // When hooked, release once we're moving forward fast enough (or after a stall).
+
+/// Nearest known shelter, at any distance.
+fn nearest_shelter_point(o: &Obs) -> Option<(f32, f32)> {
+    let mut best: Option<(f32, f32, f32)> = None;
+    for &(hx, hy) in &o.shelters {
+        let dx = hx - o.px;
+        let dy = hy - o.py;
+        let d2 = dx * dx + dy * dy;
+        if best.map_or(true, |(bd2, _, _)| d2 < bd2) {
+            best = Some((d2, hx, hy));
+        }
+    }
+    best.map(|(_, hx, hy)| (hx, hy))
+}
+
+/// Nearest shielded node in reach, if any.
+fn pick_shelter(o: &Obs) -> Option<(f32, f32)> {
+    let mut best: Option<(f32, f32, f32)> = None;
+    for &(hx, hy, shielded) in &o.hooks {
+        if !shielded {
+            continue;
+        }
+        let dx = hx - o.px;
+        let dy = hy - o.py;
+        let d2 = dx * dx + dy * dy;
+        if best.map_or(true, |(bd2, _, _)| d2 < bd2) {
+            best = Some((d2, hx, hy));
+        }
+    }
+    best.map(|(_, hx, hy)| (hx, hy))
+}
 
 fn decide(
     o: &Obs,
@@ -159,10 +239,48 @@ fn decide(
     frames: u64,
     buffed: bool,
     boss_center: Option<(f32, f32)>,
+    flare_threat: bool,
+    sheltered: bool,
 ) -> (bool, Option<(f32, f32)>) {
     if force_fall && frames >= FALL_TEST_FRAME {
         // Force a fall so we exercise the heart-loss / respawn path.
         return (false, None);
+    }
+    // Under flare threat, shelter beats progress: hold a shielded node rather
+    // than releasing from it, and steer to one when free. Without this the bot
+    // cannot exercise the save path at all, and `flare_saves` stays at zero
+    // whether the mechanic works or not.
+    if flare_threat {
+        let shelter_in_reach = pick_shelter(o);
+        if o.hooked {
+            if sheltered {
+                // Already safe — hold on for the rest of the window.
+                return (true, None);
+            }
+            // Only let go once shelter is actually grabbable. Releasing on the
+            // first threatened frame just drops the bot into freefall and the
+            // shelter is out of reach again by the time it can act.
+            if shelter_in_reach.is_some() {
+                return (false, None);
+            }
+            // Otherwise keep swinging normally, which is what carries us toward
+            // the shelter in the first place.
+            let speed = (o.vx * o.vx + o.vy * o.vy).sqrt();
+            let release = (o.vx > AI_RELEASE_VX && speed > AI_RELEASE_SPEED)
+                || hooked_ticks >= AI_FORCE_RELEASE_TICKS;
+            return (!release, None);
+        }
+        if let Some(target) = shelter_in_reach {
+            return (true, Some(target));
+        }
+        // Shelter known but out of grab range: hop toward it by taking the
+        // in-reach node closest to it. Same greedy routing the boss targeting
+        // uses, pointed at a different destination.
+        if let Some(dest) = nearest_shelter_point(o) {
+            if let Some(step) = pick_nearest_to(o, dest) {
+                return (true, Some(step));
+            }
+        }
     }
     if o.hooked {
         let speed = (o.vx * o.vx + o.vy * o.vy).sqrt();
@@ -188,7 +306,7 @@ fn decide(
 /// Pick the hook (within reach) nearest to a world point.
 fn pick_nearest_to(o: &Obs, point: (f32, f32)) -> Option<(f32, f32)> {
     let mut best: Option<(f32, f32, f32)> = None; // (dist2, hx, hy)
-    for &(hx, hy) in &o.hooks {
+    for &(hx, hy, _) in &o.hooks {
         let dx = hx - point.0;
         let dy = hy - point.1;
         let d2 = dx * dx + dy * dy;
@@ -203,7 +321,7 @@ fn pick_nearest_to(o: &Obs, point: (f32, f32)) -> Option<(f32, f32)> {
 /// while preferring forward progress (ahead of the player scores lower).
 fn pick_best_target(o: &Obs) -> Option<(f32, f32)> {
     let mut best: Option<(f32, f32, f32)> = None; // (score, hx, hy)
-    for &(hx, hy) in &o.hooks {
+    for &(hx, hy, _) in &o.hooks {
         let dx = hx - o.px;
         let dy = hy - o.py;
         let dist = (dx * dx + dy * dy).sqrt();
@@ -231,12 +349,12 @@ fn send_key(ctx: &mut prism::Context, c: &mut Canvas, sized: &SizedTree, state: 
 }
 
 fn zone_for_distance(d: f32) -> usize {
-    ((d / ZONE_DISTANCE_STEP) as usize).min(2)
+    crate::difficulty::zone_index_for_distance(d)
 }
 
 // ── Episode runner ────────────────────────────────────────────────────────────
 
-fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool) -> EpisodeReport {
+fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool) -> EpisodeReport {
     let (mut ctx, _recv) = prism::Context::new();
     let mut canvas = build_canvas(&mut ctx);
     let sized = SizedTree::default();
@@ -255,6 +373,12 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         // entry stasis — bypass the tether so the validation can proceed.
         canvas.set_var("debug_boss_stasis_down", true);
     }
+    if flare_test || shelter_check {
+        // Fire a flare every ~4 s so one episode exercises many, instead of the
+        // at-most-one a shipped 90 s interval would produce.
+        canvas.set_var("debug_flare_interval", 240i32);
+    }
+
     // Use mouse-targeted grabbing so the bot can steer toward ahead hooks
     // instead of always grabbing the nearest (which causes oscillation).
     canvas.set_var("grab_from_mouse", true);
@@ -279,6 +403,12 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
     let mut weakpoint_checked = false;
     let mut weakpoint_check_ticks: u32 = 0;
     let mut death_scene: Option<String> = None;
+    let mut starved_frames: u64 = 0;
+    let mut airborne_frames: u64 = 0;
+    let mut starve_streak: u64 = 0;
+    let mut worst_starve_streak: u64 = 0;
+    let mut flares_without_shelter: i32 = 0;
+    let mut prev_flare_count: i32 = 0;
 
     while frames < max_frames {
         // Observe (borrows canvas immutably, then released).
@@ -287,8 +417,78 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         };
         if o.hooked {
             hooked_ticks += 1;
+            starve_streak = 0;
         } else {
             hooked_ticks = 0;
+            // Only frames where the player is still INSIDE the reachable band
+            // count. Below it there is nothing to grab by construction, so
+            // counting those frames measures the length of a death animation
+            // rather than a hole in the level — which is what this is for.
+            // The space zone has its own node band far above the normal one, so
+            // its frames are neither in-band nor a hole in the level — counting
+            // them made a run that reached space look twice as starved as one
+            // that did not.
+            let in_space = matches!(canvas.get_var("in_space_mode"), Some(Value::Bool(true)));
+            let in_band = !in_space
+                && o.py >= HOOK_Y_MIN - ROPE_LEN_MAX
+                && o.py <= HOOK_Y_MAX + ROPE_LEN_MAX;
+            if in_band {
+                airborne_frames += 1;
+                if o.hooks.is_empty() {
+                    starved_frames += 1;
+                    starve_streak += 1;
+                    worst_starve_streak = worst_starve_streak.max(starve_streak);
+                } else {
+                    starve_streak = 0;
+                }
+            } else {
+                starve_streak = 0;
+            }
+        }
+
+        // Shelter check: during a telegraph, move the player onto the nearest
+        // shielded node so the real grab path and the real shelter rule run
+        // deterministically. The greedy bot cannot route several hops to a
+        // specific node, so without this the save path is never exercised and
+        // `flare_saves` reads zero whether the mechanic works or not.
+        if shelter_check
+            && matches!(canvas.get_var("flare_warning"), Some(Value::Bool(true)))
+        {
+            if let Some((sx, sy)) = o.shelters.first().copied() {
+                if let Some(p) = canvas.get_game_object_mut("player") {
+                    p.position = (sx - crate::constants::PLAYER_R,
+                                  sy - crate::constants::PLAYER_R * 3.0);
+                    p.momentum = (0.0, 0.0);
+                }
+            }
+        }
+
+        // Flare audit: the frame a new flare's telegraph starts, confirm a
+        // shielded node was actually within reach. This is the invariant the
+        // whole mechanic rests on, so it is checked from outside the system
+        // that is supposed to maintain it.
+        {
+            let count = get_i32_or(&canvas, "flares_fired", 0);
+            if count > prev_flare_count {
+                prev_flare_count = count;
+                let shelter_near = canvas
+                    .get_game_object("player")
+                    .map(|p| {
+                        let px = p.position.0 + p.size.0 * 0.5;
+                        canvas
+                            .objects_in_radius(p, crate::constants::FLARE_SHELTER_SEARCH_AHEAD)
+                            .into_iter()
+                            .any(|o| {
+                                o.tags.iter().any(|t| t == crate::constants::SHIELD_HOOK_TAG)
+                                    && (o.position.0 + o.size.0 * 0.5) - px
+                                        <= crate::constants::FLARE_SHELTER_SEARCH_AHEAD
+                            })
+                    })
+                    .unwrap_or(false);
+                if !shelter_near {
+                    flares_without_shelter += 1;
+                }
+            }
         }
 
         let buffed = get_i32_or(&canvas, "player_buff", 0) > 0;
@@ -321,7 +521,11 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
             }
             (false, None)
         } else {
-            decide(&o, hooked_ticks, force_fall, frames, buffed, boss_center)
+            let flare_threat = matches!(canvas.get_var("flare_warning"), Some(Value::Bool(true)))
+                || matches!(canvas.get_var("flare_active"), Some(Value::Bool(true)));
+            let sheltered = matches!(canvas.get_var("player_sheltered"), Some(Value::Bool(true)));
+
+            decide(&o, hooked_ticks, force_fall, frames, buffed, boss_center, flare_threat, sheltered)
         };
 
         if let Some((tx, ty)) = target {
@@ -354,9 +558,15 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
 
         // Post-frame observation.
         let Some(o) = observe(&canvas) else { break; };
-        let dist = (o.px - SPAWN_X).max(0.0);
-        if dist > max_dist {
-            max_dist = dist;
+        // Arena X is not progress — the player is warped to a region two
+        // million pixels out, so counting it reported every boss run as a
+        // record-breaking distance.
+        let in_arena = matches!(canvas.get_var("boss_active"), Some(Value::Bool(true)));
+        if !in_arena {
+            let dist = (o.px - SPAWN_X).max(0.0);
+            if dist > max_dist {
+                max_dist = dist;
+            }
         }
         let speed = (o.vx * o.vx + o.vy * o.vy).sqrt();
         if speed > max_speed {
@@ -387,7 +597,11 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
     }
 
     let final_o = observe(&canvas);
-    let final_dist = final_o.map(|o| (o.px - SPAWN_X).max(0.0)).unwrap_or(max_dist);
+    let final_dist = if matches!(canvas.get_var("boss_active"), Some(Value::Bool(true))) {
+        max_dist
+    } else {
+        final_o.map(|o| (o.px - SPAWN_X).max(0.0)).unwrap_or(max_dist)
+    };
     let hearts_lost = get_i32_or(&canvas, "heart_losses", 0) as i64;
     let hearts_end = get_i32_or(&canvas, "hearts", MAX_HEARTS);
 
@@ -408,16 +622,23 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         hearts_lost,
         hearts_end,
         panicked: None,
+        starved_frames,
+        airborne_frames,
+        worst_starve_streak,
+        flares_fired: get_i32_or(&canvas, "flares_fired", 0),
+        flare_hearts_lost: get_i32_or(&canvas, "flare_hearts_lost", 0),
+        flare_saves: get_i32_or(&canvas, "flare_saves", 0),
+        flares_without_shelter,
     }
 }
 
 /// Run several episodes (each boots a fresh canvas) and aggregate.
-pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool) -> AggregateReport {
+pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool) -> AggregateReport {
     let mut agg = AggregateReport::default();
     let mut episode_idx = 0u64;
     while episode_idx < episodes {
         let ep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_episode(max_frames, boss_mode, force_fall, boss_warp, weakpoint_check)
+            run_episode(max_frames, boss_mode, force_fall, boss_warp, weakpoint_check, flare_test, shelter_check)
         }))
         .unwrap_or_else(|e| {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -444,6 +665,13 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
                 hearts_lost: 0,
                 hearts_end: 0,
                 panicked: Some(msg),
+                starved_frames: 0,
+                airborne_frames: 0,
+                worst_starve_streak: 0,
+                flares_fired: 0,
+                flare_hearts_lost: 0,
+                flare_saves: 0,
+                flares_without_shelter: 0,
             }
         });
 
@@ -477,10 +705,17 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
             agg.weakpoint_hits += 1;
         }
         agg.max_zone = agg.max_zone.max(ep.zone);
+        agg.starved_frames += ep.starved_frames;
+        agg.airborne_frames += ep.airborne_frames;
+        agg.worst_starve_streak = agg.worst_starve_streak.max(ep.worst_starve_streak);
+        agg.flares_fired += ep.flares_fired;
+        agg.flare_hearts_lost += ep.flare_hearts_lost;
+        agg.flare_saves += ep.flare_saves;
+        agg.flares_without_shelter += ep.flares_without_shelter;
 
         // Progress line.
         println!(
-            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}  bossHP={}  weakHit={}  heartsLost={}  heartsEnd={}",
+            "ep {}  frames={}  dist={:.0}  speed={:.1}  coins={}  grabs={}  death={:?}  zone={}  space={}  bossIn={}  bossKill={}  bossHP={}  weakHit={}  heartsLost={}  heartsEnd={}  starved={}/{}  worstStreak={}",
             episode_idx,
             ep.frames,
             ep.max_dist,
@@ -496,6 +731,9 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
             ep.weakpoint_hit,
             ep.hearts_lost,
             ep.hearts_end,
+            ep.starved_frames,
+            ep.airborne_frames,
+            ep.worst_starve_streak,
         );
 
         episode_idx += 1;

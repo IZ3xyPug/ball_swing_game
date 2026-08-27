@@ -14,6 +14,7 @@ mod turrets;
 mod gravity_cannon;
 mod boss;
 mod hearts;
+mod solar;
 mod fx;
 mod upgrades;
 pub mod space_zone;

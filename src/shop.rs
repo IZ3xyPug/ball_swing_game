@@ -20,8 +20,8 @@ pub const NUM_SLOTS:   usize = 7;
 pub const SLOT_CENTER: usize = 3;
 
 // ── Category data ───────────────────────────────────────────────────────────
-pub const SHOP_CAT_NAMES:     &[&str]          = &["CHARACTERS", "ROPES", "BACKGROUNDS", "TRAILS", "PURCHASABLE"];
-pub const SHOP_CAT_SUBTITLES: &[&str]          = &["CHANGE YOUR BALL", "STYLE YOUR SWING", "CHANGE THE SCENE", "LEAVE YOUR MARK", "COMING SOON"];
+pub const SHOP_CAT_NAMES:     &[&str]          = &["CHARACTERS", "ROPES", "BACKGROUNDS", "TRAILS", "UPGRADES"];
+pub const SHOP_CAT_SUBTITLES: &[&str]          = &["CHANGE YOUR BALL", "STYLE YOUR SWING", "CHANGE THE SCENE", "LEAVE YOUR MARK", "SPEND META \u{2022} PERMANENT"];
 pub const SHOP_CAT_COLORS:    &[(u8, u8, u8)]  = &[
     ( 60,  80, 180), // 0 Characters  — indigo
     ( 20, 150, 140), // 1 Ropes       — teal
@@ -60,15 +60,32 @@ pub const SHOP_TRAIL_COLORS: &[(u8,u8,u8)] = &[
 pub const SHOP_TRAIL_NAMES: &[&str] = &["WHITE", "FIRE", "ICE", "GOLD", "MYSTIC"];
 
 /// Returns (colors, names) slices for the given category index.
+/// Card colours and names for the permanent-upgrade category, built once from
+/// `profile::PERM_UPGRADES` so the shop can never drift from the table that
+/// actually governs cost and effect.
+fn upgrade_cards() -> (&'static [(u8, u8, u8)], &'static [&'static str]) {
+    static COLORS: OnceLock<Vec<(u8, u8, u8)>> = OnceLock::new();
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    (
+        COLORS.get_or_init(|| crate::profile::PERM_UPGRADES.iter().map(|u| u.color).collect()),
+        NAMES.get_or_init(|| crate::profile::PERM_UPGRADES.iter().map(|u| u.name).collect()),
+    )
+}
+
 fn cat_items(cat: i32) -> (&'static [(u8,u8,u8)], &'static [&'static str]) {
     match cat {
         0 => (PLAYER_CHAR_COLORS, PLAYER_CHAR_NAMES),
         1 => (SHOP_ROPE_COLORS,   SHOP_ROPE_NAMES),
         2 => (SHOP_BG_COLORS,     SHOP_BG_NAMES),
         3 => (SHOP_TRAIL_COLORS,  SHOP_TRAIL_NAMES),
+        4 => upgrade_cards(),
         _ => (PLAYER_CHAR_COLORS, PLAYER_CHAR_NAMES),
     }
 }
+
+/// True for categories that are bought rather than equipped.
+#[inline]
+pub fn is_upgrade_category(cat: i32) -> bool { cat == 4 }
 
 /// Returns (x, y, w, h) for each category card button (2+3 grid layout).
 fn cat_card_rect(idx: usize) -> (f32, f32, f32, f32) {
@@ -377,7 +394,10 @@ pub fn show_categories(c: &mut Canvas) {
 }
 
 /// Switch to the carousel view for a given category index.
-/// For category 4 (Purchasable), shows a placeholder empty screen instead.
+///
+/// Category 4 (permanent upgrades) uses the SAME carousel as the cosmetic
+/// categories rather than the single hardcoded "buy a heart" line it used to
+/// be — it just buys on select instead of equipping.
 pub fn show_carousel(c: &mut Canvas, cat: i32) {
     c.set_var("shop_screen", 1i32);
     c.set_var("shop_active_category", cat);
@@ -389,49 +409,7 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
         set_visible(c, &format!("shop_cat_sub_{i}"), false);
     }
 
-    if cat == 4 {
-        // Purchasable — no carousel yet, show empty placeholder screen
-        for name in ["shop_card_strip", "shop_select_btn", "shop_select_text"] { set_visible(c, name, false); }
-        set_visible(c, "shop_instr_text", true);
-        for s in 0..NUM_SLOTS {
-            set_visible(c, &format!("shop_slot_{s}"), false);
-            set_visible(c, &format!("shop_slot_label_{s}"), false);
-        }
-        if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
-            let s = c.virtual_scale();
-            if let Some(obj) = c.get_game_object_mut("shop_title_text") {
-                obj.set_drawable(Box::new(ui_text_spec(
-                    "PURCHASABLE", &font, 100.0 * s, Color(255, 255, 255, 255), 1600.0 * s,
-                )));
-            }
-            // Permanent upgrade: buy an extra starting heart with meta currency.
-            let (owned, meta) = {
-                let p = crate::profile::profile();
-                let g = p.lock().unwrap();
-                (g.permanent_extra_hearts, g.meta_currency)
-            };
-            let cost = crate::profile::permanent_heart_cost(owned);
-            let label = if meta >= cost {
-                format!("\u{25BC}  BUY PERMANENT HEART  ({cost} META)   OWNS {owned}   HAS {meta}")
-            } else {
-                format!("PERMANENT HEART  OWNS {owned}   \u{2022}   NEED {cost} META   \u{2022}   HAS {meta}")
-            };
-            if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
-                obj.set_drawable(Box::new(ui_text_spec(
-                    &label,
-                    &font, 40.0 * s, Color(210, 235, 255, 255), 1500.0 * s,
-                )));
-            }
-            if let Some(obj) = c.get_game_object_mut("shop_back_text") {
-                obj.set_drawable(Box::new(ui_text_spec(
-                    "\u{25C4}  BACK", &font, 32.0 * s, Color(215, 230, 255, 255), 380.0 * s,
-                )));
-            }
-        }
-        return;
-    }
-
-    // Normal carousel categories (0-3)
+    // All carousel categories, cosmetic and purchasable alike.
     for name in ["shop_card_strip", "shop_instr_text", "shop_select_btn", "shop_select_text"] {
         set_visible(c, name, true);
     }
@@ -440,14 +418,25 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
         set_visible(c, &format!("shop_slot_label_{s}"), true);
     }
 
-    // Reset carousel state
-    c.set_var("shop_selected",          0i32);
+    // Reset carousel state — but initialise the selected slot to the currently
+    // equipped cosmetic for this category, so the carousel reflects what the
+    // player already owns instead of always jumping back to slot 0.
+    let saved = match cat {
+        0 => c.get_i32("player_char_selected"),
+        1 => c.get_i32("player_rope_selected"),
+        2 => c.get_i32("player_bg_selected"),
+        3 => c.get_i32("player_trail_selected"),
+        _ => 0,
+    }.max(0);
+    let (items, _names) = cat_items(cat);
+    let sel = (saved as usize).min(items.len().saturating_sub(1)) as i32;
+    c.set_var("shop_selected",          sel);
     c.set_var("shop_slide_offset",      0.0f32);
     c.set_var("shop_scroll_dir",        0i32);
     c.set_var("shop_scroll_held_ticks", 0i32);
     update_slot_positions(c, 0.0);
-    update_all_slot_images(c, 0, cat);
-    update_all_slot_labels(c, 0, cat);
+    update_all_slot_images(c, sel as usize, cat);
+    update_all_slot_labels(c, sel as usize, cat);
 
     // Update title and back button text
     if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
@@ -458,15 +447,17 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
                 cat_name, &font, 100.0 * s, Color(255, 255, 255, 255), 1600.0 * s,
             )));
         }
+        let instr = carousel_instruction(c, cat, 0);
         if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                "A / D  or  \u{2190}\u{2192}  to browse",
-                &font, 30.0 * s, Color(130, 160, 195, 180), 1000.0 * s,
+                &instr,
+                &font, 30.0 * s, Color(150, 180, 215, 210), 1600.0 * s,
             )));
         }
+        let action = if is_upgrade_category(cat) { "BUY" } else { "SELECT" };
         if let Some(obj) = c.get_game_object_mut("shop_select_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                "SELECT", &font, 32.0 * s, Color(255, 255, 255, 255), 380.0 * s,
+                action, &font, 32.0 * s, Color(255, 255, 255, 255), 380.0 * s,
             )));
         }
         if let Some(obj) = c.get_game_object_mut("shop_back_text") {
@@ -541,14 +532,80 @@ pub fn update_all_slot_labels(c: &mut Canvas, selected: usize, cat: i32) {
             let idx = ((selected as i64 + slot as i64 - SLOT_CENTER as i64)
                 .rem_euclid(n as i64)) as usize;
             let name = format!("shop_slot_label_{slot}");
+            // Upgrade cards carry their own state — a name alone cannot tell
+            // the player whether they can afford the next rank or already own
+            // every one of them.
+            let (label, colour) = if is_upgrade_category(cat) {
+                upgrade_slot_label(idx)
+            } else {
+                (names[idx].to_string(), Color(180, 210, 240, 200))
+            };
             if let Some(obj) = c.get_game_object_mut(&name) {
                 obj.set_drawable(Box::new(ui_text_spec(
-                    names[idx], &font,
-                    28.0 * s_scale, Color(180, 210, 240, 200),
+                    &label, &font,
+                    28.0 * s_scale, colour,
                     (CARD_W as f32) * s_scale,
                 )));
             }
         }
+    }
+}
+
+/// Refresh the instruction line for the current selection, so the blurb under
+/// the cards always describes the card in the centre.
+pub fn refresh_instruction(c: &mut Canvas, cat: i32, selected: usize) {
+    let text = carousel_instruction(c, cat, selected);
+    let scale = c.virtual_scale();
+    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+        if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                &text, &font, 30.0 * scale, Color(150, 180, 215, 210), 1600.0 * scale,
+            )));
+        }
+    }
+}
+
+/// `NAME  RANK 2/4  •  320 META` — or `MAXED`, or the shortfall.
+fn upgrade_slot_label(idx: usize) -> (String, Color) {
+    let Some(u) = crate::profile::PERM_UPGRADES.get(idx) else {
+        return (String::new(), Color(180, 210, 240, 200));
+    };
+    let (owned, meta) = {
+        let g = crate::profile::profile();
+        let p = g.lock().unwrap();
+        (p.upgrade_level(u.id), p.meta_currency)
+    };
+    match crate::profile::upgrade_cost(u, owned) {
+        None => (
+            format!("{}   {}/{}   •   MAXED", u.name, owned, u.max),
+            Color(140, 255, 190, 230),
+        ),
+        Some(cost) if meta >= cost => (
+            format!("{}   {}/{}   •   {} META", u.name, owned, u.max, cost),
+            Color(255, 236, 150, 240),
+        ),
+        Some(cost) => (
+            format!("{}   {}/{}   •   NEED {}", u.name, owned, u.max, cost),
+            Color(160, 175, 200, 190),
+        ),
+    }
+}
+
+/// The line under the carousel: what the selected upgrade actually does, plus
+/// the player's balance. Cosmetic categories keep the browse hint.
+pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
+    if !is_upgrade_category(cat) {
+        return "A / D  or  \u{2190}\u{2192}  to browse".to_string();
+    }
+    let meta = {
+        let g = crate::profile::profile();
+        let m = g.lock().unwrap().meta_currency;
+        m
+    };
+    let _ = c;
+    match crate::profile::PERM_UPGRADES.get(selected) {
+        Some(u) => format!("{}   •   YOU HAVE {} META   •   ENTER TO BUY", u.blurb, meta),
+        None => format!("YOU HAVE {meta} META"),
     }
 }
 
@@ -567,6 +624,7 @@ pub fn init_shop(canvas: &mut Canvas) {
     canvas.set_var("shop_screen",            0i32);
     canvas.set_var("shop_active_category",  -1i32);
     canvas.set_var("shop_preview_angle",     0.0f32);
+    canvas.set_var("shop_instr_restore",     0i32);
 
     // Pre-warm caches
     get_card_cache();
@@ -618,6 +676,7 @@ pub fn handle_shop_key(c: &mut Canvas, key: &Key) {
     c.set_var("shop_slide_offset", dir as f32 * CARD_SPACING);
     update_all_slot_images(c, new_sel as usize, cat);
     update_all_slot_labels(c, new_sel as usize, cat);
+    refresh_instruction(c, cat, new_sel as usize);
 }
 
 /// Process one key-release for the shop hold-scroll.
@@ -652,6 +711,18 @@ pub fn tick_shop(c: &mut Canvas) {
             c.set_var("shop_slide_offset", dir as f32 * CARD_SPACING);
             update_all_slot_images(c, new_sel as usize, cat);
             update_all_slot_labels(c, new_sel as usize, cat);
+            refresh_instruction(c, cat, new_sel as usize);
+        }
+    }
+
+    // A purchase confirmation replaces the blurb for a moment; put the blurb
+    // back so the line does not get stuck on a stale message.
+    let restore = match c.get_var("shop_instr_restore") { Some(Value::I32(v)) => v, _ => 0 };
+    if restore > 0 {
+        c.set_var("shop_instr_restore", restore - 1);
+        if restore == 1 {
+            let sel = c.get_i32("shop_selected").max(0) as usize;
+            refresh_instruction(c, cat, sel);
         }
     }
 
@@ -1138,4 +1209,35 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
             },
             Target::name("shop_instr_text"),
         )
+}
+
+/// Buy the selected permanent upgrade and refresh the carousel in place.
+///
+/// Stays on the upgrade screen rather than bouncing back to the categories —
+/// buying ranks is a repeated action, and the labels have to update so the
+/// player can see the new rank and the new price.
+pub fn buy_selected_upgrade(c: &mut Canvas) {
+    let cat = c.get_i32("shop_active_category");
+    if !is_upgrade_category(cat) {
+        return;
+    }
+    let sel = c.get_i32("shop_selected").max(0) as usize;
+    let Some(u) = crate::profile::PERM_UPGRADES.get(sel) else { return };
+    let outcome = crate::profile::buy_permanent_upgrade(u.id);
+    update_all_slot_labels(c, sel, cat);
+
+    let scale = c.virtual_scale();
+    let text = match outcome {
+        Ok(level) => format!("{} \u{2192} RANK {}", u.name, level),
+        Err(reason) => format!("{}   \u{2022}   {}", u.name, reason),
+    };
+    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+        if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                &text, &font, 30.0 * scale, Color(255, 236, 150, 240), 1600.0 * scale,
+            )));
+        }
+    }
+    // The confirmation replaces the blurb; put the blurb back shortly after.
+    c.set_var("shop_instr_restore", 90i32);
 }

@@ -510,6 +510,27 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     zero_g_overlay.visible = false;
     zero_g_overlay.layer = 50;
 
+    // ── Solar flare presentation ─────────────────────────────────────────
+    // Full-screen wash for the telegraph and the flare itself. Sits under the
+    // pause overlay but over gameplay, and is re-tinted every frame by
+    // `solar::draw_flare_overlay` as the telegraph ramps.
+    let mut flare_overlay = GameObject::new_rect(ctx, "flare_overlay".into(),
+        None::<Image>, (VW, VH), (0.0, 0.0),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    flare_overlay.ignore_zoom = true;
+    flare_overlay.visible = false;
+    flare_overlay.layer = 60;
+
+    // Instruction banner. The flare has to be readable without audio and
+    // without prior knowledge, so the telegraph says what to do, not just that
+    // something is happening.
+    let mut flare_banner = GameObject::new_rect(ctx, "flare_banner".into(),
+        None::<Image>, (1800.0, 90.0), (VW * 0.5 - 900.0, VH * 0.16),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    flare_banner.ignore_zoom = true;
+    flare_banner.visible = false;
+    flare_banner.layer = 61;
+
     // Animated catcoingold icon overlaid on the coin counter slot.
     // coin_counter is at (26, 24), icon slot is at (12, 28) within it → abs (38, 52).
     let mut coin_icon_anim = GameObject::new_rect(ctx, "coin_icon_anim".into(),
@@ -536,13 +557,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let score_x2_icon = hud_obj(ctx, "score_x2_icon", ICON_W, ICON_H, ICON_X2, ICON_Y, None);
 
     // ── Starter hooks ────────────────────────────────────────────────────
-    let starter_hooks: &[(f32, f32)] = &[
-        (START_HOOK_X,                              START_HOOK_Y),
-        (START_HOOK_X + HOOK_FIXED_X_GAP,           VH * 0.30),
-        (START_HOOK_X + HOOK_FIXED_X_GAP * 2.0,    VH * 0.46),
-        (START_HOOK_X + HOOK_FIXED_X_GAP * 3.0,    VH * 0.34),
-        (START_HOOK_X + HOOK_FIXED_X_GAP * 4.0,    VH * 0.52),
-    ];
+    let starter_hooks = crate::level_gen::starter_hooks();
 
     let mut scene = Scene::new("game")
         .with_object("bg",           bg)
@@ -571,6 +586,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object(GOLD_MASTER_TOAST_CHECK_NAME, achievement_toast_check)
         .with_object("coin_magnet_radius", coin_magnet_radius)
         .with_object("zero_g_overlay",    zero_g_overlay)
+        .with_object("flare_overlay",     flare_overlay)
+        .with_object("flare_banner",      flare_banner)
         .with_object("coin_icon_anim",    coin_icon_anim)
         .with_object("flip_icon",         flip_icon)
         .with_object("zero_g_icon",       zero_g_icon)

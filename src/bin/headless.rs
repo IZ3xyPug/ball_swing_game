@@ -8,6 +8,8 @@ fn main() {
     let mut fall_test = false;
     let mut boss_warp = false;
     let mut weakpoint_check = false;
+    let mut flare_test = false;
+    let mut shelter_check = false;
 
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -37,11 +39,17 @@ fn main() {
                 boss_warp = true;
                 weakpoint_check = true;
             }
+            "--flare-test" => {
+                flare_test = true;
+            }
+            "--flare-shelter-check" => {
+                shelter_check = true;
+            }
             "--fall-test" => {
                 fall_test = true;
             }
             "--help" | "-h" => {
-                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-weakpoint-check] [--fall-test]");
+                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-weakpoint-check] [--fall-test] [--flare-test] [--flare-shelter-check]");
                 return;
             }
             _ => {}
@@ -49,7 +57,7 @@ fn main() {
         i += 1;
     }
 
-    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp, weakpoint_check);
+    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp, weakpoint_check, flare_test, shelter_check);
 
     println!("\n=== HEADLESS SUMMARY ===");
     println!(
@@ -69,4 +77,17 @@ fn main() {
         agg.total_hearts_lost, agg.final_hearts_sum, agg.weakpoint_hits
     );
     println!("death_scene_histogram={:?}", agg.death_scene_histogram);
+    let starve_pct = if agg.airborne_frames > 0 {
+        100.0 * agg.starved_frames as f64 / agg.airborne_frames as f64
+    } else {
+        0.0
+    };
+    println!(
+        "starved_frames={}/{} ({:.1}% of airborne)  worst_starve_streak={} frames",
+        agg.starved_frames, agg.airborne_frames, starve_pct, agg.worst_starve_streak
+    );
+    println!(
+        "flares_fired={} flare_hearts_lost={} flare_saves={} flares_without_shelter={}",
+        agg.flares_fired, agg.flare_hearts_lost, agg.flare_saves, agg.flares_without_shelter
+    );
 }

@@ -6,13 +6,15 @@ use crate::constants::*;
 use crate::gameplay::zone_index_for_distance;
 use crate::hud::*;
 use crate::state::*;
+use crate::difficulty::ZONE_CYCLE_DISTANCE;
 
 pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let distance = s.distance;
-    let zone_idx = zone_index_for_distance(distance);
-    let zone_start = zone_idx as f32 * ZONE_DISTANCE_STEP;
-    let dist_fill = ((distance - zone_start) / ZONE_DISTANCE_STEP).clamp(0.0, 1.0);
+    // Progress through the CURRENT zone. Zones cycle now, so this has to be the
+    // remainder — measuring from `zone index * step` only worked while the zone
+    // index was pinned to its first (and only) appearance.
+    let dist_fill = ((distance % ZONE_CYCLE_DISTANCE) / ZONE_CYCLE_DISTANCE).clamp(0.0, 1.0);
     let coins = s.coin_count;
     let score = s.score;
     let py = s.py;

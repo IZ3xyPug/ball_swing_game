@@ -65,10 +65,6 @@ pub const MAX_HOOKS_LIVE: usize = 40;
 /// Increasing this is safe; decreasing below ~20 will cause pool starvation.
 pub const HOOK_POOL_SIZE: usize = 68;
 
-/// Horizontal distance between consecutive grab points (px).
-/// This is the single most impactful spacing constant.
-/// Increase → harder (longer reach required). Decrease → easier.
-pub const HOOK_FIXED_X_GAP: f32 = 1250.0;
 /// How long the player must HOLD space/mouse at the start prompt before the run
 /// begins (ticks; 90 = 1.5 s at 60 fps). Prevents a stray/retry click from
 /// instantly launching + grabbing.
@@ -91,43 +87,68 @@ pub const HOOK_BATCH_MIN_Y_GAP: f32 = 80.0;
 pub const HOOK_CLOSE_Y_THRESHOLD: f32 = 220.0;
 
 // ── Generation — Rope Reach Rules ────────────────────────────────────────────
+//
+// A hop is legal when the next grab node sits inside an ELLIPSE centred on the
+// previous one:
+//
+//     (dx / HOP_REACH_X)^2 + (dy / HOP_REACH_UP or HOP_REACH_DOWN)^2 <= 1
+//
+// An ellipse rather than a circle because the two directions are not equally
+// expensive: dropping to a lower node is nearly free (gravity does the work and
+// the player only has to be within a rope length by the time they arrive),
+// while climbing to a higher one has to be paid for out of swing momentum. So
+// the downward radius is larger than the upward one, which buys real vertical
+// variety without ever producing a hop the player cannot make.
+//
+// THIS ENVELOPE IS ENFORCED TWICE, and it has to be:
+//   1. `level_gen::generate_next_hook` proposes a hop inside it, and
+//   2. `spawning::spawn_hooks` clamps the FINAL position back inside it after
+//      its hazard-avoidance passes have moved the node in Y.
+// Step 2 is not redundant. The avoidance passes move a node by up to 620 px
+// with no reference to the previous node at all, so a correctly generated hop
+// routinely landed outside reach. Measured on the pre-fix build: 27% of
+// consecutive node pairs were farther apart than a full rope length.
+//
+// `sim_tests::hook_generation_stays_reachable_and_bounded` guards (1);
+// `sim_tests::hop_envelope_is_symmetric_about_the_previous_node` guards the
+// geometry helper both of them share.
 
-/// Hard minimum Euclidean distance between consecutive hook nodes.
-/// = ROPE_LEN_MAX / 2 (300 px). No two successive hooks will be closer than this.
-/// Hooks closer than this are too clustered to be interesting to swing between.
-pub const HOOK_MIN_REACH: f32 = ROPE_LEN_MAX * 0.5; // 300.0
+/// Hard minimum Euclidean distance between consecutive grab nodes.
+/// Closer than this the two nodes read as one blob rather than a hop.
+pub const HOOK_MIN_REACH: f32 = ROPE_LEN_MAX * 0.5; // 360.0
 
-/// Hard maximum Euclidean distance between consecutive hook nodes.
-/// = ROPE_LEN_MAX (600 px). Every hook must be reachable from the previous one.
-/// Hooks farther than this create unreachable gaps — forbidden.
-pub const HOOK_MAX_REACH: f32 = ROPE_LEN_MAX; // 600.0
+/// Horizontal semi-axis of the hop envelope. One rope length: the player can
+/// always be at the front of their arc when they release.
+pub const HOP_REACH_X: f32 = ROPE_LEN_MAX; // 720.0
 
-/// Horizontal stride range per hop (px).
-/// Kept within `HOOK_MAX_REACH` so consecutive hooks are always reachable and
-/// there is never a large un-survivable break between grab nodes (the player
-/// can survive with proper planning). Tightened 2026-08-26 after large gaps
-/// left a spinner/pad as the only catch.
-pub const HOOK_X_STRIDE_MIN: f32 = 560.0;
-pub const HOOK_X_STRIDE_MAX: f32 = 700.0;
+/// Upward semi-axis. Deliberately under a rope length — climbing costs momentum.
+pub const HOP_REACH_UP: f32 = ROPE_LEN_MAX * 0.85; // 612.0
 
-// ── Difficulty curve ──────────────────────────────────────────────────────────
-// The world ramps in difficulty with distance. Hook spacing stretches slightly
-// and vertical variance grows, but strides stay within reach so there is never
-// an un-survivable gap. Additional hazards (spinners/pads/wells) are spawned at
-// their own increasing rate elsewhere in the spawner.
+/// Downward semi-axis. Over a rope length is safe: the player falls into range.
+pub const HOP_REACH_DOWN: f32 = ROPE_LEN_MAX * 1.15; // 828.0
 
-/// Distance (px) over which difficulty ramps from 0.0 → 1.0.
-pub const DIFFICULTY_RAMP_DISTANCE: f32 = 30_000.0;
-/// Extra horizontal stride added per hop at max difficulty. Kept modest so
-/// strides stay within the rope-reach envelope (HOOK_STRIDE_HARD_MAX) and never
-/// create an un-survivable gap.
-pub const DIFFICULTY_STRIDE_BONUS: f32 = 60.0;
-/// Extra vertical variance (ΔY magnitude) added per hop at max difficulty.
-pub const DIFFICULTY_Y_BONUS: f32 = 240.0;
-/// Upper bound on horizontal stride even at max difficulty. At/above the rope
-/// reach the vertical budget → 0, so cap slightly under ROPE_LEN_MAX to keep
-/// playable vertical variation.
-pub const HOOK_STRIDE_HARD_MAX: f32 = ROPE_LEN_MAX * 1.0;
+/// The strictest single radius a hop is measured against, kept for callers that
+/// want one number rather than the ellipse.
+pub const HOOK_MAX_REACH: f32 = ROPE_LEN_MAX; // 720.0
+
+/// Horizontal stride per hop as a FRACTION of `HOP_REACH_X`, at the two ends of
+/// the difficulty curve. Short strides early mean quick, forgiving chains; long
+/// strides late mean committing to most of a rope length every time. Never
+/// above 1.0, so the envelope is never left.
+pub const HOOK_STRIDE_FRAC_EASY_MIN: f32 = 0.58; // ~418 px
+pub const HOOK_STRIDE_FRAC_EASY_MAX: f32 = 0.72; // ~518 px
+pub const HOOK_STRIDE_FRAC_HARD_MIN: f32 = 0.80; // ~576 px
+pub const HOOK_STRIDE_FRAC_HARD_MAX: f32 = 0.97; // ~698 px
+
+/// Fraction of the available vertical budget a hop may spend, at the two ends
+/// of the curve. Early hops stay near the previous node's height; late hops use
+/// nearly the whole cone, so the line of nodes climbs and dives.
+pub const HOOK_VERT_FRAC_EASY: f32 = 0.45;
+pub const HOOK_VERT_FRAC_HARD: f32 = 1.00;
+
+/// Safety margin applied when the spawner clamps a hazard-avoided node back
+/// into the envelope, so float error can never leave it exactly on the edge.
+pub const HOP_REACH_MARGIN: f32 = 0.97;
 
 // ── Generation — Bounce Pads ──────────────────────────────────────────────────
 
@@ -224,9 +245,10 @@ pub const SPINNER_BLACK_MOVE_SPEED_MAX: f32 = 2.1;
 
 // ── Generation — Zones ────────────────────────────────────────────────────────
 
-/// Distance (px) at which the zone advances (Normal → Purple → Black → repeat).
-/// Increase for longer zone stretches. Decrease to cycle zones faster.
-pub const ZONE_DISTANCE_STEP:f32 = 20000.0;
+// The zone step moved to `difficulty::ZONE_CYCLE_DISTANCE`, which is authored
+// in minutes of play rather than raw pixels — 20 000 px is under 30 seconds, so
+// the "→ repeat" this comment promised was reached almost immediately and then
+// clamped away by a `.min(2)` that made it never repeat at all.
 
 /// Spinner speed multipliers per zone. BLACK_ZONE > PURPLE_ZONE > START_ZONE.
 pub const START_ZONE_SPINNER_MULT:f32 = 0.50;
@@ -517,7 +539,13 @@ pub const TURRET_PREDICT_MAX_T: f32 = 60.0;   // max lead-time clamp (ticks); ra
 pub const BULLET_POOL_SIZE:     usize = 64;
 
 // ── Boss fight ────────────────────────────────────────────────────────────────
-pub const BOSS_THRESHOLD_X:      f32   = 20_000.0; // player X that triggers boss zone entry
+/// Legacy single-fight trigger. Superseded by `mode::boss_trigger_distance`,
+/// which schedules several fights per run; kept only as the debug-warp default.
+pub const BOSS_THRESHOLD_X:      f32   = 20_000.0;
+/// Empty space between consecutive boss arenas.
+/// (Where the arenas START is `mode::BOSS_ARENA_ORIGIN_X`, which is derived
+/// from the difficulty curve so it cannot drift into the reachable level.)
+pub const BOSS_ARENA_GAP:        f32   = 40_000.0;
 pub const BOSS_ZONE_X1:          f32   = 20_000.0; // left wall of boss arena
 pub const BOSS_ZONE_X2:          f32   = 34_000.0; // right wall of boss arena (doubled)
 pub const BOSS_ENTRY_DELAY_TICKS: u32  = 180;      // 3 seconds before boss appears
@@ -695,22 +723,80 @@ pub const BUFF_MOMENTUM_CAP: f32 = 84.0;
 pub const C_BUFF_HOOK: (u8, u8, u8) = (110, 230, 255);
 
 // ── Solar flare hazard + shielded nodes ──────────────────────────────────────
-/// Probability that a freshly-spawned grab node is a shielded node (protects
-/// against solar flares).
-pub const SHIELD_HOOK_SPAWN_CHANCE: f32 = 0.03;
+//
+// A flare is a telegraphed, timed window during which the player must be
+// TETHERED to a shielded node. Proximity is not enough — committing the tether
+// is the counter-play, which makes the answer a swing decision rather than a
+// position.
+//
+// The old implementation was inert in three ways, all fixed in `solar.rs`:
+// the shelter test read every live hook rather than only tagged ones (so the
+// tag conferred nothing), the `flare_warning` / `flare_active` canvas vars were
+// written and never read by anything (so there was no telegraph and no visible
+// flare — hearts just vanished every 40 s), and the heart cost was a single
+// check on the eruption frame rather than a cost over a window.
+
 /// Tag on shielded nodes.
 pub const SHIELD_HOOK_TAG: &str = "shield_node";
-/// Shielded node colour (gold — placeholder).
+/// Shielded node colour (gold).
 pub const C_SHIELD_HOOK: (u8, u8, u8) = (255, 215, 90);
-/// Ticks between solar flares (40 s at 60 fps).
-pub const FLARE_INTERVAL: u32 = 2400;
-/// Ticks of telegraph warning before a flare erupts (2 s).
-pub const FLARE_WARN_TICKS: u32 = 120;
-/// Ticks the flare is "active" (1 s) — during this window an unshielded player
-/// loses a heart.
-pub const FLARE_ACTIVE_TICKS: u32 = 60;
-/// Player must be within this radius of a shielded node during a flare.
+
+/// Maximum world-X gap between consecutive shielded nodes.
+///
+/// Expressed in DISTANCE, not in node count, because the guarantee the flare
+/// needs is a distance one: `FLARE_SHELTER_SEARCH_AHEAD` must always find
+/// something. A node-count cadence looked equivalent and was not — at ~520 px
+/// per node, "every 20th node" put the first shelter 13 000 px into the run and
+/// the flare correctly refused to fire for the entire opening.
+///
+/// 4 800 px is ~6 s of travel and roughly every 9th node: comfortably inside
+/// the search window, frequent enough to learn from, rare enough that routing
+/// to one is a decision rather than a formality.
+pub const SHIELD_NODE_X_GAP: f32 = 4_800.0;
+
+/// Ticks of telegraph before a flare erupts (3 s at 60 fps).
+///
+/// This never shrinks with difficulty. Shortening a reaction window reads as
+/// unfair; shortening the gap between events reads as pressure, so the curve
+/// scales `FLARE_INTERVAL_*` instead.
+pub const FLARE_WARN_TICKS: u32 = 180;
+
+/// Ticks the flare stays active (5 s).
+pub const FLARE_ACTIVE_TICKS: u32 = 300;
+
+/// Ticks between damage applications while unsheltered inside a flare (2 s).
+pub const FLARE_DAMAGE_INTERVAL: u32 = 120;
+
+/// Grace before the FIRST damage tick of a flare (1 s), so a player who reads
+/// the telegraph late but reacts correctly is not punished for the read.
+pub const FLARE_DAMAGE_GRACE: u32 = 60;
+
+/// Ticks between flares at the easy and hard ends of the difficulty curve.
+pub const FLARE_INTERVAL_EASY: f32 = 5400.0; // 90 s
+pub const FLARE_INTERVAL_HARD: f32 = 2100.0; // 35 s
+
+/// Radius of a shielded node's protective dome, used for the visual only —
+/// shelter itself requires being tethered, not merely inside the ring.
 pub const FLARE_SHIELD_RADIUS: f32 = 520.0;
+
+/// How far ahead of the player a live shielded node must exist before a flare
+/// is allowed to begin its telegraph. ~7 s of travel, comfortably more than the
+/// 3 s warning, so a flare can never fire into a stretch with no shelter.
+pub const FLARE_SHELTER_SEARCH_AHEAD: f32 = 6000.0;
+/// How far behind the player a shelter still counts (backtracking is allowed).
+pub const FLARE_SHELTER_SEARCH_BEHIND: f32 = 2200.0;
+
+/// Ticks a flare's cooldown is extended by when no shelter is in range. Short,
+/// so the flare fires as soon as the world offers an answer.
+pub const FLARE_NO_SHELTER_RETRY: u32 = 90;
+
+/// Screen tints for the two flare phases (RGBA, straight alpha at full phase).
+pub const C_FLARE_WARN:   (u8, u8, u8, u8) = (255, 170,  60, 90);
+pub const C_FLARE_ACTIVE: (u8, u8, u8, u8) = (255, 226, 150, 150);
+
+/// Mega-shader bit for the player's protective dome while sheltered.
+/// Matches `BIT_ENERGY_DOME` in `wgpu_canvas`'s `animated_vfx.wgsl`.
+pub const MEGA_BIT_ENERGY_DOME: u32 = 1 << 20;
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 650;

@@ -26,7 +26,7 @@ fn play_menu_track(c: &mut Canvas, idx: usize) {
 /// *world* boxes — so menu buttons (at world y > VH) can't be clicked. Register
 /// a camera-aware click handler that converts the click to world coords and
 /// fires the button's custom event.
-fn push_menu_press_handler(canvas: &mut Canvas) {
+pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
     let registered = matches!(canvas.get_var("menu_press_handler_registered"), Some(Value::Bool(true)));
     if registered {
         return;
@@ -50,11 +50,11 @@ fn push_menu_press_handler(canvas: &mut Canvas) {
         ];
         for (name, event) in BTNS {
             if let Some(obj) = c.get_game_object(name) {
-                if world.0 >= obj.position.0
+                let hit = world.0 >= obj.position.0
                     && world.0 <= obj.position.0 + obj.size.0
                     && world.1 >= obj.position.1
-                    && world.1 <= obj.position.1 + obj.size.1
-                {
+                    && world.1 <= obj.position.1 + obj.size.1;
+                if hit {
                     // Load the profile scene directly, bypassing the custom
                     // event, so this button works even if the "goto_profile"
                     // event registration is somehow stale or missing.
@@ -261,14 +261,17 @@ fn tutorial_apply_page(c: &mut Canvas, page: i32) {
         }
     }
 
+    // Scale by virtual_scale() so the text tracks the canvas size and stays
+    // aligned with the (already virtual-scale) tutorial boxes on any resize.
     if let Some(font) = ui_font() {
+        let s = c.virtual_scale();
         if let Some(obj) = c.get_game_object_mut("tutorial_title_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 TITLES[page as usize],
                 &font,
-                54.0,
+                66.0 * s,
                 Color(220, 238, 255, 255),
-                1300.0,
+                1500.0 * s,
             )));
         }
 
@@ -276,9 +279,9 @@ fn tutorial_apply_page(c: &mut Canvas, page: i32) {
             obj.set_drawable(Box::new(ui_text_spec(
                 BODIES[page as usize],
                 &font,
-                28.0,
+                48.0 * s,
                 Color(200, 218, 236, 235),
-                1600.0,
+                1800.0 * s,
             )));
         }
 
@@ -287,9 +290,9 @@ fn tutorial_apply_page(c: &mut Canvas, page: i32) {
             obj.set_drawable(Box::new(ui_text_spec(
                 label,
                 &font,
-                18.0,
+                36.0 * s,
                 Color(245, 250, 255, 255),
-                95.0,
+                180.0 * s,
             )));
         }
     }
@@ -340,20 +343,15 @@ pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
 
     let title_w = 1600.0;
     let body_w = 1600.0;
-    let text_shift_x = -1650.0;
-    let title_extra_x = 500.0;
 
     let title_text = GameObject::build("tutorial_title_text")
         .size(title_w, 120.0)
-        .position(
-            VW * 0.5 - title_w * 0.5 + text_shift_x + title_extra_x,
-            win_y + 120.0,
-        )
+        .position(VW * 0.5 - title_w * 0.5, win_y + 120.0)
         .tag("ui")
         .build(ctx);
     let body_text = GameObject::build("tutorial_body_text")
         .size(body_w, 120.0)
-        .position(VW * 0.5 - body_w * 0.5 + text_shift_x, win_y + 330.0)
+        .position(VW * 0.5 - body_w * 0.5, win_y + 330.0)
         .tag("ui")
         .build(ctx);
 
@@ -404,6 +402,21 @@ pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
             canvas.set_camera(cam);
             tutorial_apply_page(canvas, 0);
 
+            // Re-apply the tutorial page whenever the canvas scale changes
+            // (window resize), so the text stays aligned with the boxes.
+            if !matches!(canvas.get_var("tutorial_update_registered"), Some(Value::Bool(true))) {
+                canvas.on_update(|c| {
+                    if !c.is_scene("tutorial") { return; }
+                    let cur_scale = c.virtual_scale();
+                    let last_scale = match c.get_var("tutorial_text_last_scale") { Some(Value::F32(v)) => v, _ => -1.0 };
+                    if (last_scale - cur_scale).abs() >= 0.0001 {
+                        c.set_var("tutorial_text_last_scale", cur_scale);
+                        tutorial_apply_page(c, c.get_i32("tutorial_page"));
+                    }
+                });
+                canvas.set_var("tutorial_update_registered", true);
+            }
+
             canvas.register_custom_event("tutorial_next".into(), |c| {
                 let page = c.get_i32("tutorial_page");
                 if page >= 2 {
@@ -422,9 +435,12 @@ pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
         })
 }
 
+/// The selectable modes, in `mode::GameMode::index()` order so the selector
+/// index IS the mode index — no lookup table to drift.
 pub static GAME_MODES: &[(&str, &str)] = &[
-    ("FREE ROAM", "SWING FREELY   \u{2022}   SANDBOX MODE"),
-    ("BOSS MODE", "DEFEAT BOSSES   \u{2022}   CHALLENGE MODE"),
+    (crate::mode::GameMode::Casual.name(), crate::mode::GameMode::Casual.blurb()),
+    (crate::mode::GameMode::Normal.name(), crate::mode::GameMode::Normal.blurb()),
+    (crate::mode::GameMode::BossRush.name(), crate::mode::GameMode::BossRush.blurb()),
 ];
 
 fn menu_mode_selector_img() -> image::RgbaImage {
@@ -862,8 +878,8 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             push_menu_press_handler(canvas);
 
             canvas.set_var("menu_text_dirty", true);
-            // Reset mode selection to FREE ROAM whenever the menu is entered.
-            canvas.set_var("game_mode_idx", 0i32);
+            // Normal is the core mode; Casual sits to its left, Boss Rush to its right.
+            canvas.set_var("game_mode_idx", crate::mode::GameMode::Normal.index());
 
             let selected = Arc::new(Mutex::new(0usize));
 
@@ -929,6 +945,16 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             if !menu_anim_registered {
                 canvas.on_update(|c| {
                     if !c.is_scene("menu") { return; }
+
+                    // Re-apply menu text whenever the canvas scale changes
+                    // (window resize), so labels stay aligned with their button
+                    // hit-boxes. `menu_text_dirty` is also set on scene entry.
+                    let cur_scale = c.virtual_scale();
+                    let last_scale = match c.get_var("menu_text_last_scale") { Some(Value::F32(v)) => v, _ => -1.0 };
+                    if (last_scale - cur_scale).abs() >= 0.0001 {
+                        c.set_var("menu_text_last_scale", cur_scale);
+                        c.set_var("menu_text_dirty", true);
+                    }
 
                     // ── Camera pan (shop ↔ menu) ────────────────────────
                     let target_y = c.get_f32("menu_cam_target_y");
@@ -1028,8 +1054,13 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             }
 
             canvas.register_custom_event("goto_game".into(), |c| {
-                let idx = c.get_i32("game_mode_idx").max(0) as usize;
-                c.set_var("boss_mode_active", idx == 1);
+                let idx = c.get_i32("game_mode_idx").max(0);
+                let mode = crate::mode::GameMode::from_index(idx);
+                crate::mode::set_mode(c, mode);
+                // `boss_mode_active` is now only the debug/test override, so it
+                // must NOT be set from the mode picker — `mode.has_bosses()`
+                // decides whether fights happen.
+                c.set_var("boss_mode_active", false);
                 c.load_scene("game");
             });
             // Pan camera upward into the shop region (no scene switch).
@@ -1047,18 +1078,22 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     c.set_var("menu_in_shop", false);
                 }
             });
-            // Buy a permanent extra heart with the active profile's meta currency.
+            // Legacy single-purchase event, kept so any older binding still
+            // does something sensible; the upgrade carousel is the real path.
             canvas.register_custom_event("buy_perm_heart".into(), |c| {
                 if c.get_i32("shop_active_category") != 4 { return; }
-                let bought = crate::profile::buy_permanent_heart();
-                if bought {
-                    shop::show_carousel(c, 4);
-                }
+                shop::buy_selected_upgrade(c);
             });
-            // Confirm selection for the active category and return to categories.
+            // Confirm selection for the active category. Cosmetic categories
+            // equip and return to the grid; the upgrade category buys a rank
+            // and stays put, because buying ranks is a repeated action.
             canvas.register_custom_event("shop_select".into(), |c| {
                 let sel = c.get_i32("shop_selected");
                 let cat = c.get_i32("shop_active_category");
+                if shop::is_upgrade_category(cat) {
+                    shop::buy_selected_upgrade(c);
+                    return;
+                }
                 match cat {
                     0 => c.set_var("player_char_selected", sel),
                     1 => c.set_var("player_rope_selected", sel),

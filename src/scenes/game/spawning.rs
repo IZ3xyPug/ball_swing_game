@@ -4,8 +4,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::constants::*;
 use crate::gameplay::*;
+use crate::difficulty::hazard_gap_range;
 use crate::images::*;
 use crate::state::*;
+use crate::level_gen::{clamp_into_envelope, hop_is_reachable, max_reachable_x};
 use super::helpers::*;
 
 static GWELLON_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
@@ -386,26 +388,63 @@ fn hook_overlaps_hazards(c: &Canvas, s: &State, hx: f32, hy: f32) -> bool {
     false
 }
 
-fn find_safe_hook_position(c: &Canvas, s: &State, base_x: f32, base_y: f32) -> Option<(f32, f32)> {
-    let candidates: &[(f32, f32)] = &[
+/// Search for a placement clear of pads, spinners and gravity wells that is
+/// STILL REACHABLE from the previously placed node at `(prev_x, prev_y)`.
+///
+/// Two things changed here after the reach audit:
+///
+///  * Every candidate is rejected if it leaves the hop envelope. The old
+///    version searched ±620 px of pure Y offset with no reference to the
+///    previous node, which is how a correctly generated hop turned into an
+///    810–1140 px gap on the way to the screen.
+///  * Candidates may now move in X as well as Y, and pulling a node *back*
+///    toward the previous one is tried before large vertical offsets. Reducing
+///    dx widens the vertical budget (the envelope is an ellipse), so a backward
+///    nudge often unblocks a placement that no amount of vertical travel could.
+///
+/// Returns `None` when nothing clears, and the caller keeps the base position —
+/// overlapping a hazard is recoverable, an unreachable node is not.
+fn find_safe_hook_position(
+    c: &Canvas,
+    s: &State,
+    base_x: f32,
+    base_y: f32,
+    prev_x: f32,
+    prev_y: f32,
+) -> Option<(f32, f32)> {
+    // (x offset, y offset), ordered cheapest-looking first.
+    const CANDIDATES: &[(f32, f32)] = &[
         (0.0, 0.0),
         (0.0, -100.0),
         (0.0, 100.0),
         (0.0, -220.0),
         (0.0, 220.0),
+        (-90.0, -220.0),
+        (-90.0, 220.0),
         (0.0, -300.0),
         (0.0, 300.0),
-        (0.0, -420.0),
-        (0.0, 420.0),
-        (0.0, -500.0),
-        (0.0, 500.0),
-        (0.0, -620.0),
-        (0.0, 620.0),
+        (-180.0, -300.0),
+        (-180.0, 300.0),
+        (-180.0, -420.0),
+        (-180.0, 420.0),
+        (-280.0, -420.0),
+        (-280.0, 420.0),
+        (-280.0, -520.0),
+        (-280.0, 520.0),
+        (-380.0, -560.0),
+        (-380.0, 560.0),
     ];
 
-    for (dx, dy) in candidates {
+    for (dx, dy) in CANDIDATES {
         let hx = base_x + dx;
+        // Never let avoidance walk a node backwards past the previous one.
+        if hx <= prev_x + HOOK_MIN_REACH * 0.5 {
+            continue;
+        }
         let hy = (base_y + dy).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+        if !hop_is_reachable(hx - prev_x, hy - prev_y) {
+            continue;
+        }
         if !hook_overlaps_hazards(c, s, hx, hy) {
             return Some((hx, hy));
         }
@@ -440,6 +479,18 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let mut hx = spec.x;
         let mut hy = spec.y;
 
+        // The node this hop is measured against is the last one actually
+        // PLACED, which is not the one the generator proposed — everything
+        // below is free to move `hy`, and used to do so without ever checking
+        // the result against it.
+        let (prev_x, prev_y) = (s.last_hook_x, s.last_hook_y);
+        let has_prev = prev_y.is_finite() && prev_x.is_finite() && hx > prev_x;
+        if has_prev {
+            // A hop that starts out too long in X can never be rescued in Y,
+            // so shorten it here rather than clamping a doomed value later.
+            hx = hx.min(max_reachable_x(prev_x));
+        }
+
         // Collect spinner, pad, and gwell positions before the relocation loops
         // so we can draw from s.seed (mut) without holding borrow conflicts.
         let spinner_positions: Vec<(f32, f32)> = s.spinner_live.iter()
@@ -471,7 +522,15 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
 
-        if let Some((safe_hx, safe_hy)) = find_safe_hook_position(c, &s, hx, hy) {
+        let (search_prev_x, search_prev_y) = if has_prev {
+            (prev_x, prev_y)
+        } else {
+            // No previous node yet: allow the full envelope around the base.
+            (hx - HOP_REACH_X * 0.5, hy)
+        };
+        if let Some((safe_hx, safe_hy)) =
+            find_safe_hook_position(c, &s, hx, hy, search_prev_x, search_prev_y)
+        {
             hx = safe_hx;
             hy = safe_hy;
         }
@@ -481,7 +540,12 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if (hy - s.last_hook_y).abs() < HOOK_CLOSE_Y_THRESHOLD {
             let above = s.last_hook_y - HOOK_CLOSE_Y_THRESHOLD;
             let below = s.last_hook_y + HOOK_CLOSE_Y_THRESHOLD;
-            hy = if above >= HOOK_Y_MIN { above } else { below.min(HOOK_Y_MAX) };
+            let pushed = if above >= HOOK_Y_MIN { above } else { below.min(HOOK_Y_MAX) };
+            // Only take the push if it stays reachable. A stacked pair of nodes
+            // is a cosmetic problem; an unreachable one ends the run.
+            if !has_prev || hop_is_reachable(hx - prev_x, pushed - prev_y) {
+                hy = pushed;
+            }
         }
         hy = hy.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
 
@@ -538,6 +602,23 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // Ensure hy >= HOOK_R so the hook doesn't sit at or below the floor.
         if s.gravity_dir < 0.0 { hy = hy.max(HOOK_R); }
 
+        // ── Reach backstop ───────────────────────────────────────────────────
+        // Last word on placement. Every pass above (pad clearance, the safe
+        // search, anti-stacking, the spinner and gravity-well half-chord
+        // pushes, the band clamp, the flipped-gravity floor) can move `hy`, and
+        // several of them can move it far. Whatever they decided, the node ends
+        // up somewhere the player can actually reach from the previous one.
+        if has_prev {
+            hy = clamp_into_envelope(prev_x, prev_y, hx, hy).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
+        }
+
+        // `gen_head_y` is deliberately NOT rewritten here. It is the head of the
+        // pending queue, which runs ~40 nodes ahead of this one, so assigning
+        // the just-placed Y to it would splice the generator back behind its own
+        // queue. The queue stays a nominal proposal line and the backstop above
+        // is what makes each real placement reachable; when avoidance displaces
+        // a node the next hop simply springs back toward that line.
+        s.last_hook_x = hx;
         s.last_hook_y = hy;
         s.live_hooks.push(id.clone());
         if hx > s.rightmost_x { s.rightmost_x = hx; }
@@ -578,22 +659,16 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let _rolled_buff = lcg(&mut s.seed) < BUFF_HOOK_SPAWN_CHANCE;
         let is_buff_hook = false;
 
-        let rolled_shield = lcg(&mut s.seed) < SHIELD_HOOK_SPAWN_CHANCE;
-        let last_shield_x = c.get_var("shield_hook_last_x").and_then(|v| {
-            if let Value::F32(x) = v {
-                Some(x)
-            } else if let Value::F64(x) = v {
-                Some(x as f32)
-            } else {
-                None
-            }
-        });
-        let has_shield_gap = last_shield_x
-            .map(|prev_x| (hx - prev_x).abs() >= BUFF_HOOK_MIN_X_GAP)
-            .unwrap_or(true);
-        let is_shield_hook = rolled_shield && has_shield_gap && !is_special_hook
+        // Shielded nodes are placed on a fixed node-count cadence, NOT a
+        // probability roll. A solar flare must never fire into a stretch with
+        // no shelter in it, and a deterministic cadence makes that guarantee
+        // structural instead of a race against RNG. `solar.rs` still checks
+        // that a shelter is actually in range before starting a telegraph.
+        let shield_due = (hx - s.last_shield_x) >= SHIELD_NODE_X_GAP;
+        let is_shield_hook = shield_due && !is_special_hook
             && !is_extended_hook && !is_buff_hook;
         if is_shield_hook {
+            s.last_shield_x = hx;
             c.set_var("shield_hook_last_x", Value::F32(hx));
         }
 
@@ -640,16 +715,20 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // Start off-screen on the gravity-entry side; tick_spawn_animations moves it.
             obj.position = (hx - hook_half, hook_start_y);
             obj.visible = false; // hidden until animation starts
-            obj.tags.retain(|t| t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG);
-            if asteroid_mode && !is_special_hook {
-                // Artifact GIF hook — stationary, animation frozen until grabbed.
-                obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
-                obj.set_animation(hook_artifact_anim());
-                obj.gravity = 0.0;
-                obj.momentum = (0.0, 0.0);
-                obj.rotation_momentum = 0.0;
-                obj.collision_mode = CollisionMode::NonPlatform;
-            } else if is_special_hook {
+            // Clear EVERY kind tag, not just two. These objects come from a
+            // pool: a hook recycled from a previous shielded or buff node kept
+            // its tag, so an ordinary node could still read as shelter.
+            obj.tags.retain(|t| {
+                t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG
+                    && t != BUFF_HOOK_TAG && t != SHIELD_HOOK_TAG
+            });
+            // Special KINDS are checked before the asteroid-mode presentation.
+            // With the chain the other way round, `asteroid_mode && !is_special`
+            // swallowed every buff and shielded node — and `asteroid_hooks_on`
+            // is set unconditionally at scene entry, so shielded nodes have
+            // never once existed in the built game. Their tag was computed,
+            // recorded in `shield_hook_last_x`, and then thrown away here.
+            if is_special_hook {
                 // Green special hook — uses the green artifact gif.
                 obj.tags.push(SPECIAL_HOOK_TAG.into());
                 obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
@@ -668,14 +747,25 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.collision_mode = CollisionMode::NonPlatform;
                 obj.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 18.0 });
             } else if is_shield_hook {
-                // Gold shielded node — protects against solar flares.
+                // Gold shielded node — the only shelter from a solar flare.
                 obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-                obj.tags.retain(|t| t != SHIELD_HOOK_TAG);
                 obj.tags.push(SHIELD_HOOK_TAG.into());
                 obj.animated_sprite = None;
                 obj.set_image(hook_img(C_SHIELD_HOOK.0, C_SHIELD_HOOK.1, C_SHIELD_HOOK.2));
                 obj.collision_mode = CollisionMode::NonPlatform;
                 obj.set_glow(GlowConfig { color: Color(255, 215, 90, 220), width: 14.0 });
+            } else if asteroid_mode {
+                // Ordinary node, artifact presentation — stationary, animation
+                // frozen until grabbed.
+                obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+                obj.set_animation(hook_artifact_anim());
+                obj.gravity = 0.0;
+                obj.momentum = (0.0, 0.0);
+                obj.rotation_momentum = 0.0;
+                obj.collision_mode = CollisionMode::NonPlatform;
+                if is_extended_hook {
+                    obj.tags.push(EXTENDED_HOOK_TAG.into());
+                }
             } else {
                 obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
                 if is_extended_hook {
@@ -816,7 +906,8 @@ fn spawn_pads(
         && s.pad_rightmost < s.px + GEN_AHEAD
         && !s.pad_free.is_empty()
     {
-        let gap = lcg_range(&mut s.seed, PAD_GAP_MIN, PAD_GAP_MAX);
+        let (glo, ghi) = hazard_gap_range(s.distance, PAD_GAP_MIN, PAD_GAP_MAX);
+        let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.pad_rightmost + gap;
         let raw_y = {
             let mut seed = s.seed;
@@ -927,7 +1018,8 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && s.spinner_rightmost < s.px + GEN_AHEAD
         && !s.spinner_free.is_empty()
     {
-        let gap = lcg_range(&mut s.seed, SPINNER_GAP_MIN, SPINNER_GAP_MAX);
+        let (glo, ghi) = hazard_gap_range(s.distance, SPINNER_GAP_MIN, SPINNER_GAP_MAX);
+        let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.spinner_rightmost + gap;
         let y = {
             let mut seed = s.seed;
@@ -1260,7 +1352,13 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     }
                 }
                 let hy = 650.0;
-                if let Some((safe_hx, safe_hy)) = find_safe_hook_position(c, &s, hx, hy) {
+                // Gate hooks are inserted out of sequence at the gate's own X,
+                // so the last node in the hop chain is not their predecessor.
+                // Centre the search on the base instead: this node is an EXTRA
+                // option beside the chain, never a link the player must make.
+                if let Some((safe_hx, safe_hy)) =
+                    find_safe_hook_position(c, &s, hx, hy, hx - HOP_REACH_X * 0.5, hy)
+                {
                     s.live_hooks.push(hook_id.clone());
                     Some((hook_id, safe_hx, safe_hy))
                 } else {
@@ -1332,10 +1430,13 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    // Gravity wells only appear in zone 2 (the hardest difficulty band).
+    // Gravity wells only appear in the third zone of each cycle. Outside that
+    // window the cursor rides along with the player, so when the window comes
+    // round again wells resume AHEAD of them — the old code jumped the cursor
+    // to a fixed X computed for the first (and, back then, only) zone-2 stretch,
+    // which after the first lap left the cursor stranded far behind.
     if zone_index_for_distance(s.distance) < 2 {
-        let z2_start_x = SPAWN_X + 2.0 * ZONE_DISTANCE_STEP;
-        if s.gwell_rightmost < z2_start_x { s.gwell_rightmost = z2_start_x; }
+        if s.gwell_rightmost < s.px { s.gwell_rightmost = s.px; }
         return;
     }
     let mut spawned = 0usize;
@@ -1343,7 +1444,8 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && s.gwell_rightmost < s.px + GEN_AHEAD
         && !s.gwell_free.is_empty()
     {
-        let gap = lcg_range(&mut s.seed, GWELL_GAP_MIN, GWELL_GAP_MAX);
+        let (glo, ghi) = hazard_gap_range(s.distance, GWELL_GAP_MIN, GWELL_GAP_MAX);
+        let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.gwell_rightmost + gap;
 
         // Dual Y-band: 0–500 (top) or 1000–1500 (bottom).
@@ -1400,7 +1502,8 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && s.turret_rightmost < s.px + GEN_AHEAD
         && !s.turret_free.is_empty()
     {
-        let gap = lcg_range(&mut s.seed, TURRET_GAP_MIN, TURRET_GAP_MAX);
+        let (glo, ghi) = hazard_gap_range(s.distance, TURRET_GAP_MIN, TURRET_GAP_MAX);
+        let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.turret_rightmost + gap;
         // Spawn 200y above the last hook position (clamped to screen bounds).
         let y = (s.last_hook_y - 200.0).clamp(50.0, VH - 50.0);
@@ -1448,6 +1551,9 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // so they feel special. Rocket pads do NOT spawn while inside space mode.
 
 fn spawn_rocket_pads(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Boss Rush is a timed mode; a bonus area of uncontrolled length has no
+    // place in it.
+    if !crate::mode::current_mode(c).allows_space_zone() { return; }
     let mut s = st.lock().unwrap();
     if s.in_space_mode { return; }
 

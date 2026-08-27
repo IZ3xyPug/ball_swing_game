@@ -9,6 +9,8 @@ mod hud;
 mod poisson;
 mod state;
 mod achievements;
+mod difficulty;
+mod mode;
 mod level_gen;
 mod gameplay;
 mod objects;
@@ -51,6 +53,11 @@ impl App {
         canvas.add_scene(build_achievements_scene(ctx));
         canvas.add_scene(build_stats_scene(ctx));
         canvas.add_scene(build_daily_reward_scene(ctx));
+        // Register the menu press handler at app start (not in the menu on_enter)
+        // so it's on the live canvas that receives input. In the GUI the menu
+        // on_enter registration didn't persist for mouse presses, so this is the
+        // reliable point. It guards on is_scene("menu") so it's harmless here.
+        menu::push_menu_press_handler(&mut canvas);
         canvas.load_scene("profile");
         canvas
     }

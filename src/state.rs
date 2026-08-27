@@ -138,8 +138,13 @@ pub struct State {
     /// Y cursor for the hop-based generator. Tracks the Y of the last generated
     /// hook so the next batch continues from the correct position.
     pub gen_head_y:  f32,
-    /// Y-position of the most recently placed grab point. Used as a safety net
-    /// to nudge hooks that land too close vertically after Y clamping.
+    /// Position of the most recently *placed* grab point — the value after the
+    /// spawner's hazard-avoidance passes, which is not the value the generator
+    /// proposed. Every reach check has to be made against this, not against
+    /// `gen_head_*`: those two used to drift apart with nothing reconciling
+    /// them, so the generator computed each hop from a node that did not exist
+    /// at the height it thought it did.
+    pub last_hook_x: f32,
     pub last_hook_y: f32,
 
     /// Shared Poisson-disk sampler — tracks all placed pad/spinner centres so
@@ -468,6 +473,13 @@ pub struct State {
     pub space_visited: bool,
     /// True if this run defeated the boss (used for meta-currency bonus).
     pub boss_killed: bool,
+    /// Index of the NEXT scheduled fight (0-based). Advances on each victory,
+    /// so `mode::boss_trigger_distance` can drive a whole run of them.
+    pub boss_index: u32,
+    /// Distance the player had travelled when the current fight began, so they
+    /// resume the level exactly where they left it rather than at the arena.
+    pub boss_return_x: f32,
+    pub boss_return_y: f32,
     /// Coins banked during the current space visit (lost if oxygen runs out).
     pub space_coins_collected: u32,
     /// Solar flare hazard: ticks until the next flare.
@@ -478,4 +490,32 @@ pub struct State {
     pub flare_active: bool,
     /// Remaining ticks of the active flare window.
     pub flare_active_ticks: u32,
+    /// Ticks until the next damage application inside an active flare. Damage
+    /// is a cadence across the window, not a single check on the eruption
+    /// frame, so shelter reached mid-flare saves the remaining ticks.
+    pub flare_damage_timer: u32,
+    /// World X of the most recently placed shielded node. Shielded nodes are
+    /// placed on a fixed DISTANCE cadence rather than a probability roll, so a
+    /// flare can never fire into a stretch that has no shelter in it.
+    pub last_shield_x: f32,
+
+    // ── Permanent (meta-bought) upgrades, resolved once at run start ─────────
+    // Held as multipliers/counts rather than re-read from the profile every
+    // frame: a run should play by the ranks it started with, and the profile
+    // is behind a mutex that gameplay has no business locking per tick.
+    /// Tether reach multiplier from LONG LINE.
+    pub perm_reach_mult: f32,
+    /// Top-speed multiplier from FLYWHEEL.
+    pub perm_momentum_mult: f32,
+    /// Coin pickup radius multiplier from MAGNETISM.
+    pub perm_magnet_mult: f32,
+    /// Flare damage ticks SUNPROOFING can absorb — refilled at each new flare.
+    pub perm_flare_wards: u32,
+    pub flare_wards_left: u32,
+    /// Checkpoint respawns left that cost no heart (SECOND WIND).
+    pub free_respawns_left: u32,
+    /// Run telemetry for the flare system, read by the headless harness.
+    pub flares_fired: u32,
+    pub flare_hearts_lost: u32,
+    pub flare_ticks_sheltered: u32,
 }

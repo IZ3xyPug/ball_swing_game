@@ -195,7 +195,7 @@ pub fn trigger_flip(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Im
 
 fn tick_coin_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    let magnet_r = COIN_MAGNET_RADIUS;
+    let magnet_r = crate::gameplay::player_magnet_radius(&s);
     let live = s.coin_live.clone();
     let mut newly_locked: Vec<String> = Vec::new();
 
