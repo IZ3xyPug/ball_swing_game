@@ -673,7 +673,7 @@ pub const ECLIPSE_WARN_FRACTION: f32 = 0.10;
 /// decoration rather than the thing you see by. Low enough now that outside the
 /// lamp there is effectively nothing — but not zero, because the danger floor
 /// has to stay findable.
-pub const ECLIPSE_MIN_AMBIENT: f32 = 0.03;
+pub const ECLIPSE_MIN_AMBIENT: f32 = 0.22;
 /// Fraction of the darkening ramp by which full darkness is reached. Past this
 /// the world holds at `ECLIPSE_MIN_AMBIENT` instead of continuing to creep
 /// down, so most of the eclipse is spent AT its look rather than approaching it.
@@ -740,6 +740,29 @@ pub const ECLIPSE_LIGHT_REFRESH_TICKS: u32 = 6;
 /// and shadows are only visible inside the lamp anyway, so the nearest 20 are
 /// the only ones that could have been seen.
 pub const ECLIPSE_MAX_SHADOW_CASTERS: usize = 20;
+
+/// Whether the eclipse drives the engine's point-light system.
+///
+/// OFF, pending an unresolved question about what space lights live in.
+/// Established by reading the render path:
+///   * every `Item::Image` becomes a `LitSprite` when lighting is on, so the
+///     background IS lit geometry and a light pool should be possible;
+///   * lighting is per-fragment (`in.frag_pos.xy`);
+///   * falloff is `1 - smoothstep(0, radius, dist)` with a hard cutoff, and the
+///     accumulator clamps, so high intensity gives a saturated pool.
+/// NOT established: `quartz/src/canvas/core.rs` transforms light positions into
+/// LOGICAL screen space (`(world - cam) * scale + pad`, radius `*= scale`),
+/// while `lit_rectangle.wgsl` compares that against `@builtin(position).xy`,
+/// which is the physical framebuffer pixel. If those differ by the display's
+/// scale factor then every light sits at a fraction of its intended position
+/// with a proportionally small radius — which is what the marker lights looked
+/// like: soft blobs offset from the objects they belong to, shifting as the
+/// camera moves, and no pool around the player at all.
+///
+/// Until that is settled the eclipse uses only what is verified to work in this
+/// game: ambient darkening plus the banner. Flip this back on once the space
+/// question is answered, not before.
+pub const ECLIPSE_USE_POINT_LIGHTS: bool = false;
 
 /// Gravity wells light themselves rather than casting shadows: they are a
 /// hazard the player must see coming even when the lamp is nowhere near them,

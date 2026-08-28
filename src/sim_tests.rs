@@ -962,18 +962,28 @@ fn the_eclipse_goes_fully_dark_partway_through() {
         1.0 + (ECLIPSE_MIN_AMBIENT - 1.0) * eased
     };
 
-    // Halfway between the start of the approach and the release point.
+    // Halfway between the start of the approach and the release point the world
+    // must be visibly dark. The exact floor depends on whether the player's lamp
+    // is doing any work: with `ECLIPSE_USE_POINT_LIGHTS` off there is nothing to
+    // see by, so the floor has to stay playable.
     let mid = BOSS_ECLIPSE_RELEASE + (BOSS_ECLIPSE_RANGE - BOSS_ECLIPSE_RELEASE) * 0.5;
+    let ceiling = if ECLIPSE_USE_POINT_LIGHTS { 0.12 } else { 0.35 };
     assert!(
-        ambient_at(mid) < 0.12,
-        "still {:.2} ambient at the midpoint — not dark enough to need the lamp",
+        ambient_at(mid) < ceiling,
+        "still {:.2} ambient at the midpoint — the eclipse is not reading as dark",
         ambient_at(mid)
     );
     // And it holds there rather than continuing to creep.
     assert!(ambient_at(BOSS_ECLIPSE_RELEASE) <= ambient_at(mid) + 0.01);
     // Never pitch black: the danger floor has to stay findable.
     assert!(ECLIPSE_MIN_AMBIENT > 0.0, "full black hides the death floor");
-    assert!(ECLIPSE_MIN_AMBIENT < 0.08, "floor ambient is too bright for an eclipse");
+    // Without a working lamp the floor must stay playable; with one it can go
+    // much lower, because the lamp is then what the player sees by.
+    let floor_max = if ECLIPSE_USE_POINT_LIGHTS { 0.08 } else { 0.30 };
+    assert!(
+        ECLIPSE_MIN_AMBIENT < floor_max,
+        "floor ambient {ECLIPSE_MIN_AMBIENT} is too bright to read as an eclipse"
+    );
     // Full light before the warning has landed.
     assert!(ambient_at(BOSS_ECLIPSE_RANGE) > 0.99);
 }

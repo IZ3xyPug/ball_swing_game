@@ -103,6 +103,9 @@ pub fn tick_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Begin / end ──────────────────────────────────────────────────────────────
 
 fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    if !ECLIPSE_USE_POINT_LIGHTS {
+        return;
+    }
     if !c.has_lighting() {
         // Lighting is enabled at scene entry, but never assume — without it the
         // eclipse is a banner and nothing else, which is still better than a
@@ -178,7 +181,7 @@ fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     c.set_var("eclipse_active", false);
     c.set_var("eclipse_t", Value::F32(0.0));
 
-    if c.has_lighting() {
+    if ECLIPSE_USE_POINT_LIGHTS && c.has_lighting() {
         c.set_light_enabled(PLAYER_LIGHT, false);
         for i in 0..NODE_LIGHT_COUNT {
             c.set_light_enabled(&node_light_id(i), false);
@@ -226,6 +229,9 @@ fn drive_darkness(c: &mut Canvas, dark: f32) {
 // ── Lights ───────────────────────────────────────────────────────────────────
 
 fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: f32) {
+    if !ECLIPSE_USE_POINT_LIGHTS {
+        return;
+    }
     if !c.has_lighting() {
         return;
     }
