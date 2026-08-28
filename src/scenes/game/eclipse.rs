@@ -156,10 +156,14 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     c.set_light_enabled(PLAYER_LIGHT, true);
 
 
-    // A bounded pool of marker lights. Bounded because the lighting config caps
-    // at 64 and the boss fight wants a chunk of those for its bolts — one light
-    // per live node would blow the budget the moment the node count rises.
-    for i in 0..NODE_LIGHT_COUNT {
+    // ONE LIGHT PER HOOK POOL SLOT, attached to that slot's object.
+    //
+    // Not a shared pool repositioned onto the nearest few: that has to re-rank
+    // as the player moves, and every re-rank switches lights on and off, which
+    // is what made nodes appear to light up and go dark as you passed them.
+    // Attached lights follow their object for free and never change identity,
+    // so all a frame has to do is match `enabled` to `visible`.
+    for i in 0..HOOK_POOL_SIZE {
         let id = node_light_id(i);
         if c.get_light(&id).is_none() {
             let mut ls = LightSource::new(
@@ -171,8 +175,8 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             );
             ls.casts_shadows = false;
             c.add_light(ls);
+            c.attach_light(&id, &format!("hook_{i}"), (0.0, 0.0));
         }
-        c.set_light_enabled(&id, true);
     }
 
     // Gravity wells light THEMSELVES. They are a hazard the player has to see
@@ -191,8 +195,8 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             );
             ls.casts_shadows = false;
             c.add_light(ls);
+            c.attach_light(&id, &format!("gwell_{i}"), (0.0, 0.0));
         }
-        c.set_light_enabled(&id, true);
     }
 
     let _ = st;
@@ -209,7 +213,7 @@ fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     if ECLIPSE_USE_POINT_LIGHTS && c.has_lighting() {
         c.set_light_enabled(PLAYER_LIGHT, false);
-        for i in 0..NODE_LIGHT_COUNT {
+        for i in 0..HOOK_POOL_SIZE {
             c.set_light_enabled(&node_light_id(i), false);
         }
         for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
@@ -276,15 +280,40 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
         light.intensity = ECLIPSE_PLAYER_LIGHT_INTENSITY * (0.70 + 0.30 * fall);
     }
 
-    // Marker lights on the nearest live grab nodes. Nodes only: pads, spinners
-    // and wells stay unlit so the player is finding their ROUTE by light and
-    // still finding the hazards by the player lamp.
-    //
-    // Refreshed on a cadence, not every frame. Collecting every live node,
-    // measuring it and sorting the result is O(n log n) with a fresh allocation,
-    // and at 60 Hz alongside the shadow pass it was the bulk of the eclipse's
-    // frame cost. Nodes drift slowly relative to the player, so a few frames of
-    // staleness is invisible.
+    // Markers: every pool slot has its own attached light, so a frame only has
+    // to match `enabled` to `visible` and set the brightness. No ranking, no
+    // sort, no allocation — and nothing pops as the player moves.
+    let node_i = ECLIPSE_NODE_LIGHT_INTENSITY * fall;
+    for i in 0..HOOK_POOL_SIZE {
+        let vis = c
+            .get_game_object(&format!("hook_{i}"))
+            .map(|o| o.visible)
+            .unwrap_or(false);
+        let id = node_light_id(i);
+        c.set_light_enabled(&id, vis);
+        if vis {
+            if let Some(light) = c.get_light_mut(&id) {
+                light.intensity = node_i;
+            }
+        }
+    }
+    let well_i = ECLIPSE_GWELL_LIGHT_INTENSITY * fall;
+    for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
+        let vis = c
+            .get_game_object(&format!("gwell_{i}"))
+            .map(|o| o.visible)
+            .unwrap_or(false);
+        let id = gwell_light_id(i);
+        c.set_light_enabled(&id, vis);
+        if vis {
+            if let Some(light) = c.get_light_mut(&id) {
+                light.intensity = well_i;
+            }
+        }
+    }
+
+    // Shadow casters still refresh on a cadence: that scan DOES rank by
+    // distance, because the renderer can only upload 32 occluders.
     let due = {
         let mut s = st.lock().unwrap();
         s.eclipse_light_timer = s.eclipse_light_timer.saturating_sub(1);
@@ -295,78 +324,8 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
             false
         }
     };
-
     if due {
-        // Reuse the buffer rather than allocating one per refresh.
-        let mut nodes = std::mem::take(&mut st.lock().unwrap().eclipse_node_buf);
-        nodes.clear();
-        {
-            let s = st.lock().unwrap();
-            for id in &s.live_hooks {
-                let Some(o) = c.get_game_object(id) else { continue };
-                if !o.visible {
-                    continue;
-                }
-                let hx = o.position.0 + o.size.0 * 0.5;
-                let hy = o.position.1 + o.size.1 * 0.5;
-                // Only nodes that could plausibly be lit are worth ranking.
-                if (hx - px).abs() > ECLIPSE_PLAYER_LIGHT_R || (hy - py).abs() > ECLIPSE_PLAYER_LIGHT_R {
-                    continue;
-                }
-                nodes.push(((hx - px) * (hx - px) + (hy - py) * (hy - py), hx, hy));
-            }
-        }
-        nodes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-        for i in 0..NODE_LIGHT_COUNT {
-            let id = node_light_id(i);
-            match nodes.get(i) {
-                Some(&(_, hx, hy)) => {
-                    c.set_light_position(&id, hx, hy);
-                    c.set_light_enabled(&id, true);
-                }
-                None => c.set_light_enabled(&id, false),
-            }
-        }
-        st.lock().unwrap().eclipse_node_buf = nodes;
-
-        // Nearest wells get a self-light so they stay readable outside the lamp.
-        let wells: Vec<String> = st.lock().unwrap().gwell_live.clone();
-        let mut ranked: Vec<(f32, f32, f32)> = wells
-            .iter()
-            .filter_map(|id| c.get_game_object(id))
-            .filter(|o| o.visible)
-            .map(|o| {
-                let cx = o.position.0 + o.size.0 * 0.5;
-                let cy = o.position.1 + o.size.1 * 0.5;
-                ((cx - px) * (cx - px) + (cy - py) * (cy - py), cx, cy)
-            })
-            .collect();
-        ranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
-            let id = gwell_light_id(i);
-            match ranked.get(i) {
-                Some(&(_, cx, cy)) => {
-                    c.set_light_position(&id, cx, cy);
-                    c.set_light_enabled(&id, true);
-                }
-                None => c.set_light_enabled(&id, false),
-            }
-        }
-
         set_shadow_casters(c, st, fall > 0.05);
-    }
-
-    // Intensity is cheap and wants to be smooth, so it still updates every frame.
-    for i in 0..NODE_LIGHT_COUNT {
-        if let Some(light) = c.get_light_mut(&node_light_id(i)) {
-            light.intensity = ECLIPSE_NODE_LIGHT_INTENSITY * fall;
-        }
-    }
-    for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
-        if let Some(light) = c.get_light_mut(&gwell_light_id(i)) {
-            light.intensity = ECLIPSE_GWELL_LIGHT_INTENSITY * fall;
-        }
     }
 }
 

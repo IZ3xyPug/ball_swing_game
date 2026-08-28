@@ -716,22 +716,27 @@ pub const LIGHT_NDL_2D: f32 = 0.4472136;
 pub const PLAYER_TRAIL_LIFETIME_S: f32 = 0.40;
 pub const ECLIPSE_LAMP_REF_SPEED: f32 = 45.0;
 pub const ECLIPSE_LAMP_MARGIN: f32 = 220.0;
-pub const ECLIPSE_PLAYER_LIGHT_R: f32 =
-    PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED + ECLIPSE_LAMP_MARGIN;
-/// Distance out to which the lamp fully restores what it touches.
-pub const ECLIPSE_LAMP_SATURATE_TO: f32 =
+/// The lamp is deliberately much WIDER than the trail it has to cover.
+///
+/// `atten = 1 - smoothstep(0, radius, dist)` is steepest in the middle of its
+/// range, so the only way to keep the trail evenly lit without over-driving the
+/// centre is to put the trail in the gentle inner part of the curve and let the
+/// steep part fall outside it. At 2.4x the trail length the far end of the trail
+/// still holds ~62% brightness while the screen edges go properly dark.
+pub const ECLIPSE_LAMP_TRAIL_LEN: f32 =
     PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
+pub const ECLIPSE_PLAYER_LIGHT_R: f32 = ECLIPSE_LAMP_TRAIL_LEN * 2.4;
 
-/// Intensity that fully restores everything out to `ECLIPSE_LAMP_SATURATE_TO`,
-/// then fades to nothing at the radius. Derived from the model, including the
-/// `ndl` factor that the previous pass left out — which is why a value computed
-/// the same way but 0.447x too small produced a pool that only reached ~740 px.
-const fn lamp_intensity() -> f32 {
-    let t = ECLIPSE_LAMP_SATURATE_TO / ECLIPSE_PLAYER_LIGHT_R;
-    let atten = 1.0 - t * t * (3.0 - 2.0 * t);
-    1.0 / (LIGHT_NDL_2D * atten)
-}
-pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = lamp_intensity();
+/// Intensity that brings a sprite at the lamp's centre to EXACTLY its authored
+/// brightness — `accum = ndl * intensity = 1.0`.
+///
+/// This is a ceiling, not a target to exceed. Because `lit = clamp(base * accum)`,
+/// any `accum` above 1 pushes a sprite's channels toward white, and the player
+/// ball is light-coloured so it clips first: the previous pass drove `accum` to
+/// ~13 chasing an evenly-lit pool and turned the player into a white disc. The
+/// player must keep its own colour, so 1.0 is the hard ceiling and the pool's
+/// gradient is spent on the way OUT, not on over-driving the centre.
+pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 1.0 / LIGHT_NDL_2D;
 
 /// Ambient at the darkest point. Multiplicative, so this IS the fraction of its
 /// authored brightness that an unlit sprite keeps: 0.06 leaves obstacles as
@@ -741,16 +746,30 @@ pub const ECLIPSE_MIN_AMBIENT: f32 = 0.06;
 /// Fraction of the darkening ramp by which full darkness is reached, after
 /// which it holds — so most of the eclipse is spent AT its look.
 
-/// Marker lights. Enough to restore a small sprite to full (`1 / ndl` ≈ 2.24)
+/// Marker lights. Enough to restore a small sprite to full (`1 / ndl` = 2.236)
 /// so a node reads clearly, without the reach to light anything around it.
+///
+/// ONE PER POOL SLOT, attached to the object and toggled by visibility — not a
+/// shared pool repositioned onto the nearest few. A shared pool has to re-rank
+/// as the player moves, and every re-rank visibly switches lights on and off:
+/// nodes appearing to light up and go dark as you pass them, and marker light
+/// vanishing when you come over the top of a node because the ranking changed
+/// rather than because anything moved away.
 pub const ECLIPSE_NODE_LIGHT_R: f32 = 300.0;
-pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 2.3;
+pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 1.0 / LIGHT_NDL_2D;
+
+/// Lighting capacity. `LightingConfig::default()` caps at 64, but the GPU
+/// uniform and the shader loop both hold 256 — and `emit_lights` silently
+/// `take`s the first `max_lights` from a HashMap, so exceeding the cap drops an
+/// ARBITRARY subset. Sized for a light on every hook and gravity-well pool slot
+/// plus the boss fight's own, with headroom.
+pub const LIGHTING_MAX_LIGHTS: usize = 160;
 /// Gravity wells light themselves rather than casting shadows: a well-shaped
 /// hole in the dark reads as geometry, not danger, and one must be visible
 /// before the lamp reaches it.
-pub const ECLIPSE_GWELL_LIGHT_COUNT: usize = 6;
+pub const ECLIPSE_GWELL_LIGHT_COUNT: usize = GWELL_POOL_SIZE;
 pub const ECLIPSE_GWELL_LIGHT_R: f32 = 420.0;
-pub const ECLIPSE_GWELL_LIGHT_INTENSITY: f32 = 2.8;
+pub const ECLIPSE_GWELL_LIGHT_INTENSITY: f32 = 1.0 / LIGHT_NDL_2D;
 
 /// How many objects may be flagged as shadow occluders at once.
 ///

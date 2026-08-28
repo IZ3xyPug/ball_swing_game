@@ -830,63 +830,82 @@ fn the_boss_approach_is_long_enough_to_read() {
 }
 
 #[test]
-fn the_eclipse_lamp_restores_the_whole_trail() {
-    // Encodes the traced lighting model, so a future edit that forgets any part
-    // of it fails here rather than on screen:
-    //
+fn the_eclipse_lamp_never_blows_out_what_it_lights() {
+    // The model, traced:
     //   accum = ambient + color * ndl * intensity * atten
     //   lit   = clamp(base_color * accum, 0, 1)      <- MULTIPLICATIVE
-    //   ndl   = 0.4472 constant in 2D (flat normal map, no directional term)
+    //   ndl   = 0.4472 constant in 2D
     //   atten = 1 - smoothstep(0, radius, dist), hard cutoff at radius
     //
-    // "Restoration" below is `accum` clamped to 1: the fraction of its authored
-    // brightness a sprite keeps. 1.0 means it looks normal; 0 means it is left
-    // at ambient. The lamp cannot make anything BRIGHTER than its own art.
-    let restoration = |d: f32| {
+    // Because `lit` clamps, any accum ABOVE 1 pushes a sprite toward white. The
+    // player ball is light-coloured and clips first — driving accum to ~13 to
+    // chase an evenly-lit pool turned it into a white disc. 1.0 is a ceiling.
+    let accum = |d: f32| {
         let t = (d / ECLIPSE_PLAYER_LIGHT_R).clamp(0.0, 1.0);
-        let atten = 1.0 - t * t * (3.0 - 2.0 * t);
-        (LIGHT_NDL_2D * ECLIPSE_PLAYER_LIGHT_INTENSITY * atten).min(1.0)
+        LIGHT_NDL_2D * ECLIPSE_PLAYER_LIGHT_INTENSITY * (1.0 - t * t * (3.0 - 2.0 * t))
     };
 
-    let trail = PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
-
-    // The whole trail sits in fully-restored light. Dropping the `ndl` factor
-    // costs a 0.447x on intensity and pulls this edge in to ~740 px, which is
-    // exactly the "trail lights up near the player, rest is dark" report.
     assert!(
-        restoration(trail * 0.99) >= 1.0,
-        "the far end of the trail is only {:.2} restored",
-        restoration(trail * 0.99)
+        (accum(0.0) - 1.0).abs() < 0.01,
+        "the lamp centre sits at accum {:.2}; anything above 1.0 washes the player white",
+        accum(0.0)
     );
-    // A fade before the edge rather than a hard ring, and nothing beyond it.
-    assert!(restoration(ECLIPSE_PLAYER_LIGHT_R * 0.95) < 1.0, "no soft edge at all");
-    assert_eq!(restoration(ECLIPSE_PLAYER_LIGHT_R), 0.0, "light leaks past the radius");
+    // Never exceeds it anywhere, at any distance.
+    for i in 0..=100 {
+        let d = ECLIPSE_PLAYER_LIGHT_R * (i as f32 / 100.0);
+        assert!(accum(d) <= 1.001, "accum {:.2} at {d:.0} px would blow out", accum(d));
+    }
 
-    // Darkness has to exist on screen.
+    // The trail has to stay clearly lit. `atten` is steepest mid-range, so the
+    // lamp is deliberately much wider than the trail to keep the trail in the
+    // gentle inner part of the curve.
+    let trail = ECLIPSE_LAMP_TRAIL_LEN;
     assert!(
-        ECLIPSE_PLAYER_LIGHT_R * 2.0 < VW * 0.75,
-        "the lit pool spans the viewport"
+        ECLIPSE_PLAYER_LIGHT_R > trail * 2.0,
+        "the lamp is not wide enough to keep the trail off the steep part of the falloff"
     );
-
-    // The `ndl` factor must be carried, not dropped. This is the specific
-    // mistake that made the previous two attempts wrong.
-    let naive = 1.0 / (1.0 - {
-        let t = trail / ECLIPSE_PLAYER_LIGHT_R;
-        t * t * (3.0 - 2.0 * t)
-    });
     assert!(
-        ECLIPSE_PLAYER_LIGHT_INTENSITY > naive * 1.5,
-        "intensity {ECLIPSE_PLAYER_LIGHT_INTENSITY:.1} looks like it was derived without the \
-         ndl factor (naive would be {naive:.1})"
+        accum(trail) > 0.5,
+        "the far end of the trail is only {:.2} lit",
+        accum(trail)
     );
 
-    // Markers restore their own sprite without reaching past it.
+    // And darkness still exists on screen: the viewport half-width must land in
+    // the dim end of the curve, and nothing is lit past the radius.
+    assert!(accum(VW * 0.5) < 0.25, "the screen edges are still {:.2} lit", accum(VW * 0.5));
+    assert_eq!(accum(ECLIPSE_PLAYER_LIGHT_R), 0.0, "light leaks past the radius");
+}
+
+#[test]
+fn every_node_and_well_slot_has_its_own_light() {
+    // A shared pool repositioned onto the nearest few has to re-rank as the
+    // player moves, and every re-rank switches lights on and off — nodes
+    // appearing to light and go dark as you pass them. One light per POOL SLOT,
+    // attached to the object, has stable identity and never pops.
+    //
+    // `LightingConfig::default()` caps at 64 while the GPU uniform and the
+    // shader loop both hold 256, and `emit_lights` silently `take`s the first
+    // `max_lights` out of a HashMap — so exceeding the cap drops an arbitrary
+    // subset rather than failing.
+    const GPU_MAX_LIGHTS: usize = 256;
+    let eclipse = HOOK_POOL_SIZE + ECLIPSE_GWELL_LIGHT_COUNT + 1 /* player lamp */;
     assert!(
-        ECLIPSE_NODE_LIGHT_INTENSITY * LIGHT_NDL_2D >= 1.0,
-        "node markers cannot even restore themselves to full"
+        LIGHTING_MAX_LIGHTS >= eclipse,
+        "capacity {LIGHTING_MAX_LIGHTS} cannot hold the eclipse's {eclipse} lights"
     );
-    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.4, "markers reach too far");
-    assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.5);
+    // Headroom for the boss fight's own lights on top.
+    assert!(
+        LIGHTING_MAX_LIGHTS - eclipse >= 25,
+        "no headroom left for the boss fight's lights"
+    );
+    assert!(LIGHTING_MAX_LIGHTS <= GPU_MAX_LIGHTS, "capacity exceeds the GPU uniform");
+
+    // Markers restore their own sprite exactly, and no further.
+    assert!(
+        (ECLIPSE_NODE_LIGHT_INTENSITY * LIGHT_NDL_2D - 1.0).abs() < 0.01,
+        "node markers do not restore to exactly normal brightness"
+    );
+    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.2, "markers reach too far");
 }
 
 #[test]
@@ -1048,17 +1067,23 @@ fn shadow_casters_stay_under_the_renderer_limit() {
 }
 
 #[test]
-fn the_eclipse_light_budget_fits() {
-    // The lighting config caps at 64 lights. The eclipse must fit with room for
-    // the boss fight's own lights, even though the two never overlap in time.
-    const MAX_LIGHTS: usize = 64;
-    let eclipse = 1 /* lamp */ + 16 /* node markers */ + ECLIPSE_GWELL_LIGHT_COUNT;
-    assert!(
-        eclipse < MAX_LIGHTS / 2,
-        "the eclipse claims {eclipse} of {MAX_LIGHTS} lights"
-    );
-    // Well lights are markers, not illumination — dimmer than the player lamp.
-    assert!(ECLIPSE_GWELL_LIGHT_INTENSITY < ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.5);
-    // And they must not reach as far as the lamp does.
-    assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R);
+fn markers_are_separated_by_reach_not_by_brightness() {
+    // Every light in the eclipse restores its subject to exactly normal
+    // brightness — none of them may exceed it, because `lit` clamps and going
+    // past 1.0 washes a sprite toward white. So what distinguishes a marker
+    // from the lamp is RADIUS, not intensity.
+    for (name, i) in [
+        ("player lamp", ECLIPSE_PLAYER_LIGHT_INTENSITY),
+        ("node marker", ECLIPSE_NODE_LIGHT_INTENSITY),
+        ("well marker", ECLIPSE_GWELL_LIGHT_INTENSITY),
+    ] {
+        assert!(
+            (i * LIGHT_NDL_2D - 1.0).abs() < 0.02,
+            "{name} restores to {:.2} of normal, not 1.0",
+            i * LIGHT_NDL_2D
+        );
+    }
+    // Markers illuminate themselves; only the lamp lights an area.
+    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.2);
+    assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.25);
 }

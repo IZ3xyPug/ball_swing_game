@@ -350,7 +350,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // darkness. Default ambient is full-bright, so normal play is
             // unchanged.
             if !canvas.has_lighting() {
-                canvas.enable_lighting(LightingConfig::default());
+                canvas.enable_lighting(LightingConfig {
+                max_lights: LIGHTING_MAX_LIGHTS,
+                ..LightingConfig::default()
+            });
                 canvas.add_light(LightSource::new(
                     "__player_light",
                     (0.0, 0.0),
