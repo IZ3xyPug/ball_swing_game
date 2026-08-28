@@ -725,7 +725,7 @@ pub const ECLIPSE_LAMP_MARGIN: f32 = 220.0;
 /// still holds ~62% brightness while the screen edges go properly dark.
 pub const ECLIPSE_LAMP_TRAIL_LEN: f32 =
     PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
-pub const ECLIPSE_PLAYER_LIGHT_R: f32 = ECLIPSE_LAMP_TRAIL_LEN * 2.4;
+pub const ECLIPSE_PLAYER_LIGHT_R: f32 = 1200.0;
 
 /// Intensity that brings a sprite at the lamp's centre to EXACTLY its authored
 /// brightness — `accum = ndl * intensity = 1.0`.
@@ -736,12 +736,48 @@ pub const ECLIPSE_PLAYER_LIGHT_R: f32 = ECLIPSE_LAMP_TRAIL_LEN * 2.4;
 /// ~13 chasing an evenly-lit pool and turned the player into a white disc. The
 /// player must keep its own colour, so 1.0 is the hard ceiling and the pool's
 /// gradient is spent on the way OUT, not on over-driving the centre.
-pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 1.0 / LIGHT_NDL_2D;
+/// Intensity of the player's main lamp.
+///
+/// Taken from the implementation that actually worked (radius 1200, intensity
+/// 4.0). Above `1/ndl` it does push a lit sprite past its own colour — but with
+/// the night-mode post pass that is the POINT: the bloom threshold picks up the
+/// over-bright pixels and spreads them, which is what makes the pool visible on
+/// dark art at all.
+pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 4.0;
+pub const ECLIPSE_LAMP_COLOR: (u8, u8, u8, u8) = (180, 255, 220, 255);
+pub const ECLIPSE_TRAIL_COLOR: (u8, u8, u8, u8) = (170, 255, 170, 200);
+
+/// Lights spaced BACK ALONG the trail: (x offset, radius, intensity).
+///
+/// One lamp cannot light a trail evenly — `atten` falls off from a single
+/// origin, so the trail always dims out behind the player however wide the lamp
+/// is. A chain keeps it lit along its length. None of these cast shadows; only
+/// the main lamp does, so the shadows stay defined rather than smeared.
+pub const ECLIPSE_TRAIL_LIGHTS: &[(f32, f32, f32)] = &[
+    (-60.0,  420.0, 2.2),
+    (-50.0,  300.0, 2.0),
+    (-120.0, 300.0, 1.5),
+    (-200.0, 300.0, 1.0),
+];
+
+// ── Night-mode post pass ─────────────────────────────────────────────────────
+// The piece every earlier attempt missed. Quartz lighting is multiplicative and
+// cannot draw a glow on dark art; this post pass adds bloom, which spreads
+// bright pixels across the frame regardless of the art beneath, plus a vignette
+// that darkens the edges. Values from the build that worked.
+pub const ECLIPSE_BLOOM_THRESHOLD: f32 = 0.30;
+pub const ECLIPSE_BLOOM_STRENGTH: f32 = 1.2;
+pub const ECLIPSE_VIGNETTE_STRENGTH: f32 = 0.55;
+pub const ECLIPSE_VIGNETTE_RADIUS: f32 = 0.45;
+pub const ECLIPSE_VIGNETTE_SOFTNESS: f32 = 0.35;
+pub const ECLIPSE_CHROMATIC_ABERRATION: f32 = 2.0;
 
 /// Ambient at the darkest point. Multiplicative, so this IS the fraction of its
 /// authored brightness that an unlit sprite keeps: 0.06 leaves obstacles as
 /// just-readable silhouettes and the danger floor findable, while the lamp
 /// restores anything it reaches to full.
+/// Matches `AmbientLight::dark()` (strength 0.06), which is what
+/// `LightingConfig::night()` uses in the build that worked.
 pub const ECLIPSE_MIN_AMBIENT: f32 = 0.06;
 /// Fraction of the darkening ramp by which full darkness is reached, after
 /// which it holds — so most of the eclipse is spent AT its look.
@@ -764,6 +800,7 @@ pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 1.0 / LIGHT_NDL_2D;
 /// ARBITRARY subset. Sized for a light on every hook and gravity-well pool slot
 /// plus the boss fight's own, with headroom.
 pub const LIGHTING_MAX_LIGHTS: usize = 160;
+
 /// Gravity wells light themselves rather than casting shadows: a well-shaped
 /// hole in the dark reads as geometry, not danger, and one must be visible
 /// before the lamp reaches it.

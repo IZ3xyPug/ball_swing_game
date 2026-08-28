@@ -139,21 +139,67 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         return;
     }
 
-    // The player's own lamp. Wide, warm, and the only thing in the world that
-    // throws shadows, so the light reads as coming FROM the player.
+    // ── The night-mode post shader ───────────────────────────────────────
+    // THE piece every earlier attempt was missing. Quartz lighting is
+    // multiplicative and so cannot draw a glow on dark art; the night-mode post
+    // pass adds BLOOM, which spreads bright pixels outward across the frame
+    // regardless of what the art underneath is. That is what turns a lit player
+    // into a visible pool of light, and no combination of radius and intensity
+    // gets there without it.
+    //
+    // Its vignette darkens the frame edges, which is the other half of the
+    // look. `clear_post_override` in `end_eclipse` puts it back.
+    c.enable_night_mode_shader(
+        ECLIPSE_BLOOM_THRESHOLD,
+        ECLIPSE_BLOOM_STRENGTH,
+        ECLIPSE_VIGNETTE_STRENGTH,
+        ECLIPSE_VIGNETTE_RADIUS,
+        ECLIPSE_VIGNETTE_SOFTNESS,
+        ECLIPSE_CHROMATIC_ABERRATION,
+    );
+
+    // The HUD must not be darkened with the world.
+    for name in c.get_names_by_tag("hud") {
+        if let Some(obj) = c.get_game_object_mut(&name) {
+            obj.unlit = true;
+        }
+    }
+
+    // ── The player's lights ──────────────────────────────────────────────
+    // A CHAIN, not a single lamp. One big light leaves the trail dimming out
+    // behind the player because `atten` falls off from a single origin; lights
+    // spaced back along the trail keep it evenly lit, which is what the trail
+    // actually needs. Only the main lamp casts shadows, so they stay defined.
     if c.get_light(PLAYER_LIGHT).is_none() {
         let mut ls = LightSource::new(
             PLAYER_LIGHT,
             (0.0, 0.0),
-            Color(255, 238, 205, 255),
+            Color(ECLIPSE_LAMP_COLOR.0, ECLIPSE_LAMP_COLOR.1, ECLIPSE_LAMP_COLOR.2, ECLIPSE_LAMP_COLOR.3),
             ECLIPSE_PLAYER_LIGHT_R,
             ECLIPSE_PLAYER_LIGHT_INTENSITY,
         );
         ls.casts_shadows = true;
         c.add_light(ls);
         c.attach_light(PLAYER_LIGHT, "player", (0.0, 0.0));
+
+        for (i, (offset_x, radius, intensity)) in ECLIPSE_TRAIL_LIGHTS.iter().enumerate() {
+            let id = format!("eclipse_trail_light_{i}");
+            let mut tl = LightSource::new(
+                id.clone(),
+                (0.0, 0.0),
+                Color(ECLIPSE_TRAIL_COLOR.0, ECLIPSE_TRAIL_COLOR.1, ECLIPSE_TRAIL_COLOR.2, ECLIPSE_TRAIL_COLOR.3),
+                *radius,
+                *intensity,
+            );
+            tl.casts_shadows = false;
+            c.add_light(tl);
+            c.attach_light(&id, "player", (*offset_x, 0.0));
+        }
     }
     c.set_light_enabled(PLAYER_LIGHT, true);
+    for i in 0..ECLIPSE_TRAIL_LIGHTS.len() {
+        c.set_light_enabled(&format!("eclipse_trail_light_{i}"), true);
+    }
 
 
     // ONE LIGHT PER HOOK POOL SLOT, attached to that slot's object.
@@ -211,8 +257,20 @@ fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     c.set_var("eclipse_active", false);
     c.set_var("eclipse_t", Value::F32(0.0));
 
+    // Put the frame back: the post override is global, so leaving it on would
+    // tint the rest of the run.
+    c.clear_post_override();
+    for name in c.get_names_by_tag("hud") {
+        if let Some(obj) = c.get_game_object_mut(&name) {
+            obj.unlit = false;
+        }
+    }
+
     if ECLIPSE_USE_POINT_LIGHTS && c.has_lighting() {
         c.set_light_enabled(PLAYER_LIGHT, false);
+        for i in 0..ECLIPSE_TRAIL_LIGHTS.len() {
+            c.set_light_enabled(&format!("eclipse_trail_light_{i}"), false);
+        }
         for i in 0..HOOK_POOL_SIZE {
             c.set_light_enabled(&node_light_id(i), false);
         }
@@ -278,6 +336,11 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
     if let Some(light) = c.get_light_mut(PLAYER_LIGHT) {
         light.radius = ECLIPSE_PLAYER_LIGHT_R;
         light.intensity = ECLIPSE_PLAYER_LIGHT_INTENSITY * (0.70 + 0.30 * fall);
+    }
+    for (i, (_, _, intensity)) in ECLIPSE_TRAIL_LIGHTS.iter().enumerate() {
+        if let Some(light) = c.get_light_mut(&format!("eclipse_trail_light_{i}")) {
+            light.intensity = intensity * (0.70 + 0.30 * fall);
+        }
     }
 
     // Markers: every pool slot has its own attached light, so a frame only has

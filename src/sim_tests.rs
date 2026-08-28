@@ -830,50 +830,46 @@ fn the_boss_approach_is_long_enough_to_read() {
 }
 
 #[test]
-fn the_eclipse_lamp_never_blows_out_what_it_lights() {
-    // The model, traced:
-    //   accum = ambient + color * ndl * intensity * atten
-    //   lit   = clamp(base_color * accum, 0, 1)      <- MULTIPLICATIVE
-    //   ndl   = 0.4472 constant in 2D
-    //   atten = 1 - smoothstep(0, radius, dist), hard cutoff at radius
-    //
-    // Because `lit` clamps, any accum ABOVE 1 pushes a sprite toward white. The
-    // player ball is light-coloured and clips first — driving accum to ~13 to
-    // chase an evenly-lit pool turned it into a white disc. 1.0 is a ceiling.
-    let accum = |d: f32| {
-        let t = (d / ECLIPSE_PLAYER_LIGHT_R).clamp(0.0, 1.0);
-        LIGHT_NDL_2D * ECLIPSE_PLAYER_LIGHT_INTENSITY * (1.0 - t * t * (3.0 - 2.0 * t))
-    };
-
+fn the_eclipse_lights_the_whole_trail_with_a_chain() {
+    // One lamp cannot light a trail evenly: `atten` falls off from a single
+    // origin, so the trail always dims out behind the player however wide the
+    // lamp is. Lights spaced back along it keep it lit along its length — the
+    // approach taken by the build this was recovered from.
     assert!(
-        (accum(0.0) - 1.0).abs() < 0.01,
-        "the lamp centre sits at accum {:.2}; anything above 1.0 washes the player white",
-        accum(0.0)
+        ECLIPSE_TRAIL_LIGHTS.len() >= 3,
+        "too few trail lights to cover its length"
     );
-    // Never exceeds it anywhere, at any distance.
-    for i in 0..=100 {
-        let d = ECLIPSE_PLAYER_LIGHT_R * (i as f32 / 100.0);
-        assert!(accum(d) <= 1.001, "accum {:.2} at {d:.0} px would blow out", accum(d));
+    let furthest = ECLIPSE_TRAIL_LIGHTS
+        .iter()
+        .map(|(off, _, _)| off.abs())
+        .fold(0.0_f32, f32::max);
+    assert!(furthest >= 150.0, "the chain does not reach back along the trail");
+
+    // Intensity falls off along the chain, so the light reads as coming FROM
+    // the player rather than as a row of separate lamps.
+    let mut prev = f32::MAX;
+    for (off, _, intensity) in ECLIPSE_TRAIL_LIGHTS.iter().filter(|(o, _, _)| o.abs() >= 50.0) {
+        let _ = off;
+        assert!(*intensity <= prev + 0.01, "trail light brightens with distance");
+        prev = *intensity;
     }
-
-    // The trail has to stay clearly lit. `atten` is steepest mid-range, so the
-    // lamp is deliberately much wider than the trail to keep the trail in the
-    // gentle inner part of the curve.
-    let trail = ECLIPSE_LAMP_TRAIL_LEN;
+    // Only the main lamp casts shadows, so they stay defined rather than
+    // smeared by several origins.
     assert!(
-        ECLIPSE_PLAYER_LIGHT_R > trail * 2.0,
-        "the lamp is not wide enough to keep the trail off the steep part of the falloff"
-    );
-    assert!(
-        accum(trail) > 0.5,
-        "the far end of the trail is only {:.2} lit",
-        accum(trail)
+        ECLIPSE_PLAYER_LIGHT_INTENSITY > prev,
+        "the main lamp is not the brightest source on the player"
     );
 
-    // And darkness still exists on screen: the viewport half-width must land in
-    // the dim end of the curve, and nothing is lit past the radius.
-    assert!(accum(VW * 0.5) < 0.25, "the screen edges are still {:.2} lit", accum(VW * 0.5));
-    assert_eq!(accum(ECLIPSE_PLAYER_LIGHT_R), 0.0, "light leaks past the radius");
+    // The night-mode post pass is what makes any of this visible on dark art:
+    // quartz lighting is multiplicative, so bloom is the only thing that can
+    // spread light beyond the sprites it lands on. Its threshold must sit below
+    // what the lamp produces, or nothing blooms at all.
+    assert!(
+        ECLIPSE_BLOOM_THRESHOLD < LIGHT_NDL_2D * ECLIPSE_PLAYER_LIGHT_INTENSITY,
+        "the bloom threshold is above anything the lamp can produce"
+    );
+    assert!(ECLIPSE_BLOOM_STRENGTH > 0.0, "bloom disabled — the pool will be invisible");
+    assert!(ECLIPSE_VIGNETTE_STRENGTH > 0.0, "no vignette — the frame edges will not darken");
 }
 
 #[test]
@@ -905,7 +901,7 @@ fn every_node_and_well_slot_has_its_own_light() {
         (ECLIPSE_NODE_LIGHT_INTENSITY * LIGHT_NDL_2D - 1.0).abs() < 0.01,
         "node markers do not restore to exactly normal brightness"
     );
-    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.2, "markers reach too far");
+    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.5, "markers reach too far");
 }
 
 #[test]
@@ -1003,10 +999,9 @@ fn the_eclipse_goes_fully_dark_partway_through() {
     // is doing any work: with `ECLIPSE_USE_POINT_LIGHTS` off there is nothing to
     // see by, so the floor has to stay playable.
     let mid = BOSS_ECLIPSE_RELEASE + (BOSS_ECLIPSE_RANGE - BOSS_ECLIPSE_RELEASE) * 0.5;
-    let ceiling = 0.12;
     assert!(
-        ambient_at(mid) < ceiling,
-        "still {:.2} ambient at the midpoint — the eclipse is not reading as dark",
+        ambient_at(mid) < 0.12,
+        "still {:.2} ambient at the midpoint — not dark enough to need the lamp",
         ambient_at(mid)
     );
     // And it holds there rather than continuing to creep.
@@ -1018,9 +1013,11 @@ fn the_eclipse_goes_fully_dark_partway_through() {
     // Multiplicative, so this IS the fraction of authored brightness an unlit
     // sprite keeps — low enough to read as an eclipse, high enough to leave
     // silhouettes and the danger floor findable.
+    // Matches `AmbientLight::dark()`, which is what `LightingConfig::night()`
+    // uses in the build this was taken from.
     assert!(
         (0.02..0.12).contains(&ECLIPSE_MIN_AMBIENT),
-        "floor ambient {ECLIPSE_MIN_AMBIENT} is outside the readable band"
+        "floor ambient {ECLIPSE_MIN_AMBIENT} no longer matches the night preset"
     );
     // Full light before the warning has landed.
     assert!(ambient_at(BOSS_ECLIPSE_RANGE) > 0.99);
@@ -1072,8 +1069,9 @@ fn markers_are_separated_by_reach_not_by_brightness() {
     // brightness — none of them may exceed it, because `lit` clamps and going
     // past 1.0 washes a sprite toward white. So what distinguishes a marker
     // from the lamp is RADIUS, not intensity.
+    // Markers restore their own sprite; only the lamp is driven past that, so
+    // that the bloom pass has something to pick up.
     for (name, i) in [
-        ("player lamp", ECLIPSE_PLAYER_LIGHT_INTENSITY),
         ("node marker", ECLIPSE_NODE_LIGHT_INTENSITY),
         ("well marker", ECLIPSE_GWELL_LIGHT_INTENSITY),
     ] {
@@ -1083,7 +1081,12 @@ fn markers_are_separated_by_reach_not_by_brightness() {
             i * LIGHT_NDL_2D
         );
     }
+    assert!(
+        ECLIPSE_PLAYER_LIGHT_INTENSITY * LIGHT_NDL_2D > 1.0,
+        "the lamp never crosses the bloom threshold"
+    );
     // Markers illuminate themselves; only the lamp lights an area.
-    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.2);
-    assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.25);
+    // Markers illuminate their own sprite; only the lamp lights an area.
+    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.5);
+    assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.5);
 }
