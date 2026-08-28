@@ -197,16 +197,86 @@ fn open_dialogue(c: &mut Canvas, st: &Arc<Mutex<State>>, node_id: String) {
 
 /// Close the dialogue; the player is held in stasis (world still paused) until
 /// they tether.
+///
+/// Resuming REQUIRES a successful grab, so the exit is only reachable if a node
+/// is actually within rope range of where the player is being held. The
+/// companion node placed beside the upgrade node is normally that node — but it
+/// is placed 30 000-55 000 px ahead of the player, sits in the shared hook pool
+/// for that whole stretch, and is recycled wholesale by `clear_world_for_respawn`
+/// on any heart loss. `upgrade_rightmost` is not rewound on respawn either, so
+/// the upgrade node survives while its companion does not, and the player who
+/// later reaches it closes the dialogue into a world with nothing to grab and
+/// is stuck for good.
+///
+/// So the guarantee is re-established here, at the moment it is needed, rather
+/// than assumed to have survived from tens of thousands of pixels earlier.
 fn close_dialogue(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let mut s = st.lock().unwrap();
         s.upgrade_dialogue_active = false;
         s.upgrade_dialogue_node = String::new();
         s.upgrade_hold_until_tether = true;
+        s.upgrade_hold_ticks = 0;
         s.vx = 0.0;
         s.vy = 0.0;
     }
+    ensure_exit_node(c, st);
     hide_dialogue(c);
+}
+
+/// Guarantee a grabbable node within rope reach of the hold position.
+fn ensure_exit_node(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (hx, hy, hooks) = {
+        let s = st.lock().unwrap();
+        (s.upgrade_hold_x, s.upgrade_hold_y, s.live_hooks.clone())
+    };
+    let reach = ROPE_LEN_MAX * 0.85; // comfortably inside the grab radius
+    let have = hooks.iter().any(|id| {
+        c.get_game_object(id)
+            .map(|o| {
+                if !o.visible {
+                    return false;
+                }
+                let cx = o.position.0 + o.size.0 * 0.5;
+                let cy = o.position.1 + o.size.1 * 0.5;
+                (cx - hx) * (cx - hx) + (cy - hy) * (cy - hy) <= reach * reach
+            })
+            .unwrap_or(false)
+    });
+    if have {
+        return;
+    }
+
+    let Some(id) = ({ let mut s = st.lock().unwrap(); s.pool_free.pop() }) else { return };
+    let nx = hx + UPGRADE_R + HOOK_R + 60.0;
+    let ny = hy;
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.visible = true;
+        obj.position = (nx - HOOK_R, ny - HOOK_R);
+        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.tags.retain(|t| {
+            t != BUFF_HOOK_TAG && t != SHIELD_HOOK_TAG
+                && t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG
+        });
+        if !obj.tags.iter().any(|t| t == "hook") {
+            obj.tags.push("hook".into());
+        }
+        if asteroid_mode {
+            obj.set_animation(super::helpers::hook_artifact_anim());
+            obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+        } else {
+            obj.animated_sprite = None;
+            obj.set_image(super::helpers::hook_img(C_HOOK.0, C_HOOK.1, C_HOOK.2));
+        }
+    }
+    // Auxiliary node: joins `live_hooks` but must NOT advance `rightmost_x`
+    // (see the chain-frontier rule in `spawning.rs`).
+    st.lock().unwrap().live_hooks.push(id);
 }
 
 /// Handle a dialogue key press. Returns true if the key was consumed.

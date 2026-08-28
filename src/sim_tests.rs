@@ -828,3 +828,53 @@ fn the_boss_approach_is_long_enough_to_read() {
         "the approach ({BOSS_ECLIPSE_RANGE} px) eats more than half the {gap:.0} px run-up"
     );
 }
+
+#[test]
+fn the_eclipse_lamp_leaves_visible_darkness() {
+    // The eclipse only reads as dark if the lit pool has an EDGE the player can
+    // see. The first pass used a flat 2600 px radius — a 5200 px circle across a
+    // 3840 px viewport, so the light was wider than the screen and there was no
+    // falloff anywhere on it.
+    let lit_across = ECLIPSE_PLAYER_LIGHT_R * 2.0;
+    assert!(
+        lit_across < VW * 0.6,
+        "the lamp is {lit_across:.0} px across against a {VW:.0} px viewport — no visible edge"
+    );
+    assert!(
+        lit_across > PLAYER_R * 2.0 * 4.0,
+        "the lamp is too small to swing by: {lit_across:.0} px"
+    );
+    // Stated in player widths, so the constant explains itself.
+    assert!(
+        (4.0..8.0).contains(&ECLIPSE_PLAYER_LIGHT_WIDTHS),
+        "lamp radius of {ECLIPSE_PLAYER_LIGHT_WIDTHS} player-widths is outside the intended band"
+    );
+    // Even at full growth it must not swallow the viewport.
+    let widest = ECLIPSE_PLAYER_LIGHT_R * (0.85 + 0.30) * 2.0;
+    assert!(widest < VW * 0.8, "the lamp grows to {widest:.0} px and fills the screen");
+}
+
+#[test]
+fn the_eclipse_reaches_darkness_before_it_is_over() {
+    use crate::scenes::game::eclipse_curve;
+    // The warning window must still exist, but the dark has to arrive well
+    // before the release or the approach spends most of its length doing
+    // nothing visible.
+    let at = |gap: f32| eclipse_curve(gap).1;
+
+    // Halfway through the darkening ramp, the ambient should already be most of
+    // the way down.
+    let mid_gap = BOSS_ECLIPSE_RELEASE + (BOSS_ECLIPSE_RANGE - BOSS_ECLIPSE_RELEASE) * 0.5;
+    let d = at(mid_gap);
+    let fall = ((d - ECLIPSE_WARN_FRACTION) / (1.0 - ECLIPSE_WARN_FRACTION)).clamp(0.0, 1.0);
+    let inv = 1.0 - fall;
+    let eased = 1.0 - inv * inv;
+    assert!(
+        eased > 0.6,
+        "only {eased:.2} dark at the midpoint — the eclipse takes too long to arrive"
+    );
+
+    // And the warning still lands before anything changes.
+    assert!(ECLIPSE_WARN_FRACTION > 0.05, "no warning window at all");
+    assert!(ECLIPSE_WARN_FRACTION < 0.25, "the warning holds full light too long");
+}

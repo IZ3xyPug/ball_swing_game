@@ -964,6 +964,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 flare_damage_timer: 0,
                 last_shield_x: SPAWN_X,
                 frontier_repairs: 0,
+                upgrade_hold_ticks: 0,
                 eclipse_active: false,
                 eclipse_t: 0.0,
                 eclipse_shadow_ids: Vec::new(),
@@ -2015,6 +2016,26 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             if let Some(p) = c.get_game_object_mut("player") {
                                 p.momentum = (0.0, 0.0);
                                 p.gravity = 0.0;
+                            }
+                            // Backstop. `close_dialogue` guarantees a node
+                            // within reach, so the tether exit should always be
+                            // available — but a hold that can only be ended by
+                            // a successful grab is a run-ending soft-lock if
+                            // that guarantee ever fails again. Release after a
+                            // few seconds and let the player fall; falling is
+                            // recoverable, being frozen forever is not.
+                            let stuck = {
+                                let mut s = st.lock().unwrap();
+                                s.upgrade_hold_ticks = s.upgrade_hold_ticks.saturating_add(1);
+                                s.upgrade_hold_ticks > UPGRADE_HOLD_MAX_TICKS
+                            };
+                            if stuck {
+                                let mut s = st.lock().unwrap();
+                                s.upgrade_hold_until_tether = false;
+                                s.upgrade_hold_ticks = 0;
+                                drop(s);
+                                c.set_var("game_paused", false);
+                                c.set_var("upgrade_hold_released", true);
                             }
                         }
                     }

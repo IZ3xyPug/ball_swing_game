@@ -432,9 +432,29 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         new_timer = CANNON_FIRE_TICKS_PER_FRAME;
                         set_cannon_frame(c, &phase.id, new_frame);
                     } else {
-                        let rot_rad = phase.rotation.to_radians();
+                        // Launch direction must be derived from the UNFLIPPED
+                        // rotation, then mirrored vertically.
+                        //
+                        // `cannon_default_rotation` adds 180 degrees when
+                        // gravity is flipped, which is right for the barrel
+                        // SPRITE — the world is drawn upside down, so the art
+                        // has to turn over. But rotating the launch vector by
+                        // 180 negates BOTH components, so the horizontal
+                        // component flipped too and the cannon fired the player
+                        // backwards down the level. Flipped gravity mirrors the
+                        // world vertically; it does not reverse the direction of
+                        // travel.
+                        let flipped = gravity_dir < 0.0;
+                        let base_rot = if flipped {
+                            phase.rotation - 180.0
+                        } else {
+                            phase.rotation
+                        };
+                        let rot_rad = base_rot.to_radians();
                         let vx = CANNON_LAUNCH_VX * rot_rad.cos() - CANNON_LAUNCH_VY * rot_rad.sin();
-                        let vy = CANNON_LAUNCH_VX * rot_rad.sin() + CANNON_LAUNCH_VY * rot_rad.cos();
+                        let vy_unflipped =
+                            CANNON_LAUNCH_VX * rot_rad.sin() + CANNON_LAUNCH_VY * rot_rad.cos();
+                        let vy = if flipped { -vy_unflipped } else { vy_unflipped };
                         if ft_active {
                             // Hyper-transit: teleport far ahead instead of the short launch.
                             do_fast_travel = true;

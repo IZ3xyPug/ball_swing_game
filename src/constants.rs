@@ -663,15 +663,23 @@ pub const BOSS_ECLIPSE_RANGE: f32 = 50_000.0;
 /// the moment it matters.
 pub const BOSS_ECLIPSE_RELEASE: f32 = 5_000.0;
 /// Fraction of the darkening ramp spent at full light with the warning up,
-/// before the dark starts falling. The warning has to land before the world
-/// reacts to it.
-pub const ECLIPSE_WARN_FRACTION: f32 = 0.18;
+/// before the dark starts falling. The warning still has to land before the
+/// world reacts, but the wait was too long in play — the approach felt like it
+/// was doing nothing for most of its length.
+pub const ECLIPSE_WARN_FRACTION: f32 = 0.10;
 /// Ambient strength at the darkest point. Never 0 — the horizon and the danger
 /// floor must stay readable.
 pub const ECLIPSE_MIN_AMBIENT: f32 = 0.14;
-/// The player's lamp during the eclipse. Deliberately large: the player becomes
-/// the light source, and the radius grows as the ambient falls.
-pub const ECLIPSE_PLAYER_LIGHT_R: f32 = 2600.0;
+/// The player's lamp during the eclipse, as a multiple of the player's own
+/// width — the eclipse only reads as dark if there is a visible EDGE to the
+/// light, and the radius has to be small enough relative to the viewport for
+/// that edge to be on screen.
+///
+/// The first pass used a flat 2600 px. That is a 5 200 px pool across a 3 840 px
+/// viewport, so the lit circle was wider than the screen and the "eclipse"
+/// looked like a slightly dimmer day with no falloff visible anywhere.
+pub const ECLIPSE_PLAYER_LIGHT_WIDTHS: f32 = 5.5;
+pub const ECLIPSE_PLAYER_LIGHT_R: f32 = PLAYER_R * 2.0 * ECLIPSE_PLAYER_LIGHT_WIDTHS;
 pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 1.25;
 /// Faint marker lights on the nearest grab nodes, so the route stays readable
 /// without revealing the hazards.
@@ -995,6 +1003,11 @@ pub const SPACE_OXYGEN_PICKUP_Y_MAX: f32 = -(VH * 0.9);
 
 // ── Roguelike upgrade nodes (spend coins for run boosts) ─────────────────────
 pub const UPGRADE_POOL_SIZE: usize = 12;
+/// Longest the post-dialogue stasis may hold the player waiting for a tether
+/// before releasing them anyway (8 s). The hold is meant to end on a grab, and
+/// `close_dialogue` guarantees a node in reach — this only fires if that
+/// guarantee fails, and turns a permanent soft-lock into a survivable fall.
+pub const UPGRADE_HOLD_MAX_TICKS: u32 = 480;
 pub const UPGRADE_GAP_MIN: f32 = 30000.0;
 pub const UPGRADE_GAP_MAX: f32 = 55000.0;
 pub const UPGRADE_R: f32 = 96.0;

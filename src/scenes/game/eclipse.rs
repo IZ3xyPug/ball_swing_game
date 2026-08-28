@@ -181,7 +181,11 @@ fn drive_darkness(c: &mut Canvas, dark: f32) {
     // Never reaches true black: the player must still be able to read the
     // horizon and the danger floor.
     let fall = ((dark - ECLIPSE_WARN_FRACTION) / (1.0 - ECLIPSE_WARN_FRACTION)).clamp(0.0, 1.0);
-    let eased = fall * fall * (3.0 - 2.0 * fall);
+    // Ease OUT, not smoothstep. Smoothstep is symmetric, so half the approach
+    // was spent barely changing; the dark needs to arrive early and then settle,
+    // which is what an eclipse actually looks like.
+    let inv = 1.0 - fall;
+    let eased = 1.0 - inv * inv;
     let strength = 1.0 + (ECLIPSE_MIN_AMBIENT - 1.0) * eased;
     // Cool the ambient as it dims — a dimmed white reads as fog, a dimmed blue
     // reads as an eclipse.
@@ -203,8 +207,11 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
     // sharply than the ambient does — the world gets darker, the player's reach
     // into it gets longer.
     if let Some(light) = c.get_light_mut(PLAYER_LIGHT) {
-        light.radius = ECLIPSE_PLAYER_LIGHT_R * (0.75 + 0.45 * fall);
-        light.intensity = ECLIPSE_PLAYER_LIGHT_INTENSITY * (0.35 + 0.65 * fall);
+        // Grows modestly as the dark deepens, so visibility falls less sharply
+        // than the ambient does — but stays a POOL with a visible edge, which
+        // is the whole reason the eclipse reads as one.
+        light.radius = ECLIPSE_PLAYER_LIGHT_R * (0.85 + 0.30 * fall);
+        light.intensity = ECLIPSE_PLAYER_LIGHT_INTENSITY * (0.45 + 0.55 * fall);
     }
 
     // Marker lights on the nearest live grab nodes. Nodes only: pads, spinners

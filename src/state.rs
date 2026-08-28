@@ -505,6 +505,10 @@ pub struct State {
 
     /// Solar-eclipse approach to a boss: whether it is running and how far
     /// along it is (0 at the far edge, 1 at the teleporter).
+    /// Ticks spent held after an upgrade dialogue closed, waiting for the
+    /// player to tether out. Bounded so the hold can never trap a run.
+    pub upgrade_hold_ticks: u32,
+
     pub eclipse_active: bool,
     pub eclipse_t: f32,
     /// Objects currently flagged as shadow occluders by the eclipse. Tracked so

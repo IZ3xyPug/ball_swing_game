@@ -279,7 +279,6 @@ pub fn tick_spawning(
         s.world_sampler.evict_before(evict_x);
     }
     spawn_hooks(c, st);
-    ensure_player_hooks(c, st);
     if matches!(c.get_var("spawn_pads_on"), Some(Value::Bool(true)) | None) {
         spawn_pads(c, st, tech_bounce_img, tech_bounce_img_flipped, pad_thruster_static_img, pad_thruster_anim_template, pad_thruster_anim_template_flipped);
     }
@@ -857,99 +856,6 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     drop(s);
 }
-
-/// Safety net: guarantee the player always has a hook to swing to. If no live
-/// hook is within a comfortable distance ahead of the player (or the frontier
-/// is behind the player), place one. This prevents "empty" stretches that can
-/// strand the player — such as the deterministic first-run layout where the
-/// initial generation (from the last starter hook) differs from the respawn
-/// generation.
-fn ensure_player_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    // Place the guaranteed hook far enough ahead to be off-screen (the camera
-    // spans ~VW around the player, so > VW/2 is off-screen), yet still inside the
-    // ahead-window so the very next frame detects it and doesn't re-place one.
-    const GUARANTEED_AHEAD: f32 = 2000.0;
-
-    let (px, py, vx, max_momentum, has_ahead) = {
-        let s = st.lock().unwrap();
-        let px = s.px;
-        let py = s.py;
-        let vx = s.vx;
-        let max_momentum = crate::gameplay::player_max_momentum(&s);
-        let has_ahead = s.live_hooks.iter().any(|id| {
-            if let Some(obj) = c.get_game_object(id) {
-                let hx = obj.position.0 + obj.size.0 * 0.5;
-                let hy = obj.position.1 + obj.size.1 * 0.5;
-                let dx = hx - px;
-                (dx > -240.0 && dx < 2600.0) && (hy - py).abs() < 1800.0
-            } else {
-                false
-            }
-        });
-        (px, py, vx, max_momentum, has_ahead)
-    };
-    // Already have a hook in the ahead-window — nothing to do. Do NOT bail just
-    // because the spawn frontier is far ahead: a fast swing can leave a hole
-    // between the player and the next generated hook.
-    if has_ahead {
-        return;
-    }
-    // Only place a hook when the player is near the playable band. Far outside
-    // it (e.g. a very high swing) there are no hooks in the void, and placing
-    // them every frame there would spray a column of hooks into the empty sky.
-    if py < HOOK_Y_MIN - 1800.0 || py > HOOK_Y_MAX + 1800.0 {
-        return;
-    }
-
-    let Some(id) = ({ let mut s = st.lock().unwrap(); s.pool_free.pop() }) else { return; };
-    let hx = px + GUARANTEED_AHEAD;
-    let hy = py.clamp(HOOK_Y_MIN, HOOK_Y_MAX);
-    let hook_half = HOOK_R;
-    let target_x = hx - hook_half;
-    let target_y = hy - hook_half;
-    let start_y  = target_y - SPAWN_ANIM_DROP; // enter from above, off-screen
-    let anim_ticks = spawn_anim_ticks_for_speed(vx, max_momentum);
-    {
-        let mut s = st.lock().unwrap();
-        s.live_hooks.push(id.clone());
-        // Note: do NOT advance rightmost_x here. Bumping the placement frontier
-        // to the failsafe x makes the next gen_hook_batch start beyond it and
-        // can skip an entire band of hooks, leaving a long gap that only the
-        // failsafe fills. The failsafe hook is already in live_hooks, so the
-        // normal spawner keeps its own frontier.
-        s.spawn_animations.push(SpawnAnim {
-            id: id.clone(),
-            target_x,
-            target_y,
-            start_y,
-            start_rot: 0.0,
-            target_rot: 0.0,
-            elapsed: 0,
-            total: anim_ticks,
-            restore_platform: false,
-            started: false,
-            restore_rotation_momentum: 0.0,
-        });
-    }
-    if let Some(obj) = c.get_game_object_mut(&id) {
-        obj.visible = false;
-        obj.position = (target_x, start_y);
-        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
-        obj.gravity = 0.0;
-        obj.momentum = (0.0, 0.0);
-        obj.rotation_momentum = 0.0;
-        obj.collision_mode = CollisionMode::NonPlatform;
-        obj.tags.retain(|t| t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG);
-        if !obj.tags.iter().any(|t| t == "hook") {
-            obj.tags.push("hook".into());
-        }
-        obj.animated_sprite = None;
-        obj.set_image(hook_img(C_HOOK.0, C_HOOK.1, C_HOOK.2));
-        obj.clear_glow();
-    }
-}
-
-// ── Pads ──────────────────────────────────────────────────────────────────────
 
 fn spawn_pads(
     c: &mut Canvas,
