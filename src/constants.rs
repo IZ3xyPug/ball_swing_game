@@ -673,103 +673,98 @@ pub const ECLIPSE_WARN_FRACTION: f32 = 0.10;
 /// decoration rather than the thing you see by. Low enough now that outside the
 /// lamp there is effectively nothing — but not zero, because the danger floor
 /// has to stay findable.
-pub const ECLIPSE_MIN_AMBIENT: f32 = 0.22;
 /// Fraction of the darkening ramp by which full darkness is reached. Past this
 /// the world holds at `ECLIPSE_MIN_AMBIENT` instead of continuing to creep
 /// down, so most of the eclipse is spent AT its look rather than approaching it.
 pub const ECLIPSE_FULL_DARK_AT: f32 = 0.5;
-/// The player's lamp during the eclipse.
-///
-/// SIZED FROM THE TRAIL, because the trail is what makes a wrong size obvious.
-/// The mid trail emitter lives 0.40 s, so at a cruising ~45 px/tick it streams
-/// roughly 1 080 px behind the player. A lamp smaller than that lights the near
-/// half of the trail and leaves the rest in the dark, which reads as a bug
-/// rather than as lighting — the first pass at 5.5 player-widths (638 px) did
-/// exactly that. The pass before it went the other way at a flat 2 600 px,
-/// wider than the viewport, so nothing was dark at all.
+// ── Eclipse lighting ─────────────────────────────────────────────────────────
+//
+// TRACED FROM THE ENGINE, not assumed. `quartz/src/lighting` -> `core.rs` ->
+// `wgpu_canvas` -> `lit_rectangle.wgsl`:
+//
+//     accum = ambient_rgb * ambient_strength
+//           + SUM over lights in range( color * ndl * intensity * atten * shadow )
+//     lit   = clamp(base_color * accum, 0, 1)
+//
+// Three properties that decide every number below:
+//
+//  1. LIGHT IS MULTIPLICATIVE. It scales a sprite's own colour — it cannot add
+//     light to dark art, only restore art toward the brightness it was drawn
+//     at. So an eclipse here is "ambient down, then the lamp restores what it
+//     touches", and empty black sky stays black however bright the lamp is.
+//     Every earlier attempt at this feature assumed additive light and chased
+//     a glowing pool that this renderer cannot produce.
+//
+//  2. `ndl` IS A CONSTANT 0.4472 in 2D. The default normal map is the flat
+//     (128,128,255) = (0,0,1), and `ldir = normalize(vec3(dir_2d, 0.5))`, so
+//     `dot(normal, ldir) = 0.5/sqrt(1.25)` with no directional term. Intensity
+//     must be divided by it to get a predictable result.
+//
+//  3. `atten = 1 - smoothstep(0, radius, dist)` with a HARD cutoff at radius,
+//     and the accumulator clamps — so a high intensity gives a fully-restored
+//     pool out to wherever `ndl * intensity * atten` reaches 1, then a fade.
+//
+// Engine presets run intensity 0.3-1.2 (torch 0.8, moonlight 0.3). Those are
+// for lighting a normally-lit scene; restoring a near-black one needs more.
+
+/// Constant `dot(normal, light_dir)` for a flat 2D sprite. See note 2 above.
+pub const LIGHT_NDL_2D: f32 = 0.4472136;
+
+/// The player's lamp, sized so the whole trail sits inside it. The mid trail
+/// emitter lives 0.40 s, so at a cruising ~45 px/tick it streams ~1080 px
+/// behind the player.
 pub const PLAYER_TRAIL_LIFETIME_S: f32 = 0.40;
-/// Cruising speed the lamp is sized against (px/tick).
 pub const ECLIPSE_LAMP_REF_SPEED: f32 = 45.0;
-/// Slack past the trail's tail so its end fades inside the light, not at its edge.
 pub const ECLIPSE_LAMP_MARGIN: f32 = 220.0;
 pub const ECLIPSE_PLAYER_LIGHT_R: f32 =
     PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED + ECLIPSE_LAMP_MARGIN;
-
-/// Distance from the player at which the lamp stops being fully bright.
-///
-/// The engine's falloff is `atten = 1 - smoothstep(0, radius, dist)` with a
-/// hard cutoff at `radius`, and the accumulator clamps — so a HIGH intensity
-/// produces a saturated pool out to wherever `atten * intensity` falls below 1,
-/// then a fade to nothing at the radius. That is the shape wanted here: bright
-/// out to the end of the trail, fading through the slack, black beyond.
+/// Distance out to which the lamp fully restores what it touches.
 pub const ECLIPSE_LAMP_SATURATE_TO: f32 =
     PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
-/// Derived, not chosen: the intensity that saturates the lamp out to
-/// `ECLIPSE_LAMP_SATURATE_TO` given the engine's smoothstep falloff.
-///
-/// This was the real bug behind "the trail lights up closest to the player but
-/// the rest of it is dark". At 2.4 the pool only saturated to ~723 px against a
-/// 1080 px trail, so the far half of the trail sat in the falloff. The previous
-/// answer was a second, wider fill light — which fixed the trail by lighting
-/// the whole scene out to 2600 px and destroying the darkness. The radius was
-/// never the problem; the intensity was.
-const fn lamp_saturating_intensity() -> f32 {
+
+/// Intensity that fully restores everything out to `ECLIPSE_LAMP_SATURATE_TO`,
+/// then fades to nothing at the radius. Derived from the model, including the
+/// `ndl` factor that the previous pass left out — which is why a value computed
+/// the same way but 0.447x too small produced a pool that only reached ~740 px.
+const fn lamp_intensity() -> f32 {
     let t = ECLIPSE_LAMP_SATURATE_TO / ECLIPSE_PLAYER_LIGHT_R;
-    let smoothstep = t * t * (3.0 - 2.0 * t);
-    1.0 / (1.0 - smoothstep)
+    let atten = 1.0 - t * t * (3.0 - 2.0 * t);
+    1.0 / (LIGHT_NDL_2D * atten)
 }
-pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = lamp_saturating_intensity();
-/// Faint marker lights on the nearest grab nodes, so the route stays readable
-/// without revealing the hazards.
-pub const ECLIPSE_NODE_LIGHT_R: f32 = 460.0;
-pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 1.6;
-/// How often the eclipse re-ranks nearby nodes and re-flags shadow casters.
-/// Every 6 frames (10 Hz) — nodes drift slowly relative to the player, so the
-/// staleness is invisible while the saving is most of the effect's cost.
-pub const ECLIPSE_LIGHT_REFRESH_TICKS: u32 = 6;
+pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = lamp_intensity();
+
+/// Ambient at the darkest point. Multiplicative, so this IS the fraction of its
+/// authored brightness that an unlit sprite keeps: 0.06 leaves obstacles as
+/// just-readable silhouettes and the danger floor findable, while the lamp
+/// restores anything it reaches to full.
+pub const ECLIPSE_MIN_AMBIENT: f32 = 0.06;
+/// Fraction of the darkening ramp by which full darkness is reached, after
+/// which it holds — so most of the eclipse is spent AT its look.
+
+/// Marker lights. Enough to restore a small sprite to full (`1 / ndl` ≈ 2.24)
+/// so a node reads clearly, without the reach to light anything around it.
+pub const ECLIPSE_NODE_LIGHT_R: f32 = 300.0;
+pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 2.3;
+/// Gravity wells light themselves rather than casting shadows: a well-shaped
+/// hole in the dark reads as geometry, not danger, and one must be visible
+/// before the lamp reaches it.
+pub const ECLIPSE_GWELL_LIGHT_COUNT: usize = 6;
+pub const ECLIPSE_GWELL_LIGHT_R: f32 = 420.0;
+pub const ECLIPSE_GWELL_LIGHT_INTENSITY: f32 = 2.8;
 
 /// How many objects may be flagged as shadow occluders at once.
 ///
-/// THE RENDERER CAPS OCCLUDERS AT 32 (`wgpu_canvas::gpu_types::MAX_OCCLUDERS`)
-/// and silently drops the rest, and quartz collects them in object-store order
-/// rather than by distance — so which 32 survive is arbitrary. Flagging every
-/// pad, spinner, turret and asteroid in range blew past that, which is why
-/// spinners cast shadows and pads did not: the pads were simply past the cut.
-///
-/// 20 leaves headroom for anything else in the scene that sets `shadow_caster`,
-/// and shadows are only visible inside the lamp anyway, so the nearest 20 are
-/// the only ones that could have been seen.
+/// `wgpu_canvas::gpu_types::MAX_OCCLUDERS` is 32 and the renderer silently
+/// drops the rest, while quartz collects them in object-store order rather than
+/// by distance — so exceeding it makes an arbitrary subset cast.
 pub const ECLIPSE_MAX_SHADOW_CASTERS: usize = 20;
 
-/// Whether the eclipse drives the engine's point-light system.
-///
-/// OFF, pending an unresolved question about what space lights live in.
-/// Established by reading the render path:
-///   * every `Item::Image` becomes a `LitSprite` when lighting is on, so the
-///     background IS lit geometry and a light pool should be possible;
-///   * lighting is per-fragment (`in.frag_pos.xy`);
-///   * falloff is `1 - smoothstep(0, radius, dist)` with a hard cutoff, and the
-///     accumulator clamps, so high intensity gives a saturated pool.
-/// NOT established: `quartz/src/canvas/core.rs` transforms light positions into
-/// LOGICAL screen space (`(world - cam) * scale + pad`, radius `*= scale`),
-/// while `lit_rectangle.wgsl` compares that against `@builtin(position).xy`,
-/// which is the physical framebuffer pixel. If those differ by the display's
-/// scale factor then every light sits at a fraction of its intended position
-/// with a proportionally small radius — which is what the marker lights looked
-/// like: soft blobs offset from the objects they belong to, shifting as the
-/// camera moves, and no pool around the player at all.
-///
-/// Until that is settled the eclipse uses only what is verified to work in this
-/// game: ambient darkening plus the banner. Flip this back on once the space
-/// question is answered, not before.
-pub const ECLIPSE_USE_POINT_LIGHTS: bool = false;
+/// Whether the eclipse drives the engine's point-light system. On, now that the
+/// lighting model is traced rather than assumed.
+pub const ECLIPSE_USE_POINT_LIGHTS: bool = true;
 
-/// Gravity wells light themselves rather than casting shadows: they are a
-/// hazard the player must see coming even when the lamp is nowhere near them,
-/// and a well-shaped hole in the light reads as geometry rather than danger.
-pub const ECLIPSE_GWELL_LIGHT_COUNT: usize = 6;
-pub const ECLIPSE_GWELL_LIGHT_R: f32 = 620.0;
-pub const ECLIPSE_GWELL_LIGHT_INTENSITY: f32 = 2.4;
+/// How often the eclipse re-ranks nearby nodes and re-flags shadow casters.
+pub const ECLIPSE_LIGHT_REFRESH_TICKS: u32 = 6;
 
 /// Size of the down-pointing arrow above the black-hole threshold marker.
 pub const BOSS_MARKER_ARROW_D:    f32   = 220.0;

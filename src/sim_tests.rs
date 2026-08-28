@@ -830,46 +830,63 @@ fn the_boss_approach_is_long_enough_to_read() {
 }
 
 #[test]
-fn the_eclipse_lamp_is_bright_to_the_trail_and_black_beyond() {
-    // The engine falloff is `atten = 1 - smoothstep(0, radius, dist)` with a
-    // hard cutoff at `radius`, and the accumulator clamps. So the lamp is a
-    // saturated pool out to wherever `atten * intensity` drops below 1, then a
-    // fade to nothing at the radius — and NOTHING is lit past the radius.
-    fn atten(d: f32) -> f32 {
+fn the_eclipse_lamp_restores_the_whole_trail() {
+    // Encodes the traced lighting model, so a future edit that forgets any part
+    // of it fails here rather than on screen:
+    //
+    //   accum = ambient + color * ndl * intensity * atten
+    //   lit   = clamp(base_color * accum, 0, 1)      <- MULTIPLICATIVE
+    //   ndl   = 0.4472 constant in 2D (flat normal map, no directional term)
+    //   atten = 1 - smoothstep(0, radius, dist), hard cutoff at radius
+    //
+    // "Restoration" below is `accum` clamped to 1: the fraction of its authored
+    // brightness a sprite keeps. 1.0 means it looks normal; 0 means it is left
+    // at ambient. The lamp cannot make anything BRIGHTER than its own art.
+    let restoration = |d: f32| {
         let t = (d / ECLIPSE_PLAYER_LIGHT_R).clamp(0.0, 1.0);
-        1.0 - t * t * (3.0 - 2.0 * t)
-    }
-    let lit = |d: f32| atten(d) * ECLIPSE_PLAYER_LIGHT_INTENSITY;
+        let atten = 1.0 - t * t * (3.0 - 2.0 * t);
+        (LIGHT_NDL_2D * ECLIPSE_PLAYER_LIGHT_INTENSITY * atten).min(1.0)
+    };
 
     let trail = PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
 
-    // Fully bright all the way along the trail. Failing this is the "trail
-    // lights up near the player and the rest is dark" bug: at intensity 2.4 the
-    // pool only saturated to ~723 px against a 1080 px trail.
+    // The whole trail sits in fully-restored light. Dropping the `ndl` factor
+    // costs a 0.447x on intensity and pulls this edge in to ~740 px, which is
+    // exactly the "trail lights up near the player, rest is dark" report.
     assert!(
-        lit(trail * 0.99) >= 1.0,
-        "the far end of the trail is not fully lit (relative brightness {:.2})",
-        lit(trail * 0.99)
+        restoration(trail * 0.99) >= 1.0,
+        "the far end of the trail is only {:.2} restored",
+        restoration(trail * 0.99)
     );
-    // Still fades before the edge rather than ending on a hard ring.
-    assert!(lit(ECLIPSE_PLAYER_LIGHT_R * 0.97) < 1.0, "the lamp has no soft edge at all");
-    // And contributes nothing at or beyond the radius.
-    assert_eq!(atten(ECLIPSE_PLAYER_LIGHT_R), 0.0);
+    // A fade before the edge rather than a hard ring, and nothing beyond it.
+    assert!(restoration(ECLIPSE_PLAYER_LIGHT_R * 0.95) < 1.0, "no soft edge at all");
+    assert_eq!(restoration(ECLIPSE_PLAYER_LIGHT_R), 0.0, "light leaks past the radius");
 
-    // Darkness has to exist on screen: the lit pool cannot span the viewport.
+    // Darkness has to exist on screen.
     assert!(
         ECLIPSE_PLAYER_LIGHT_R * 2.0 < VW * 0.75,
-        "the lit pool is {:.0} px across a {VW:.0} px viewport",
-        ECLIPSE_PLAYER_LIGHT_R * 2.0
+        "the lit pool spans the viewport"
     );
 
-    // Markers must stay readable beside a saturated lamp without becoming lamps.
-    assert!(ECLIPSE_NODE_LIGHT_INTENSITY > 1.0, "node markers vanish next to the lamp");
+    // The `ndl` factor must be carried, not dropped. This is the specific
+    // mistake that made the previous two attempts wrong.
+    let naive = 1.0 / (1.0 - {
+        let t = trail / ECLIPSE_PLAYER_LIGHT_R;
+        t * t * (3.0 - 2.0 * t)
+    });
     assert!(
-        ECLIPSE_NODE_LIGHT_INTENSITY < ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.3,
-        "node markers are bright enough to be a second light source"
+        ECLIPSE_PLAYER_LIGHT_INTENSITY > naive * 1.5,
+        "intensity {ECLIPSE_PLAYER_LIGHT_INTENSITY:.1} looks like it was derived without the \
+         ndl factor (naive would be {naive:.1})"
     );
-    assert!(ECLIPSE_GWELL_LIGHT_INTENSITY > ECLIPSE_NODE_LIGHT_INTENSITY);
+
+    // Markers restore their own sprite without reaching past it.
+    assert!(
+        ECLIPSE_NODE_LIGHT_INTENSITY * LIGHT_NDL_2D >= 1.0,
+        "node markers cannot even restore themselves to full"
+    );
+    assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.4, "markers reach too far");
+    assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.5);
 }
 
 #[test]
@@ -967,7 +984,7 @@ fn the_eclipse_goes_fully_dark_partway_through() {
     // is doing any work: with `ECLIPSE_USE_POINT_LIGHTS` off there is nothing to
     // see by, so the floor has to stay playable.
     let mid = BOSS_ECLIPSE_RELEASE + (BOSS_ECLIPSE_RANGE - BOSS_ECLIPSE_RELEASE) * 0.5;
-    let ceiling = if ECLIPSE_USE_POINT_LIGHTS { 0.12 } else { 0.35 };
+    let ceiling = 0.12;
     assert!(
         ambient_at(mid) < ceiling,
         "still {:.2} ambient at the midpoint — the eclipse is not reading as dark",
@@ -979,10 +996,12 @@ fn the_eclipse_goes_fully_dark_partway_through() {
     assert!(ECLIPSE_MIN_AMBIENT > 0.0, "full black hides the death floor");
     // Without a working lamp the floor must stay playable; with one it can go
     // much lower, because the lamp is then what the player sees by.
-    let floor_max = if ECLIPSE_USE_POINT_LIGHTS { 0.08 } else { 0.30 };
+    // Multiplicative, so this IS the fraction of authored brightness an unlit
+    // sprite keeps — low enough to read as an eclipse, high enough to leave
+    // silhouettes and the danger floor findable.
     assert!(
-        ECLIPSE_MIN_AMBIENT < floor_max,
-        "floor ambient {ECLIPSE_MIN_AMBIENT} is too bright to read as an eclipse"
+        (0.02..0.12).contains(&ECLIPSE_MIN_AMBIENT),
+        "floor ambient {ECLIPSE_MIN_AMBIENT} is outside the readable band"
     );
     // Full light before the warning has landed.
     assert!(ambient_at(BOSS_ECLIPSE_RANGE) > 0.99);

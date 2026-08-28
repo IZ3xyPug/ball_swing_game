@@ -13,6 +13,32 @@
 //
 // Ends the moment the fight starts (`boss_active`), and restores every light,
 // the ambient, and the shadow-caster flags it touched.
+//
+// ── How quartz lighting actually works ──────────────────────────────────────
+// Traced through `quartz/src/lighting` -> `canvas/core.rs` -> `wgpu_canvas` ->
+// `lit_rectangle.wgsl`. Read this before changing any value here; three
+// rewrites of this file were spent guessing at it.
+//
+//     accum = ambient_rgb * ambient_strength
+//           + SUM over lights in range( color * ndl * intensity * atten * shadow )
+//     lit   = clamp(base_color * accum, 0, 1)
+//
+//   * LIGHT IS MULTIPLICATIVE. It scales a sprite's own colour, so it can only
+//     restore art toward the brightness it was drawn at — it can never add
+//     light to a dark surface. Empty black sky stays black under any lamp. An
+//     eclipse here is therefore "ambient down, lamp restores what it touches",
+//     and the visible effect is objects entering and leaving normal brightness.
+//   * `ndl` is a CONSTANT 0.4472 in 2D: the default normal map is flat
+//     (128,128,255) = (0,0,1) and `ldir = normalize(vec3(dir_2d, 0.5))`, so the
+//     dot product has no directional term. Any intensity derivation must divide
+//     by it.
+//   * `atten = 1 - smoothstep(0, radius, dist)` with a HARD cutoff at radius,
+//     and the accumulator clamps — so a high intensity gives a fully-restored
+//     pool out to where `ndl * intensity * atten` reaches 1, then a fade.
+//   * Every `Item::Image` becomes a lit sprite while lighting is on, so this
+//     applies to the background too — but only to the extent its art is bright.
+//   * Engine presets run intensity 0.3-1.2. Those light an already-lit scene;
+//     restoring a near-black one needs far more, and that is legitimate.
 
 use quartz::*;
 use std::sync::{Arc, Mutex};
