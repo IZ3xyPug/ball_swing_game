@@ -937,3 +937,53 @@ fn the_cannon_fires_forward_in_both_gravity_orientations() {
     assert!((un.0 - fl.0).abs() < 0.01, "forward speed differs between orientations");
     assert!((un.1 + fl.1).abs() < 0.01, "vertical speed is not a clean mirror");
 }
+
+#[test]
+fn the_eclipse_goes_fully_dark_partway_through() {
+    use crate::scenes::game::eclipse_curve;
+    // Outside the player's lamp the world has to actually go dark, and get
+    // there partway rather than only at the very end — the first pass held the
+    // ambient at 0.14, which was bright enough to play by and made the lamp
+    // decorative.
+    let ambient_at = |gap: f32| {
+        let dark = eclipse_curve(gap).1;
+        let fall = ((dark - ECLIPSE_WARN_FRACTION) / (1.0 - ECLIPSE_WARN_FRACTION)).clamp(0.0, 1.0);
+        let fall = (fall / ECLIPSE_FULL_DARK_AT).clamp(0.0, 1.0);
+        let inv = 1.0 - fall;
+        let eased = 1.0 - inv * inv;
+        1.0 + (ECLIPSE_MIN_AMBIENT - 1.0) * eased
+    };
+
+    // Halfway between the start of the approach and the release point.
+    let mid = BOSS_ECLIPSE_RELEASE + (BOSS_ECLIPSE_RANGE - BOSS_ECLIPSE_RELEASE) * 0.5;
+    assert!(
+        ambient_at(mid) < 0.12,
+        "still {:.2} ambient at the midpoint — not dark enough to need the lamp",
+        ambient_at(mid)
+    );
+    // And it holds there rather than continuing to creep.
+    assert!(ambient_at(BOSS_ECLIPSE_RELEASE) <= ambient_at(mid) + 0.01);
+    // Never pitch black: the danger floor has to stay findable.
+    assert!(ECLIPSE_MIN_AMBIENT > 0.0, "full black hides the death floor");
+    assert!(ECLIPSE_MIN_AMBIENT < 0.08, "floor ambient is too bright for an eclipse");
+    // Full light before the warning has landed.
+    assert!(ambient_at(BOSS_ECLIPSE_RANGE) > 0.99);
+}
+
+#[test]
+fn the_boss_buff_is_a_window_not_a_licence() {
+    // Ten seconds of weakpoint damage AND three absorbed hits meant one node
+    // carried most of a fight. The buff should be long enough to convert an
+    // opening and short enough that it has to be re-earned.
+    assert!(
+        (180..=360).contains(&BUFF_DURATION_TICKS),
+        "buff lasts {BUFF_DURATION_TICKS} ticks ({:.1} s), outside the intended 3-6 s",
+        BUFF_DURATION_TICKS as f32 / 60.0
+    );
+    assert!(BUFF_ABSORB_MAX >= 1 && BUFF_ABSORB_MAX <= 4);
+    // It must not outlast the gap between chances to re-earn it.
+    assert!(
+        (BUFF_DURATION_TICKS as f32 / 60.0) < 8.0,
+        "the buff covers most of a fight on its own"
+    );
+}

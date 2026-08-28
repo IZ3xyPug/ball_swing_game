@@ -968,6 +968,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 eclipse_active: false,
                 eclipse_t: 0.0,
                 eclipse_shadow_ids: Vec::new(),
+                eclipse_light_timer: 1,
+                eclipse_node_buf: Vec::new(),
                 perm_reach_mult: perm.reach_mult,
                 perm_momentum_mult: perm.momentum_mult,
                 perm_magnet_mult: perm.magnet_mult,
@@ -1714,6 +1716,50 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
 
                     if is_game_paused(c) {
+                        // ── Upgrade stasis: tether out ─────────────────────────
+                        // This block RETURNS before the normal input handling
+                        // further down, so anything that needs input while the
+                        // world is soft-paused has to poll it here. The start
+                        // prompt already did; the post-upgrade hold did not, so
+                        // the only way out of it — a grab — could never fire and
+                        // the dialogue locked the run every single time.
+                        {
+                            let holding = {
+                                let s = st.lock().unwrap();
+                                s.upgrade_hold_until_tether && !s.upgrade_dialogue_active
+                            };
+                            if holding {
+                                let action_now = c.key("space")
+                                    || matches!(c.get_var("mouse_left_held"), Some(Value::Bool(true)));
+                                let was = matches!(
+                                    c.get_var("upgrade_hold_input_was"),
+                                    Some(Value::Bool(true))
+                                );
+                                c.set_var("upgrade_hold_input_was", action_now);
+                                if action_now && !was {
+                                    c.run(Action::Custom { name: "do_grab".into() });
+                                }
+                                // Backstop, also unreachable from its old home
+                                // below this return: never let the hold trap a run.
+                                let stuck = {
+                                    let mut s = st.lock().unwrap();
+                                    s.upgrade_hold_ticks = s.upgrade_hold_ticks.saturating_add(1);
+                                    s.upgrade_hold_ticks > UPGRADE_HOLD_MAX_TICKS
+                                };
+                                if stuck {
+                                    {
+                                        let mut s = st.lock().unwrap();
+                                        s.upgrade_hold_until_tether = false;
+                                        s.upgrade_hold_ticks = 0;
+                                    }
+                                    c.set_var("game_paused", false);
+                                    c.set_var("upgrade_hold_released", true);
+                                }
+                            } else {
+                                c.set_var("upgrade_hold_input_was", false);
+                            }
+                        }
+
                         // ── Hold space/mouse to begin ──────────────────────────
                         // The run begins only after HOLDING space/mouse for
                         // START_HOLD_TICKS, so a stray or retry click doesn't
@@ -2016,26 +2062,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             if let Some(p) = c.get_game_object_mut("player") {
                                 p.momentum = (0.0, 0.0);
                                 p.gravity = 0.0;
-                            }
-                            // Backstop. `close_dialogue` guarantees a node
-                            // within reach, so the tether exit should always be
-                            // available — but a hold that can only be ended by
-                            // a successful grab is a run-ending soft-lock if
-                            // that guarantee ever fails again. Release after a
-                            // few seconds and let the player fall; falling is
-                            // recoverable, being frozen forever is not.
-                            let stuck = {
-                                let mut s = st.lock().unwrap();
-                                s.upgrade_hold_ticks = s.upgrade_hold_ticks.saturating_add(1);
-                                s.upgrade_hold_ticks > UPGRADE_HOLD_MAX_TICKS
-                            };
-                            if stuck {
-                                let mut s = st.lock().unwrap();
-                                s.upgrade_hold_until_tether = false;
-                                s.upgrade_hold_ticks = 0;
-                                drop(s);
-                                c.set_var("game_paused", false);
-                                c.set_var("upgrade_hold_released", true);
                             }
                         }
                     }

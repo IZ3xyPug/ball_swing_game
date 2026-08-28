@@ -1609,17 +1609,24 @@ fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let generators_down = forcefield_debug
         || (!s.boss_generator_hp.is_empty() && s.boss_generator_hp.iter().all(|&hp| hp <= 0));
 
+    let mut contact_damage = false;
     let (nwx, nwy, did_unhook) = if buffed && near_weakpoint && generators_down {
         // Buffed weakpoint hit with the forcefield down: damage the boss.
         s.boss_hp -= 1;
         s.buff_hit_flash = 20;
         (nx * 26.0, ny * 26.0, false)
     } else {
-        // Forcefield still up (or unprotected contact): knockback, no damage.
+        // Unbuffed contact with the boss body COSTS a heart, it does not merely
+        // bounce. Touching the thing you are fighting has to be a mistake, or
+        // the buff is only a damage tool and never a defensive decision — and
+        // the fight degenerates into riding the boss for free.
         let unhook = s.hooked;
         if unhook {
             s.hooked = false;
             s.active_hook = String::new();
+        }
+        if !buffed {
+            contact_damage = true;
         }
         (nx * 34.0, ny * 34.0, unhook)
     };
@@ -1639,6 +1646,11 @@ fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut("player") {
             obj.gravity = GRAVITY * BOSS_GRAVITY_SCALE;
         }
+    }
+
+    if contact_damage {
+        // Applied after the State lock is dropped — `lose_heart` takes it too.
+        super::hearts::lose_heart(c, st);
     }
 
     if hp <= 0 {

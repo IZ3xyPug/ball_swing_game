@@ -667,9 +667,17 @@ pub const BOSS_ECLIPSE_RELEASE: f32 = 5_000.0;
 /// world reacts, but the wait was too long in play — the approach felt like it
 /// was doing nothing for most of its length.
 pub const ECLIPSE_WARN_FRACTION: f32 = 0.10;
-/// Ambient strength at the darkest point. Never 0 — the horizon and the danger
-/// floor must stay readable.
-pub const ECLIPSE_MIN_AMBIENT: f32 = 0.14;
+/// Ambient strength at the darkest point.
+///
+/// 0.14 still lit the whole level enough to play by, so the player's lamp was
+/// decoration rather than the thing you see by. Low enough now that outside the
+/// lamp there is effectively nothing — but not zero, because the danger floor
+/// has to stay findable.
+pub const ECLIPSE_MIN_AMBIENT: f32 = 0.03;
+/// Fraction of the darkening ramp by which full darkness is reached. Past this
+/// the world holds at `ECLIPSE_MIN_AMBIENT` instead of continuing to creep
+/// down, so most of the eclipse is spent AT its look rather than approaching it.
+pub const ECLIPSE_FULL_DARK_AT: f32 = 0.5;
 /// The player's lamp during the eclipse.
 ///
 /// SIZED FROM THE TRAIL, because the trail is what makes a wrong size obvious.
@@ -702,6 +710,10 @@ pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 2.4;
 /// without revealing the hazards.
 pub const ECLIPSE_NODE_LIGHT_R: f32 = 460.0;
 pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 0.55;
+/// How often the eclipse re-ranks nearby nodes and re-flags shadow casters.
+/// Every 6 frames (10 Hz) — nodes drift slowly relative to the player, so the
+/// staleness is invisible while the saving is most of the effect's cost.
+pub const ECLIPSE_LIGHT_REFRESH_TICKS: u32 = 6;
 
 /// Size of the down-pointing arrow above the black-hole threshold marker.
 pub const BOSS_MARKER_ARROW_D:    f32   = 220.0;
@@ -787,7 +799,12 @@ pub const BUFF_HOOK_MIN_X_GAP: f32 = 6000.0;
 /// Tag on buff tether nodes.
 pub const BUFF_HOOK_TAG: &str = "buff_node";
 /// How long a buff lasts (ticks). 600 = 10 s at 60 fps.
-pub const BUFF_DURATION_TICKS: u32 = 600;
+/// How long a tether buff lasts (5 s at 60 fps).
+///
+/// Halved from 600 after play: ten seconds of both weakpoint damage AND three
+/// absorbed hits meant one buff node carried most of a fight, so the fight was
+/// about reaching a node rather than about what you did once you had one.
+pub const BUFF_DURATION_TICKS: u32 = 300;
 /// How many boss projectiles a buff can absorb before it ends early.
 pub const BUFF_ABSORB_MAX: u32 = 3;
 /// Momentum cap granted while a buff is active (above the normal 56).

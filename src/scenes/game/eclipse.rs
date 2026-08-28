@@ -221,6 +221,7 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
         return;
     }
     let fall = ((dark - ECLIPSE_WARN_FRACTION) / (1.0 - ECLIPSE_WARN_FRACTION)).clamp(0.0, 1.0);
+    let fall = (fall / ECLIPSE_FULL_DARK_AT).clamp(0.0, 1.0);
 
     // The player's lamp widens as the dark deepens, so visibility falls less
     // sharply than the ambient does — the world gets darker, the player's reach
@@ -241,37 +242,66 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
     // Marker lights on the nearest live grab nodes. Nodes only: pads, spinners
     // and wells stay unlit so the player is finding their ROUTE by light and
     // still finding the hazards by the player lamp.
-    let mut nodes: Vec<(f32, f32, f32)> = {
-        let s = st.lock().unwrap();
-        s.live_hooks
-            .iter()
-            .filter_map(|id| c.get_game_object(id))
-            .filter(|o| o.visible)
-            .map(|o| {
+    //
+    // Refreshed on a cadence, not every frame. Collecting every live node,
+    // measuring it and sorting the result is O(n log n) with a fresh allocation,
+    // and at 60 Hz alongside the shadow pass it was the bulk of the eclipse's
+    // frame cost. Nodes drift slowly relative to the player, so a few frames of
+    // staleness is invisible.
+    let due = {
+        let mut s = st.lock().unwrap();
+        s.eclipse_light_timer = s.eclipse_light_timer.saturating_sub(1);
+        if s.eclipse_light_timer == 0 {
+            s.eclipse_light_timer = ECLIPSE_LIGHT_REFRESH_TICKS;
+            true
+        } else {
+            false
+        }
+    };
+
+    if due {
+        // Reuse the buffer rather than allocating one per refresh.
+        let mut nodes = std::mem::take(&mut st.lock().unwrap().eclipse_node_buf);
+        nodes.clear();
+        {
+            let s = st.lock().unwrap();
+            for id in &s.live_hooks {
+                let Some(o) = c.get_game_object(id) else { continue };
+                if !o.visible {
+                    continue;
+                }
                 let hx = o.position.0 + o.size.0 * 0.5;
                 let hy = o.position.1 + o.size.1 * 0.5;
-                let d = (hx - px) * (hx - px) + (hy - py) * (hy - py);
-                (d, hx, hy)
-            })
-            .collect()
-    };
-    nodes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    for i in 0..NODE_LIGHT_COUNT {
-        let id = node_light_id(i);
-        match nodes.get(i) {
-            Some(&(_, hx, hy)) => {
-                c.set_light_position(&id, hx, hy);
-                if let Some(light) = c.get_light_mut(&id) {
-                    light.intensity = ECLIPSE_NODE_LIGHT_INTENSITY * fall;
+                // Only nodes that could plausibly be lit are worth ranking.
+                if (hx - px).abs() > ECLIPSE_FILL_LIGHT_R || (hy - py).abs() > ECLIPSE_FILL_LIGHT_R {
+                    continue;
                 }
-                c.set_light_enabled(&id, true);
+                nodes.push(((hx - px) * (hx - px) + (hy - py) * (hy - py), hx, hy));
             }
-            None => c.set_light_enabled(&id, false),
         }
+        nodes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        for i in 0..NODE_LIGHT_COUNT {
+            let id = node_light_id(i);
+            match nodes.get(i) {
+                Some(&(_, hx, hy)) => {
+                    c.set_light_position(&id, hx, hy);
+                    c.set_light_enabled(&id, true);
+                }
+                None => c.set_light_enabled(&id, false),
+            }
+        }
+        st.lock().unwrap().eclipse_node_buf = nodes;
+
+        set_shadow_casters(c, st, fall > 0.05);
     }
 
-    set_shadow_casters(c, st, fall > 0.05);
+    // Intensity is cheap and wants to be smooth, so it still updates every frame.
+    for i in 0..NODE_LIGHT_COUNT {
+        if let Some(light) = c.get_light_mut(&node_light_id(i)) {
+            light.intensity = ECLIPSE_NODE_LIGHT_INTENSITY * fall;
+        }
+    }
 }
 
 /// Turn nearby pads and spinners into shadow occluders while the eclipse runs.
@@ -283,16 +313,21 @@ fn set_shadow_casters(c: &mut Canvas, st: &Arc<Mutex<State>>, on: bool) {
     // Everything solid enough to read as an object casts. Grab nodes do NOT —
     // they are the route, they carry their own marker lights, and a node that
     // throws a shadow across the line you are swinging into is noise.
-    let (pads, spinners, already) = {
+    // (ids, how many of them are round, previous set)
+    let (solid, round_from, already) = {
         let s = st.lock().unwrap();
         let mut solid: Vec<String> = Vec::new();
         solid.extend(s.pad_live.iter().cloned());
         solid.extend(s.spinner_live.iter().cloned());
-        solid.extend(s.gwell_live.iter().cloned());
         solid.extend(s.turret_live.iter().cloned());
+        // Everything from here on is round; index recorded so the occluder can
+        // be given a circular silhouette instead of its bounding box.
+        let round_from = solid.len();
+        solid.extend(s.gwell_live.iter().cloned());
         solid.extend(s.space_asteroid_live.iter().cloned());
-        (solid, Vec::<String>::new(), s.eclipse_shadow_ids.clone())
+        (solid, round_from, s.eclipse_shadow_ids.clone())
     };
+    let pads = solid;
     if !on {
         if !already.is_empty() {
             clear_shadow_casters(c, st);
@@ -300,22 +335,35 @@ fn set_shadow_casters(c: &mut Canvas, st: &Arc<Mutex<State>>, on: bool) {
         return;
     }
 
-    let mut flagged: Vec<String> = Vec::new();
-    for id in pads.iter().chain(spinners.iter()) {
+    // Clear the previous set FIRST, then flag the current one. The old version
+    // built the new list and then diffed it against the old with `contains`,
+    // which is O(n*m) over string comparisons every frame — and it left any
+    // object that had scrolled out of `*_live` still flagged, so pooled objects
+    // carried `shadow_caster` into their next life and threw shadows from
+    // nowhere.
+    for id in &already {
         if let Some(obj) = c.get_game_object_mut(id) {
-            if obj.visible {
-                obj.shadow_caster = true;
-                flagged.push(id.clone());
-            }
+            obj.shadow_caster = false;
         }
     }
-    // Anything that was flagged and is no longer live must be cleared, or a
-    // recycled pool object carries the flag into its next life.
-    for id in &already {
-        if !flagged.contains(id) {
-            if let Some(obj) = c.get_game_object_mut(id) {
+
+    let mut flagged = std::mem::take(&mut st.lock().unwrap().eclipse_shadow_ids);
+    flagged.clear();
+    for (i, id) in pads.iter().enumerate() {
+        let round = i >= round_from;
+        if let Some(obj) = c.get_game_object_mut(id) {
+            // Asteroids and gravity wells are discs; without this they cast the
+            // shadow of their bounding box, which reads as a floating slab.
+            obj.shadow_circle = round;
+            // Invisible pooled objects must never cast: an unseen occluder
+            // throwing a hard shadow across the level is the strangest possible
+            // artefact, and it is exactly what was happening.
+            if !obj.visible {
                 obj.shadow_caster = false;
+                continue;
             }
+            obj.shadow_caster = true;
+            flagged.push(id.clone());
         }
     }
     st.lock().unwrap().eclipse_shadow_ids = flagged;

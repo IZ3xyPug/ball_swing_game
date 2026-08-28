@@ -472,7 +472,13 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         // backwards down the level. Flipped gravity mirrors the
                         // world vertically; it does not reverse the direction of
                         // travel.
-                        let flipped = gravity_dir < 0.0;
+                        // Use the orientation the BARREL was animated in, not
+                        // the world's orientation right now. Those disagree if
+                        // gravity flips back mid-charge, and then the mirror is
+                        // applied to a rotation that was swept the other way —
+                        // firing the player backwards on exactly the launches
+                        // that straddle the flip.
+                        let flipped = phase.flipped;
                         let base_rot = mirror_rotation(phase.rotation, flipped);
                         let rot_rad = base_rot.to_radians();
                         let vx = CANNON_LAUNCH_VX * rot_rad.cos() - CANNON_LAUNCH_VY * rot_rad.sin();

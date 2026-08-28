@@ -515,6 +515,11 @@ pub struct State {
     /// teardown is exhaustive — a pooled object left flagged would keep casting
     /// shadows for the rest of the run.
     pub eclipse_shadow_ids: Vec<String>,
+    /// Countdown to the next node-light / shadow-caster refresh. The scan is
+    /// O(n log n) with a sort; at 60 Hz it dominated the eclipse's frame cost.
+    pub eclipse_light_timer: u32,
+    /// Reused scratch buffer for that scan, so the refresh does not allocate.
+    pub eclipse_node_buf: Vec<(f32, f32, f32)>,
 
     // ── Permanent (meta-bought) upgrades, resolved once at run start ─────────
     // Held as multipliers/counts rather than re-read from the profile every
