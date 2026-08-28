@@ -695,21 +695,34 @@ pub const ECLIPSE_LAMP_MARGIN: f32 = 220.0;
 pub const ECLIPSE_PLAYER_LIGHT_R: f32 =
     PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED + ECLIPSE_LAMP_MARGIN;
 
-/// A second, wider, much dimmer light on the player.
+/// Distance from the player at which the lamp stops being fully bright.
 ///
-/// A single point light is brightest at its centre and falls away fast, so the
-/// player sat in a hotspot with the trail dimming out behind them. The fill
-/// raises the base level across the whole lamp so the falloff reads as gentle
-/// instead of as a spotlight. It deliberately does NOT cast shadows — one
-/// shadow-casting source is what keeps the shadows DEFINED rather than doubled
-/// and soft.
-pub const ECLIPSE_FILL_LIGHT_R: f32 = ECLIPSE_PLAYER_LIGHT_R * 2.0;
-pub const ECLIPSE_FILL_LIGHT_INTENSITY: f32 = 0.55;
-pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 2.4;
+/// The engine's falloff is `atten = 1 - smoothstep(0, radius, dist)` with a
+/// hard cutoff at `radius`, and the accumulator clamps — so a HIGH intensity
+/// produces a saturated pool out to wherever `atten * intensity` falls below 1,
+/// then a fade to nothing at the radius. That is the shape wanted here: bright
+/// out to the end of the trail, fading through the slack, black beyond.
+pub const ECLIPSE_LAMP_SATURATE_TO: f32 =
+    PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
+/// Derived, not chosen: the intensity that saturates the lamp out to
+/// `ECLIPSE_LAMP_SATURATE_TO` given the engine's smoothstep falloff.
+///
+/// This was the real bug behind "the trail lights up closest to the player but
+/// the rest of it is dark". At 2.4 the pool only saturated to ~723 px against a
+/// 1080 px trail, so the far half of the trail sat in the falloff. The previous
+/// answer was a second, wider fill light — which fixed the trail by lighting
+/// the whole scene out to 2600 px and destroying the darkness. The radius was
+/// never the problem; the intensity was.
+const fn lamp_saturating_intensity() -> f32 {
+    let t = ECLIPSE_LAMP_SATURATE_TO / ECLIPSE_PLAYER_LIGHT_R;
+    let smoothstep = t * t * (3.0 - 2.0 * t);
+    1.0 / (1.0 - smoothstep)
+}
+pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = lamp_saturating_intensity();
 /// Faint marker lights on the nearest grab nodes, so the route stays readable
 /// without revealing the hazards.
 pub const ECLIPSE_NODE_LIGHT_R: f32 = 460.0;
-pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 0.55;
+pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 1.6;
 /// How often the eclipse re-ranks nearby nodes and re-flags shadow casters.
 /// Every 6 frames (10 Hz) — nodes drift slowly relative to the player, so the
 /// staleness is invisible while the saving is most of the effect's cost.
@@ -733,7 +746,7 @@ pub const ECLIPSE_MAX_SHADOW_CASTERS: usize = 20;
 /// and a well-shaped hole in the light reads as geometry rather than danger.
 pub const ECLIPSE_GWELL_LIGHT_COUNT: usize = 6;
 pub const ECLIPSE_GWELL_LIGHT_R: f32 = 620.0;
-pub const ECLIPSE_GWELL_LIGHT_INTENSITY: f32 = 0.85;
+pub const ECLIPSE_GWELL_LIGHT_INTENSITY: f32 = 2.4;
 
 /// Size of the down-pointing arrow above the black-hole threshold marker.
 pub const BOSS_MARKER_ARROW_D:    f32   = 220.0;

@@ -830,38 +830,46 @@ fn the_boss_approach_is_long_enough_to_read() {
 }
 
 #[test]
-fn the_eclipse_lamp_contains_the_player_trail() {
-    // The trail is what makes a wrong lamp size obvious: too small and its far
-    // half sits in the dark behind a lit player, which reads as a bug rather
-    // than as lighting. Both earlier passes failed this from opposite sides —
-    // 638 px lit only the near half, 2600 px was wider than the viewport and
-    // left nothing dark at all.
-    let trail_len = PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
+fn the_eclipse_lamp_is_bright_to_the_trail_and_black_beyond() {
+    // The engine falloff is `atten = 1 - smoothstep(0, radius, dist)` with a
+    // hard cutoff at `radius`, and the accumulator clamps. So the lamp is a
+    // saturated pool out to wherever `atten * intensity` drops below 1, then a
+    // fade to nothing at the radius — and NOTHING is lit past the radius.
+    fn atten(d: f32) -> f32 {
+        let t = (d / ECLIPSE_PLAYER_LIGHT_R).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    }
+    let lit = |d: f32| atten(d) * ECLIPSE_PLAYER_LIGHT_INTENSITY;
+
+    let trail = PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
+
+    // Fully bright all the way along the trail. Failing this is the "trail
+    // lights up near the player and the rest is dark" bug: at intensity 2.4 the
+    // pool only saturated to ~723 px against a 1080 px trail.
     assert!(
-        ECLIPSE_PLAYER_LIGHT_R >= trail_len,
-        "lamp radius {ECLIPSE_PLAYER_LIGHT_R:.0} px does not reach the {trail_len:.0} px trail"
+        lit(trail * 0.99) >= 1.0,
+        "the far end of the trail is not fully lit (relative brightness {:.2})",
+        lit(trail * 0.99)
     );
+    // Still fades before the edge rather than ending on a hard ring.
+    assert!(lit(ECLIPSE_PLAYER_LIGHT_R * 0.97) < 1.0, "the lamp has no soft edge at all");
+    // And contributes nothing at or beyond the radius.
+    assert_eq!(atten(ECLIPSE_PLAYER_LIGHT_R), 0.0);
+
+    // Darkness has to exist on screen: the lit pool cannot span the viewport.
     assert!(
-        ECLIPSE_PLAYER_LIGHT_R <= trail_len * 1.6,
-        "lamp is far larger than the trail it is sized for; darkness will not read"
-    );
-    // Darkness still has to exist somewhere on screen.
-    assert!(
-        ECLIPSE_PLAYER_LIGHT_R * 2.0 < VW,
-        "the lit pool is wider than the viewport — nothing is ever dark"
+        ECLIPSE_PLAYER_LIGHT_R * 2.0 < VW * 0.75,
+        "the lit pool is {:.0} px across a {VW:.0} px viewport",
+        ECLIPSE_PLAYER_LIGHT_R * 2.0
     );
 
-    // The fill exists to flatten the falloff, not to light the level: wider
-    // than the lamp, and much dimmer.
-    assert!(ECLIPSE_FILL_LIGHT_R > ECLIPSE_PLAYER_LIGHT_R, "fill is not wider than the lamp");
+    // Markers must stay readable beside a saturated lamp without becoming lamps.
+    assert!(ECLIPSE_NODE_LIGHT_INTENSITY > 1.0, "node markers vanish next to the lamp");
     assert!(
-        ECLIPSE_FILL_LIGHT_INTENSITY < ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.4,
-        "the fill is bright enough to be a second lamp; shadows will read as doubled"
+        ECLIPSE_NODE_LIGHT_INTENSITY < ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.3,
+        "node markers are bright enough to be a second light source"
     );
-
-    // "On but dim" must still look like a working light.
-    let dimmest = ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.70;
-    assert!(dimmest > 1.0, "the lamp starts too faint to read as lit: {dimmest:.2}");
+    assert!(ECLIPSE_GWELL_LIGHT_INTENSITY > ECLIPSE_NODE_LIGHT_INTENSITY);
 }
 
 #[test]
@@ -1015,12 +1023,13 @@ fn the_eclipse_light_budget_fits() {
     // The lighting config caps at 64 lights. The eclipse must fit with room for
     // the boss fight's own lights, even though the two never overlap in time.
     const MAX_LIGHTS: usize = 64;
-    let eclipse = 1 /* lamp */ + 1 /* fill */ + 16 /* node markers */
-        + ECLIPSE_GWELL_LIGHT_COUNT;
+    let eclipse = 1 /* lamp */ + 16 /* node markers */ + ECLIPSE_GWELL_LIGHT_COUNT;
     assert!(
         eclipse < MAX_LIGHTS / 2,
         "the eclipse claims {eclipse} of {MAX_LIGHTS} lights"
     );
     // Well lights are markers, not illumination — dimmer than the player lamp.
     assert!(ECLIPSE_GWELL_LIGHT_INTENSITY < ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.5);
+    // And they must not reach as far as the lamp does.
+    assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R);
 }

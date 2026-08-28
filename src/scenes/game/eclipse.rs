@@ -22,7 +22,6 @@ use crate::state::*;
 
 /// Light ids, so teardown can be exhaustive.
 const PLAYER_LIGHT: &str = "eclipse_player_light";
-const FILL_LIGHT: &str = "eclipse_fill_light";
 
 fn gwell_light_id(i: usize) -> String {
     format!("eclipse_gwell_light_{i}")
@@ -127,22 +126,6 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     c.set_light_enabled(PLAYER_LIGHT, true);
 
-    // Wide dim fill, no shadows. Flattens the point light's falloff so the
-    // player is not sitting in a hotspot with their own trail fading out behind
-    // them; leaving shadows to the single main lamp is what keeps them defined.
-    if c.get_light(FILL_LIGHT).is_none() {
-        let mut ls = LightSource::new(
-            FILL_LIGHT,
-            (0.0, 0.0),
-            Color(215, 228, 255, 255),
-            ECLIPSE_FILL_LIGHT_R,
-            ECLIPSE_FILL_LIGHT_INTENSITY,
-        );
-        ls.casts_shadows = false;
-        c.add_light(ls);
-        c.attach_light(FILL_LIGHT, "player", (0.0, 0.0));
-    }
-    c.set_light_enabled(FILL_LIGHT, true);
 
     // A bounded pool of marker lights. Bounded because the lighting config caps
     // at 64 and the boss fight wants a chunk of those for its bolts — one light
@@ -197,7 +180,6 @@ fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     if c.has_lighting() {
         c.set_light_enabled(PLAYER_LIGHT, false);
-        c.set_light_enabled(FILL_LIGHT, false);
         for i in 0..NODE_LIGHT_COUNT {
             c.set_light_enabled(&node_light_id(i), false);
         }
@@ -261,10 +243,6 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
         light.radius = ECLIPSE_PLAYER_LIGHT_R;
         light.intensity = ECLIPSE_PLAYER_LIGHT_INTENSITY * (0.70 + 0.30 * fall);
     }
-    if let Some(light) = c.get_light_mut(FILL_LIGHT) {
-        light.radius = ECLIPSE_FILL_LIGHT_R;
-        light.intensity = ECLIPSE_FILL_LIGHT_INTENSITY * (0.70 + 0.30 * fall);
-    }
 
     // Marker lights on the nearest live grab nodes. Nodes only: pads, spinners
     // and wells stay unlit so the player is finding their ROUTE by light and
@@ -300,7 +278,7 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
                 let hx = o.position.0 + o.size.0 * 0.5;
                 let hy = o.position.1 + o.size.1 * 0.5;
                 // Only nodes that could plausibly be lit are worth ranking.
-                if (hx - px).abs() > ECLIPSE_FILL_LIGHT_R || (hy - py).abs() > ECLIPSE_FILL_LIGHT_R {
+                if (hx - px).abs() > ECLIPSE_PLAYER_LIGHT_R || (hy - py).abs() > ECLIPSE_PLAYER_LIGHT_R {
                     continue;
                 }
                 nodes.push(((hx - px) * (hx - px) + (hy - py) * (hy - py), hx, hy));
@@ -411,7 +389,7 @@ fn set_shadow_casters(c: &mut Canvas, st: &Arc<Mutex<State>>, on: bool) {
         let cx = obj.position.0 + obj.size.0 * 0.5;
         let cy = obj.position.1 + obj.size.1 * 0.5;
         let d = (cx - px) * (cx - px) + (cy - py) * (cy - py);
-        if d > ECLIPSE_FILL_LIGHT_R * ECLIPSE_FILL_LIGHT_R {
+        if d > ECLIPSE_PLAYER_LIGHT_R * ECLIPSE_PLAYER_LIGHT_R {
             continue;
         }
         ranked.push((d, id, is_round));
