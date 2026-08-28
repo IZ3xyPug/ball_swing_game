@@ -10,6 +10,7 @@ mod poisson;
 mod state;
 mod achievements;
 mod difficulty;
+mod hazards;
 mod mode;
 mod level_gen;
 mod gameplay;
@@ -19,6 +20,9 @@ mod scenes;
 mod shop;
 mod profile;
 pub mod headless;
+
+/// Exposed for the headless binary's report line.
+pub fn constants_gen_ahead() -> f32 { constants::GEN_AHEAD }
 
 #[cfg(test)]
 mod sim_tests;

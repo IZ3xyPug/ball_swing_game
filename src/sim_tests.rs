@@ -474,9 +474,357 @@ fn boss_schedule_reads_as_intended() {
         .map(|i| (boss_trigger_distance(GameMode::Normal, i).unwrap()
             / DIFFICULTY_PX_PER_MINUTE).round() as i32)
         .collect();
-    assert_eq!(mins, vec![9, 17, 26, 34, 43, 51, 60], "Normal boss minutes changed");
+    assert_eq!(mins, vec![11, 23, 34, 46, 57, 69, 80], "Normal boss minutes changed");
     assert!(
-        (BOSS_INTERVAL_MINUTES - 60.0 / BOSS_ROSTER_SIZE as f32).abs() < 0.01,
+        (BOSS_INTERVAL_MINUTES - DIFFICULTY_FULL_MINUTES / BOSS_ROSTER_SIZE as f32).abs() < 0.01,
         "the advertised interval no longer matches the schedule"
+    );
+
+    // The pacing check that can be verified in-game rather than on paper.
+    // Nominal minutes assume a fixed player speed; DISTANCE is what the world
+    // actually measures, and god-mode straight-line flight is how it was timed.
+    // Playtest 2026-08-27 put god-mode at ~980 px/s and asked for 3–4 minutes
+    // per gap, which is 176 000–235 000 px.
+    let gap = boss_trigger_distance(GameMode::Normal, 0).unwrap();
+    assert!(
+        (176_000.0..=235_000.0).contains(&gap),
+        "boss gap is {gap:.0} px = {:.1} min of god-mode flight; playtest asked for 3-4",
+        gap / 980.0 / 60.0
+    );
+}
+
+// ── Hazard introduction schedule ─────────────────────────────────────────────
+
+#[test]
+fn hazards_are_introduced_one_at_a_time_in_order() {
+    use crate::hazards::*;
+    // The authored order. A reorder here changes what a player learns first and
+    // must be a deliberate edit, not a side effect.
+    let expected = [
+        Hazard::Spinner,
+        Hazard::GravityWell,
+        Hazard::Turret,
+        Hazard::DriftAsteroid,
+        Hazard::Comet,
+        Hazard::SolarFlare,
+    ];
+    let actual: Vec<Hazard> = STAGES.iter().map(|s| s.hazard).collect();
+    assert_eq!(actual, expected, "hazard introduction order changed");
+
+    // Each gets several minutes to itself before the next arrives, so it is
+    // learned in isolation rather than in a pile.
+    let mut prev = 0.0_f32;
+    for s in STAGES {
+        assert!(
+            s.introduce_minutes() - prev >= 5.0,
+            "{} arrives only {:.1} min after the previous hazard",
+            s.name,
+            s.introduce_minutes() - prev
+        );
+        assert!(
+            s.mature_minutes() > s.introduce_minutes() + 8.0,
+            "{} matures too fast to be learned",
+            s.name
+        );
+        assert!(
+            s.mature_minutes() <= DIFFICULTY_FULL_MINUTES,
+            "{} never reaches maturity inside a run",
+            s.name
+        );
+        prev = s.introduce_minutes();
+    }
+}
+
+#[test]
+fn the_opening_is_nodes_pads_and_asteroids_only() {
+    use crate::hazards::*;
+    // The first minutes must contain no hazards at all — the player is learning
+    // to swing, and everything that can hurt them arrives later.
+    let opening = 4.0 * DIFFICULTY_PX_PER_MINUTE;
+    for s in STAGES {
+        assert!(
+            !hazard_active(opening, s.hazard),
+            "{} is already live in the opening",
+            s.name
+        );
+    }
+    // And the supports are at full strength there.
+    for c in SUPPORTS {
+        assert_eq!(support_level(0.0, c.support), 1.0, "{} does not start full", c.name);
+        assert_eq!(support_level(opening, c.support), 1.0, "{} thins during the opening", c.name);
+    }
+}
+
+#[test]
+fn every_hazard_is_live_and_mature_by_the_end() {
+    use crate::hazards::*;
+    let end = DIFFICULTY_FULL_DISTANCE;
+    for s in STAGES {
+        assert!(hazard_active(end, s.hazard), "{} never appears", s.name);
+        assert!(
+            hazard_intensity(end, s.hazard) > 0.98,
+            "{} is still ramping at the end of a run",
+            s.name
+        );
+    }
+}
+
+#[test]
+fn hazard_intensity_is_monotonic_and_bounded() {
+    use crate::hazards::*;
+    for s in STAGES {
+        let mut prev = -1.0_f32;
+        for i in 0..=600 {
+            let d = DIFFICULTY_FULL_DISTANCE * 1.1 * (i as f32 / 600.0);
+            let t = hazard_intensity(d, s.hazard);
+            assert!((0.0..=1.0).contains(&t), "{} intensity {t} out of range", s.name);
+            assert!(t >= prev - 1e-6, "{} intensity went backwards at {d}", s.name);
+            prev = t;
+        }
+        // It must arrive at its RAREST, not at its authored density.
+        let at_intro = s.introduce_distance();
+        assert!(hazard_intensity(at_intro, s.hazard) < 0.01, "{} arrives already dangerous", s.name);
+    }
+}
+
+#[test]
+fn supports_thin_but_never_disappear() {
+    use crate::hazards::*;
+    for c in SUPPORTS {
+        let mut prev = 2.0_f32;
+        for i in 0..=600 {
+            let d = DIFFICULTY_FULL_DISTANCE * 1.1 * (i as f32 / 600.0);
+            let lvl = support_level(d, c.support);
+            assert!(lvl <= prev + 1e-6, "{} grew instead of thinning at {d}", c.name);
+            assert!(lvl >= c.floor - 1e-6, "{} fell through its floor: {lvl}", c.name);
+            assert!(lvl > 0.0, "{} disappeared entirely", c.name);
+            prev = lvl;
+        }
+        assert!(
+            (0.3..0.8).contains(&c.floor),
+            "{} floor {} is outside a sane range — too low is a wall, too high is no curve",
+            c.name, c.floor
+        );
+        // Gaps widen as the support thins, and stay finite.
+        let (elo, _) = support_gap_range(0.0, c.support, 1000.0, 2000.0);
+        let (hlo, hhi) = support_gap_range(DIFFICULTY_FULL_DISTANCE, c.support, 1000.0, 2000.0);
+        assert!(hlo > elo, "{} gaps did not widen", c.name);
+        // The widest a gap can get is the authored value divided by the floor.
+        assert!(
+            hhi.is_finite() && hhi <= 2000.0 / c.floor + 1.0,
+            "{} gaps widened past their floor: {hhi}",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn hazards_get_more_dangerous_but_stay_survivable() {
+    use crate::hazards::*;
+    let end = DIFFICULTY_FULL_DISTANCE;
+    let intro_t = |h: Hazard| stage(h).introduce_distance();
+
+    // Turrets fire more often — and never faster than twice a second, which is
+    // the point where a single turret becomes a wall rather than a hazard.
+    let slow = turret_shoot_interval(intro_t(Hazard::Turret), TURRET_SHOOT_INTERVAL_FAST);
+    let fast = turret_shoot_interval(end, TURRET_SHOOT_INTERVAL_FAST);
+    assert!(fast < slow, "turret fire rate did not increase");
+    assert!(fast >= 30, "turrets fire faster than twice a second: {fast} ticks");
+
+    // Comets arrive in bursts, growing one at a time rather than jumping.
+    assert_eq!(comet_burst_count(intro_t(Hazard::Comet)), 1, "comets start in bursts");
+    assert_eq!(comet_burst_count(end), 3, "comet bursts never reach three");
+    let mut prev = 1;
+    for i in 0..=400 {
+        let d = end * (i as f32 / 400.0);
+        let n = comet_burst_count(d);
+        assert!(n >= prev && n - prev <= 1, "comet burst jumped {prev} -> {n}");
+        assert!((1..=3).contains(&n));
+        prev = n;
+    }
+    assert!(comet_interval(end, COMET_SPAWN_INTERVAL) < comet_interval(intro_t(Hazard::Comet), COMET_SPAWN_INTERVAL));
+    assert!(comet_fire_chance(end) > comet_fire_chance(intro_t(Hazard::Comet)));
+
+    // Asteroids only enter the play area after their introduction, and never
+    // take over the spawn entirely — the high ones are still a support.
+    assert_eq!(drift_asteroid_share(0.0), 0.0);
+    assert_eq!(drift_asteroid_share(intro_t(Hazard::DriftAsteroid)), 0.0);
+    let share = drift_asteroid_share(end);
+    assert!((0.2..0.6).contains(&share), "drift share {share} leaves too few high asteroids");
+
+    // Density rises for every gap-scaled hazard, and no gap collapses.
+    for h in [Hazard::Spinner, Hazard::GravityWell, Hazard::Turret] {
+        let (rlo, _) = hazard_gap_range(intro_t(h), h, 7000.0, 11000.0, 2.4, 0.55);
+        let (dlo, _) = hazard_gap_range(end, h, 7000.0, 11000.0, 2.4, 0.55);
+        assert!(dlo < rlo, "{:?} did not get denser", h);
+        assert!(dlo > 1500.0, "{:?} gap collapsed to {dlo}", h);
+    }
+}
+
+// ── Chain-frontier ownership ─────────────────────────────────────────────────
+
+#[test]
+fn only_sanctioned_code_raises_the_hook_chain_frontier() {
+    // `rightmost_x` gates world generation: the chain spawner stops while
+    // `rightmost_x >= px + GEN_AHEAD`. Any other system that RAISES it switches
+    // generation off until the player walks the difference.
+    //
+    // That is not a hypothetical — `spawn_upgrade_nodes` raised it to a
+    // companion node placed up to 55 000 px ahead, which killed hook generation
+    // from the first second of every run and left the whole stretch to the
+    // `ensure_player_hooks` failsafe. Five call sites borrow from the shared
+    // hook pool, so this is a source-level guard against a sixth.
+    //
+    // Writes that LOWER the frontier (`.min(...)`, respawn and boss backfill)
+    // are always safe and are not counted.
+    use std::path::Path;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders: Vec<String> = Vec::new();
+    let mut sanctioned = 0usize;
+
+    // (file suffix, how many raising writes that file is allowed)
+    const ALLOWED: &[(&str, usize)] = &[
+        // The chain spawner itself, plus the frontier-repair clamp beside it.
+        ("scenes/game/spawning.rs", 2),
+        // The respawn checkpoint node, which is always BEHIND the player and so
+        // cannot open a gap ahead of them.
+        ("scenes/game/hearts.rs", 1),
+        // Run construction, plus the `--at-minute` test hook that teleports the
+        // whole world state forward. That one sets `gen_head_x` to the same
+        // value in the same breath, so `rightmost_x <= gen_head_x` still holds
+        // and the chain resumes cleanly from the seeded position.
+        ("scenes/game/build_scene.rs", 1),
+    ];
+
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            // sim_tests.rs is this file; it only mentions the field in prose.
+            if rel == "sim_tests.rs" {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim();
+                if t.starts_with("//") || !t.contains("rightmost_x") {
+                    continue;
+                }
+                // A write to the FIELD (`x.rightmost_x = ...`), not a local
+                // binding of the same name and not a lowering clamp. Struct
+                // literal initialisation is construction, not a write.
+                let is_field_write = t.contains(".rightmost_x =") && !t.contains("==");
+                if !is_field_write || t.contains(".min(") {
+                    continue;
+                }
+                let allowed = ALLOWED.iter().find(|(f, _)| rel.ends_with(f));
+                match allowed {
+                    Some(_) => sanctioned += 1,
+                    None => offenders.push(format!("{rel}:{} — {t}", n + 1)),
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these raise the hook chain frontier and will stall world generation:\n  {}\n\
+         An auxiliary hook may borrow from the pool, but must not advance the chain.",
+        offenders.join("\n  ")
+    );
+
+    let budget: usize = ALLOWED.iter().map(|(_, n)| *n).sum();
+    assert!(
+        sanctioned <= budget,
+        "{sanctioned} raising writes in sanctioned files, budget is {budget} — \
+         a new one was added; confirm it is the chain spawner before widening this"
+    );
+}
+
+// ── Boss approach: the solar eclipse ─────────────────────────────────────────
+
+#[test]
+fn eclipse_darkens_then_lifts_before_the_teleporter() {
+    use crate::scenes::game::eclipse_curve;
+
+    // Nothing before the approach begins.
+    let (_, far) = eclipse_curve(BOSS_ECLIPSE_RANGE);
+    assert_eq!(far, 0.0, "the eclipse starts before its own range");
+    let (_, beyond) = eclipse_curve(BOSS_ECLIPSE_RANGE * 2.0);
+    assert_eq!(beyond, 0.0);
+
+    // Peak dark exactly at the release point, not at the teleporter.
+    let (_, peak) = eclipse_curve(BOSS_ECLIPSE_RELEASE);
+    assert!(peak > 0.99, "the eclipse never reaches full darkness: {peak}");
+
+    // Fully lifted by the time the player arrives, so the black hole is lit at
+    // the moment it matters.
+    let (_, at_gate) = eclipse_curve(0.0);
+    assert!(at_gate < 0.01, "still dark at the teleporter: {at_gate}");
+
+    // Single-peaked: rises monotonically to the release point, falls after.
+    let mut prev = -1.0_f32;
+    let mut gap = BOSS_ECLIPSE_RANGE;
+    while gap >= BOSS_ECLIPSE_RELEASE {
+        let (_, d) = eclipse_curve(gap);
+        assert!(d >= prev - 1e-5, "darkness dipped while approaching at gap {gap}");
+        prev = d;
+        gap -= 250.0;
+    }
+    let mut prev = 2.0_f32;
+    let mut gap = BOSS_ECLIPSE_RELEASE;
+    while gap >= 0.0 {
+        let (_, d) = eclipse_curve(gap);
+        assert!(d <= prev + 1e-5, "darkness rose again during the release at gap {gap}");
+        prev = d;
+        gap -= 100.0;
+    }
+
+    // The warning has to land before the world reacts to it.
+    let (rise_at_start, dark_at_start) = eclipse_curve(BOSS_ECLIPSE_RANGE - 1.0);
+    assert!(rise_at_start < ECLIPSE_WARN_FRACTION, "no warning window");
+    assert!(dark_at_start < 0.02, "the world darkens before the warning");
+
+    // The release must be a real beat, not a flicker.
+    assert!(
+        BOSS_ECLIPSE_RELEASE >= 2_000.0 && BOSS_ECLIPSE_RELEASE < BOSS_ECLIPSE_RANGE * 0.4,
+        "release window of {BOSS_ECLIPSE_RELEASE} px is not a legible beat"
+    );
+}
+
+#[test]
+fn the_boss_approach_is_long_enough_to_read() {
+    use crate::mode::*;
+    // The teleport used to arrive with no build-up, because the marker was
+    // pinned at a constant while the trigger became scheduled. Both the eclipse
+    // and the marker must start well before the threshold, and the eclipse
+    // must come first so the sequence reads warning -> dark -> black hole.
+    assert!(
+        BOSS_ECLIPSE_RANGE > BOSS_APPROACH_RANGE,
+        "the black hole appears before the eclipse that announces it"
+    );
+    assert!(
+        BOSS_APPROACH_RANGE > BOSS_ECLIPSE_RELEASE,
+        "the marker appears after the dark has already lifted"
+    );
+    // And the whole approach must fit inside one boss gap.
+    let gap = boss_trigger_distance(GameMode::Normal, 0).unwrap();
+    assert!(
+        BOSS_ECLIPSE_RANGE < gap * 0.5,
+        "the approach ({BOSS_ECLIPSE_RANGE} px) eats more than half the {gap:.0} px run-up"
     );
 }

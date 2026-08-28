@@ -101,9 +101,17 @@ fn spawn_upgrade_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
             let mut s2 = st.lock().unwrap();
             s2.live_hooks.push(hid);
-            if hx > s2.rightmost_x {
-                s2.rightmost_x = hx;
-            }
+            // NOTE: deliberately does NOT touch `rightmost_x`.
+            //
+            // `rightmost_x` means "how far the grab-node CHAIN extends", and it
+            // gates the chain spawner (`rightmost_x < px + GEN_AHEAD`). This
+            // companion node is placed beside an upgrade node up to 55 000 px
+            // ahead of the player, so advancing the frontier to it told the
+            // chain spawner it had already generated that far. Measured: on the
+            // first second of a run the frontier jumped to 49 603 px with 37
+            // free pool slots and 16 hooks still queued, and stayed blocked for
+            // eight seconds — the whole stretch covered only by the
+            // `ensure_player_hooks` failsafe.
         }
         s = st.lock().unwrap();
     }

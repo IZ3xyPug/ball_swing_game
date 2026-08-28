@@ -15,20 +15,33 @@
 
 #![allow(dead_code)]
 
-/// Net forward speed (px/second) assumed for a strong player, averaged over a
-/// whole run including arcs that briefly travel backwards.
+/// Net forward speed (px/second) of a real player, averaged over a whole run.
 ///
-/// Reference points: `MOMENTUM_CAP` is 50 px/tick (3000 px/s) at the peak of a
-/// swing, and a clean hop chain nets roughly one stride (~640 px) per arc of
-/// ~24 ticks, i.e. ~1600 px/s while chaining perfectly. 800 px/s assumes a
-/// strong player spends about half the run at that rate and the rest
-/// recovering, re-aiming, or handling hazards.
-pub const ASSUMED_PLAYER_PX_PER_SEC: f32 = 800.0;
+/// CALIBRATED FROM PLAY, not from the physics — the physics estimate was three
+/// times too fast. Measured 2026-08-27: god-mode straight-line flight covers the
+/// first boss gap (411 429 px) in about 7 minutes, i.e. ~980 px/s with no
+/// swinging, no hazards and no falls. Actual play over the same ground was
+/// reported at 10–15 minutes, which puts real net progress at 230–340 px/s.
+///
+/// 300 sits in that band and slightly favours the early game, which genuinely
+/// is faster because the hazard schedule has barely started there.
+///
+/// This is the one number to retune after the next playtest: time a strong run,
+/// divide its `distance` by the seconds elapsed, and put the answer here.
+/// Everything else — curve length, hazard introductions, boss spacing — is
+/// derived from it and moves together.
+pub const ASSUMED_PLAYER_PX_PER_SEC: f32 = 300.0;
 
 /// Minutes of continuous play a perfect run takes to reach peak difficulty.
 /// Boss fights are deliberately excluded — they interrupt the run rather than
 /// advancing `distance`, so adding them later does not shift this curve.
-pub const DIFFICULTY_FULL_MINUTES: f32 = 60.0;
+///
+/// 80 nominal minutes at 300 px/s is 1 440 000 px, which puts the seven boss
+/// slots ~205 700 px apart: 3.5 minutes of god-mode flight each, and 11–17
+/// minutes of real play depending on how thick the hazards are by then. Late
+/// gaps take longer than early ones over the same distance, which is why the
+/// felt spacing widens through a run without the schedule doing anything.
+pub const DIFFICULTY_FULL_MINUTES: f32 = 80.0;
 
 /// Minutes at the very start that stay at the floor of the curve, so the
 /// opening of a run is always the same gentle teaching stretch.
@@ -46,7 +59,11 @@ pub const DIFFICULTY_GRACE_DISTANCE: f32 = DIFFICULTY_PX_PER_MINUTE * DIFFICULTY
 /// Distance one visual zone lasts before cycling to the next. Zones are
 /// *texture*, not difficulty — they cycle repeatedly through the run so the
 /// backdrop keeps changing, while `difficulty_t` climbs monotonically.
-pub const ZONE_CYCLE_MINUTES: f32 = 4.0;
+/// Zone looks cycle a fixed number of times per run rather than on a fixed
+/// clock, so changing the run length does not change how often the backdrop
+/// turns over.
+pub const ZONE_CYCLES_PER_RUN: f32 = 15.0;
+pub const ZONE_CYCLE_MINUTES: f32 = DIFFICULTY_FULL_MINUTES / ZONE_CYCLES_PER_RUN;
 pub const ZONE_CYCLE_DISTANCE: f32 = DIFFICULTY_PX_PER_MINUTE * ZONE_CYCLE_MINUTES;
 
 /// Number of distinct zone looks (normal → purple → black → repeat).

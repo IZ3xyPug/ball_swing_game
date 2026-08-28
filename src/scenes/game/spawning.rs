@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::constants::*;
 use crate::gameplay::*;
-use crate::difficulty::hazard_gap_range;
+use crate::hazards::{self, Hazard, Support};
 use crate::images::*;
 use crate::state::*;
 use crate::level_gen::{clamp_into_envelope, hop_is_reachable, max_reachable_x};
@@ -181,7 +181,8 @@ pub fn spawn_debug_special_hook(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool 
     let hy = (s.py - 260.0).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
 
     s.live_hooks.push(id.clone());
-    if hx > s.rightmost_x { s.rightmost_x = hx; }
+    // Auxiliary hook: borrows a pool slot but must not advance the chain
+    // frontier (see `spawn_upgrade_nodes`).
     s.last_hook_y = hy;
     s.world_sampler.add(hx, hy);
     s.spawn_animations.retain(|a| a.id != id);
@@ -220,7 +221,8 @@ pub fn spawn_debug_extended_hook(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool
     let hy = (s.py - 260.0).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
 
     s.live_hooks.push(id.clone());
-    if hx > s.rightmost_x { s.rightmost_x = hx; }
+    // Auxiliary hook: borrows a pool slot but must not advance the chain
+    // frontier (see `spawn_upgrade_nodes`).
     s.last_hook_y = hy;
     s.world_sampler.add(hx, hy);
     s.spawn_animations.retain(|a| a.id != id);
@@ -313,19 +315,45 @@ pub fn tick_spawning(
 
 /// Automatically attempt to spawn a comet on a timer. 50% chance each interval.
 fn spawn_auto_comet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    {
+    let burst = {
         let mut s = st.lock().unwrap();
+        // Comets join the run at minute 36.
+        if !hazards::hazard_active(s.distance, Hazard::Comet) {
+            s.comet_spawn_timer = 0;
+            return;
+        }
         if s.comet_spawn_timer > 0 {
             s.comet_spawn_timer -= 1;
             return;
         }
-        // Reset timer for next interval (add some jitter via lcg).
-        let jitter = lcg_range(&mut s.seed, 0.0, COMET_SPAWN_INTERVAL as f32 * 0.5) as u32;
-        s.comet_spawn_timer = COMET_SPAWN_INTERVAL + jitter;
-        // 50% chance to actually fire.
-        if lcg(&mut s.seed) >= 0.5 { return; }
+        let distance = s.distance;
+        // Waves start far apart and rarely fire; by maturity they are frequent
+        // and near-certain.
+        let interval = hazards::comet_interval(distance, COMET_SPAWN_INTERVAL);
+        let jitter = lcg_range(&mut s.seed, 0.0, interval as f32 * 0.5) as u32;
+        s.comet_spawn_timer = interval + jitter;
+        if lcg(&mut s.seed) >= hazards::comet_fire_chance(distance) {
+            return;
+        }
+        // One comet at introduction, up to three back to back at maturity.
+        hazards::comet_burst_count(distance)
+    };
+
+    // Stagger the burst so the members arrive in sequence rather than as one
+    // wide wall — a wall has no gap to swing through, which is the difference
+    // between "harder" and "unfair".
+    for i in 0..burst {
+        if !spawn_debug_comet(c, st) {
+            break;
+        }
+        if i + 1 < burst {
+            let mut s = st.lock().unwrap();
+            if let Some(w) = s.comet_warn_live.last_mut() {
+                // Push each successive warning later in its telegraph.
+                w.timer = w.timer.saturating_sub(COMET_BURST_STAGGER * (i + 1));
+            }
+        }
     }
-    spawn_debug_comet(c, st);
 }
 
 fn circle_overlaps_aabb(cx: f32, cy: f32, r: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -455,6 +483,38 @@ fn find_safe_hook_position(
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
 fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // ── Chain-frontier repair ────────────────────────────────────────────
+    // `rightmost_x` is how far the grab-node CHAIN extends, and it gates this
+    // spawner. `gen_head_x` is how far the chain has been PLANNED, and the
+    // spawner only ever places specs the generator already produced — so
+    // `rightmost_x <= gen_head_x` holds by construction, whatever the player
+    // does. Anything above that is some other system having written the chain
+    // frontier, which silently switches world generation off until the player
+    // walks the difference.
+    //
+    // That is not hypothetical: `spawn_upgrade_nodes` used to advance the
+    // frontier to a companion node placed up to 55 000 px ahead, killing hook
+    // generation from the first second of every run. Five call sites borrow
+    // from the shared hook pool and a sixth is easy to add, so the invariant is
+    // repaired here rather than only fixed at each site.
+    {
+        let mut s = st.lock().unwrap();
+        if s.rightmost_x > s.gen_head_x {
+            s.rightmost_x = s.gen_head_x;
+            s.frontier_repairs = s.frontier_repairs.saturating_add(1);
+            let n = s.frontier_repairs as i32;
+            drop(s);
+            c.set_var("frontier_repairs", Value::I32(n));
+        }
+    }
+
+    {
+        let s = st.lock().unwrap();
+        let ahead = s.rightmost_x - s.px;
+        drop(s);
+        c.set_var("hook_frontier_ahead", Value::F32(ahead));
+    }
+
     // Read asteroid mode once from canvas before locking State.
     let asteroid_mode = c.get_bool("asteroid_hooks_on");
     let mut last_special_x = c.get_var("special_hook_last_x").and_then(|v| {
@@ -906,7 +966,10 @@ fn spawn_pads(
         && s.pad_rightmost < s.px + GEN_AHEAD
         && !s.pad_free.is_empty()
     {
-        let (glo, ghi) = hazard_gap_range(s.distance, PAD_GAP_MIN, PAD_GAP_MAX);
+        // Pads are the anti-fall net, so they run the SUPPORT curve: densest at
+        // the start and thinning to a floor, never disappearing.
+        let (glo, ghi) = hazards::support_gap_range(
+            s.distance, Support::Pad, PAD_GAP_MIN, PAD_GAP_MAX);
         let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.pad_rightmost + gap;
         let raw_y = {
@@ -1013,17 +1076,31 @@ fn spawn_pads(
 
 fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
+    // Spinners are the first hazard to join the run (minute 5). Before that the
+    // world is nodes, pads and high asteroids only.
+    if !hazards::hazard_active(s.distance, Hazard::Spinner) {
+        // Keep the frontier with the player so the first spinners appear AHEAD
+        // of them rather than being backfilled across the whole opening.
+        if s.spinner_rightmost < s.px { s.spinner_rightmost = s.px; }
+        return;
+    }
     let mut spinners_spawned = 0usize;
     while spinners_spawned < SPINNERS_SPAWN_BUDGET_PER_TICK
         && s.spinner_rightmost < s.px + GEN_AHEAD
         && !s.spinner_free.is_empty()
     {
-        let (glo, ghi) = hazard_gap_range(s.distance, SPINNER_GAP_MIN, SPINNER_GAP_MAX);
+        let (glo, ghi) = hazards::hazard_gap_range(
+            s.distance, Hazard::Spinner, SPINNER_GAP_MIN, SPINNER_GAP_MAX, 2.4, 0.55);
         let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.spinner_rightmost + gap;
         let y = {
+            // Placement tightens with maturity: a newly introduced spinner is
+            // biased toward the bottom of the band, where it is a sight before
+            // it is a problem. A mature one can sit anywhere, including across
+            // the line the player wants to swing through.
+            let top = hazards::hazard_ramp(s.distance, Hazard::Spinner, 620.0, -50.0);
             let mut seed = s.seed;
-            let sampled = s.world_sampler.sample_y(&mut seed, x, -50.0, 1300.0, 20);
+            let sampled = s.world_sampler.sample_y(&mut seed, x, top, 1300.0, 20);
             s.seed = seed;
             sampled
         };
@@ -1034,7 +1111,10 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         let zone_idx = zone_index_for_distance(s.distance);
         let spin_dir = if lcg(&mut s.seed) < 0.5 { 1.0 } else { -1.0 };
-        let rot_speed = spinner_speed_for_zone(zone_idx) * spin_dir;
+        // A brand-new spinner turns slowly enough to read; a mature one is
+        // faster than the zone alone would make it.
+        let maturity = hazards::hazard_ramp(s.distance, Hazard::Spinner, 0.70, 1.35);
+        let rot_speed = spinner_speed_for_zone(zone_idx) * spin_dir * maturity;
 
         // Vertical movement disabled — spinners always stay at their spawn Y.
         let _ = zone_idx;
@@ -1430,12 +1510,20 @@ fn spawn_gates(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
-    // Gravity wells only appear in the third zone of each cycle. Outside that
-    // window the cursor rides along with the player, so when the window comes
-    // round again wells resume AHEAD of them — the old code jumped the cursor
-    // to a fixed X computed for the first (and, back then, only) zone-2 stretch,
-    // which after the first lap left the cursor stranded far behind.
-    if zone_index_for_distance(s.distance) < 2 {
+    // Wells join the run at minute 12 and are governed by the introduction
+    // curve alone.
+    //
+    // They used to ALSO require zone 2, which was a proxy for difficulty back
+    // when the zone index was the difficulty system. It is not any more —
+    // `hazards.rs` owns introduction and `difficulty.rs` owns intensity, and
+    // zones are now purely a backdrop that cycles every four minutes. Keeping
+    // both meant two systems gating the same thing: wells could only appear in
+    // a four-minute window once every twelve, on top of an already-rare
+    // introduction multiplier, so they were effectively absent.
+    //
+    // Before their introduction the cursor rides along with the player, so the
+    // first wells appear AHEAD of them rather than being backfilled.
+    if !hazards::hazard_active(s.distance, Hazard::GravityWell) {
         if s.gwell_rightmost < s.px { s.gwell_rightmost = s.px; }
         return;
     }
@@ -1444,7 +1532,8 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && s.gwell_rightmost < s.px + GEN_AHEAD
         && !s.gwell_free.is_empty()
     {
-        let (glo, ghi) = hazard_gap_range(s.distance, GWELL_GAP_MIN, GWELL_GAP_MAX);
+        let (glo, ghi) = hazards::hazard_gap_range(
+            s.distance, Hazard::GravityWell, GWELL_GAP_MIN, GWELL_GAP_MAX, 2.6, 0.60);
         let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.gwell_rightmost + gap;
 
@@ -1454,7 +1543,10 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         } else {
             lcg_range(&mut s.seed, 1000.0, 1500.0)
         };
-        let radius = lcg_range(&mut s.seed, GWELL_RADIUS_MIN, GWELL_RADIUS_MAX);
+        // Wells also grow: the first ones are small enough to swing past, the
+        // last ones cover a chunk of the lane.
+        let size_k = hazards::hazard_ramp(s.distance, Hazard::GravityWell, 0.62, 1.15);
+        let radius = lcg_range(&mut s.seed, GWELL_RADIUS_MIN, GWELL_RADIUS_MAX) * size_k;
         let strength = lcg_range(&mut s.seed, GWELL_STRENGTH_MIN, GWELL_STRENGTH_MAX);
         let visual_scale = lcg_range(&mut s.seed, GWELL_VISUAL_SCALE_MIN, GWELL_VISUAL_SCALE_MAX);
         let visual_r = PLAYER_R * visual_scale;
@@ -1496,13 +1588,19 @@ fn spawn_gravity_wells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
+    // Turrets join the run at minute 19.
+    if !hazards::hazard_active(s.distance, Hazard::Turret) {
+        if s.turret_rightmost < s.px { s.turret_rightmost = s.px; }
+        return;
+    }
     // Turrets appear in all zones (phases 1/2/3 based on world X position).
     let mut spawned = 0usize;
     while spawned < TURRET_SPAWN_BUDGET
         && s.turret_rightmost < s.px + GEN_AHEAD
         && !s.turret_free.is_empty()
     {
-        let (glo, ghi) = hazard_gap_range(s.distance, TURRET_GAP_MIN, TURRET_GAP_MAX);
+        let (glo, ghi) = hazards::hazard_gap_range(
+            s.distance, Hazard::Turret, TURRET_GAP_MIN, TURRET_GAP_MAX, 2.4, 0.55);
         let gap = lcg_range(&mut s.seed, glo, ghi);
         let x = s.turret_rightmost + gap;
         // Spawn 200y above the last hook position (clamped to screen bounds).
@@ -1510,7 +1608,8 @@ fn spawn_turrets(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let Some(id) = s.turret_free.pop() else { break; };
         s.turret_live.push(id.clone());
         s.turret_rightmost = x;
-        s.turret_timers.push((id.clone(), TURRET_SHOOT_INTERVAL_FAST));
+        let first_shot = hazards::turret_shoot_interval(s.distance, TURRET_SHOOT_INTERVAL_FAST);
+        s.turret_timers.push((id.clone(), first_shot));
         spawned += 1;
         let anim_ticks = spawn_anim_ticks_for_speed(s.vx, player_max_momentum(&*s));
         let start_rot = lcg_range(&mut s.seed, -90.0, 90.0);
@@ -1595,18 +1694,33 @@ fn spawn_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.space_asteroid_free.is_empty()
         && s.space_asteroid_rightmost < s.px + GEN_AHEAD
     {
-        let gap = lcg_range(&mut s.seed, SPACE_ASTEROID_GAP_MIN, SPACE_ASTEROID_GAP_MAX);
+        // High asteroids are a SUPPORT: plenty of them early, there to be swung
+        // from when a pad throws the player above the node band, thinning to a
+        // floor rather than disappearing.
+        let (alo, ahi) = hazards::support_gap_range(
+            s.distance, Support::HighAsteroid, SPACE_ASTEROID_GAP_MIN, SPACE_ASTEROID_GAP_MAX);
+        let gap = lcg_range(&mut s.seed, alo, ahi);
         let x = s.space_asteroid_rightmost + gap;
         let size = lcg_range(&mut s.seed, SPACE_ASTEROID_SIZE_MIN, SPACE_ASTEROID_SIZE_MAX);
+
+        // From minute 28 a growing share of them are placed IN the grab-node
+        // band instead of high above it, where they compete for tether
+        // attention and sometimes block a line the player wanted.
+        let drift_share = hazards::drift_asteroid_share(s.distance);
+        let in_play_area = lcg(&mut s.seed) < drift_share;
 
         // Blend Y range by size: small → near hook zone, large → high up (visible zoomed out).
         let size_t = (size - SPACE_ASTEROID_SIZE_MIN)
             / (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
-        let y_min = SPACE_ASTEROID_Y_NEAR_MIN
-            + (SPACE_ASTEROID_Y_FAR_MIN - SPACE_ASTEROID_Y_NEAR_MIN) * size_t;
-        let y_max = SPACE_ASTEROID_Y_NEAR_MAX
-            + (SPACE_ASTEROID_Y_FAR_MAX - SPACE_ASTEROID_Y_NEAR_MAX) * size_t;
-        let y = lcg_range(&mut s.seed, y_min, y_max);
+        let y = if in_play_area {
+            lcg_range(&mut s.seed, HOOK_Y_MIN - 200.0, HOOK_Y_MAX + 200.0)
+        } else {
+            let y_min = SPACE_ASTEROID_Y_NEAR_MIN
+                + (SPACE_ASTEROID_Y_FAR_MIN - SPACE_ASTEROID_Y_NEAR_MIN) * size_t;
+            let y_max = SPACE_ASTEROID_Y_NEAR_MAX
+                + (SPACE_ASTEROID_Y_FAR_MAX - SPACE_ASTEROID_Y_NEAR_MAX) * size_t;
+            lcg_range(&mut s.seed, y_min, y_max)
+        };
 
         // Slightly stronger spin than before so rotation reads clearly in play.
         let spin_mag = lcg_range(&mut s.seed, 0.45, 0.95);
@@ -1616,7 +1730,13 @@ fn spawn_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.space_asteroid_live.push(id.clone());
         s.space_asteroid_rightmost = x;
         spawned += 1;
-        let drift = lcg_range(&mut s.seed, 1.2, 3.5);
+        let drift = if in_play_area {
+            // Faster than the background ones, so a drifter reads as something
+            // moving through the lane rather than part of the backdrop.
+            lcg_range(&mut s.seed, 3.0, 6.5)
+        } else {
+            lcg_range(&mut s.seed, 1.2, 3.5)
+        };
         let gravity_dir = s.gravity_dir;
         drop(s);
 
@@ -1638,6 +1758,15 @@ fn spawn_main_asteroids(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.is_platform = false;
             obj.collision_layer = ASTEROID_COLLISION_LAYER;
             obj.collision_mask  = ASTEROID_COLLISION_LAYER | PLAYER_COLLISION_LAYER;
+            // Tetherable. Asteroids high above the band exist to be swung from
+            // when the player is launched out of it; the ones drifting through
+            // the band are the same object used against them, which is what
+            // makes them compete for tether attention rather than just block.
+            obj.tags.retain(|t| t != "hook" && t != ASTEROID_DRIFT_TAG);
+            obj.tags.push("hook".into());
+            if in_play_area {
+                obj.tags.push(ASTEROID_DRIFT_TAG.into());
+            }
             obj.update_image_shape();
             if let Some(a) = obj.animated_sprite.as_mut() {
                 let frames = a.frame_count().max(1);

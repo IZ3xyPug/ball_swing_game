@@ -126,6 +126,18 @@ fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // and out, so the region can sit anywhere — it does not have to be reachable by
 // swinging, and successive arenas simply step further along the X axis.
 
+/// Centre of the arena for the fight currently being set up.
+///
+/// `BOSS_ARENA_CENTER_X` is derived from the ORIGINAL fixed arena constants and
+/// is now wrong for every fight: when arenas became relocatable the walls moved
+/// and this did not, so the warp destination, the boss spawn and the boss's
+/// movement centre all stayed at the old 27 000 while the walls sat millions of
+/// pixels away. Use this instead.
+fn arena_center_x(c: &Canvas) -> f32 {
+    let (x1, x2) = arena_bounds(c);
+    (x1 + x2) * 0.5
+}
+
 /// Left and right walls of the arena for the fight currently being set up.
 fn arena_bounds(c: &Canvas) -> (f32, f32) {
     let x1 = match c.get_var("boss_arena_x1") {
@@ -178,7 +190,7 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && s.px >= threshold - BOSS_APPROACH_RANGE
     {
         drop(s);
-        spawn_boss_approach_nodes(c, st);
+        spawn_boss_approach_nodes(c, st, threshold);
         s = st.lock().unwrap();
     }
 
@@ -190,6 +202,10 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // the run rather than stranding them in the arena's stretch of X.
         s.boss_return_x = s.px;
         s.boss_return_y = s.py;
+        s.boss_approach_nodes_spawned = false; // re-arm for the next fight
+        drop(s);
+        c.set_var("boss_defeated_this_fight", false);
+        let mut s = st.lock().unwrap();
         let index = s.boss_index;
         drop(s);
         place_arena(c, index);
@@ -522,7 +538,7 @@ fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// Reveal the boss threshold marker once the player approaches the portal. The
 /// procedural hooks now cover the approach densely (after the stride tightening
 /// in constants.rs), so no extra approach nodes are placed here.
-fn spawn_boss_approach_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+fn spawn_boss_approach_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>, threshold: f32) {
     let mut s = st.lock().unwrap();
     if s.boss_approach_nodes_spawned {
         return;
@@ -531,11 +547,22 @@ fn spawn_boss_approach_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drop(s);
 
     // Reveal the huge black-hole threshold marker so the player knows they are
-    // heading into something special.
+    // heading into something special — and MOVE IT to the fight that is
+    // actually coming.
+    //
+    // Both objects were built once at `BOSS_THRESHOLD_X` (20 000), which was
+    // the trigger back when a run held exactly one fight. The trigger is now
+    // scheduled, so by the time this revealed them they were hundreds of
+    // thousands of pixels behind the player and the teleport arrived with no
+    // warning at all.
+    let d = BOSS_MARKER_D;
     if let Some(obj) = c.get_game_object_mut("boss_threshold_marker") {
+        obj.position = (threshold - d * 0.5, BOSS_MARKER_Y - d * 0.5);
         obj.visible = true;
     }
+    let asz = BOSS_MARKER_ARROW_D;
     if let Some(obj) = c.get_game_object_mut("boss_marker_arrow") {
+        obj.position = (threshold - asz * 0.5, (BOSS_MARKER_Y - 900.0) - asz * 0.5);
         obj.visible = true;
     }
 }
@@ -544,7 +571,7 @@ fn spawn_boss_approach_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// the tether grid, so the fight is entered cleanly rather than the player
 /// having to climb from the normal zone.
 fn warp_player_into_arena(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let warp_x = BOSS_ARENA_CENTER_X;
+    let warp_x = arena_center_x(c);
     let warp_y = 200.0;
     {
         let mut s = st.lock().unwrap();
@@ -595,7 +622,7 @@ fn warp_player_into_arena(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// get their bearings; tethering to a node (grabbing it) ends the stasis and
 /// starts the fight (see `tick_boss_stasis`).
 fn enter_boss_stasis(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (warp_x, warp_y) = (BOSS_ARENA_CENTER_X, 200.0);
+    let (warp_x, warp_y) = (arena_center_x(c), 200.0);
     let mut s = st.lock().unwrap();
     s.boss_stasis_active = true;
     s.boss_stasis_ticks = 0;
@@ -996,8 +1023,13 @@ fn tick_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 /// Final phase: the boss periodically lunges at where the player *was* (a
-/// telegraphed bait). If the player dodges, the lunge carries the boss past the
-/// open sun line and it falls in.
+/// telegraphed bait), which is a dodge test and a window to counter-attack.
+///
+/// The lunge used to KILL the boss outright if it carried past the sun line —
+/// the "bait-and-bail" finisher from the original design. That is gone: the sun
+/// is no longer part of this fight, so the only way to end it is to bring the
+/// barrier down by destroying both generators and then damage the boss with a
+/// buffed weakpoint hit. The lunge is now purely an attack the player dodges.
 fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (final_phase, active, spawned, hp) = {
         let s = st.lock().unwrap();
@@ -1039,10 +1071,13 @@ fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut("boss") {
             obj.position = (nx - BOSS_SIZE * 0.5, ny - BOSS_SIZE * 0.5);
         }
-        // The lunge carried the boss past the sun line → it falls in.
-        if ny < BOSS_SUN_KILL_Y {
-            finish_boss(c, st);
-            return;
+        // NOTE: no sun-line kill here any more. The boss overshooting the top
+        // of the arena used to end the fight instantly, which short-circuited
+        // the generators-then-weakpoint loop that is now the whole fight.
+        // Clamp instead, so a lunge cannot carry it out of the arena.
+        let ny = ny.max(BOSS_ARENA_TOP_Y);
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position.1 = ny - BOSS_SIZE * 0.5;
         }
         if done {
             let mut s = st.lock().unwrap();
@@ -1076,6 +1111,10 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Award meta currency for the permanent-roguelike upgrade pool.
     crate::profile::award_meta_currency(META_BOSS_REWARD);
+    // Direct defeat signal. `boss_mode_cleared` now means "no fights left this
+    // run", which is only true of the last one, so it is the wrong thing for a
+    // per-fight check to read.
+    c.set_var("boss_defeated_this_fight", true);
 
     for id in generator_ids {
         if let Some(obj) = c.get_game_object_mut(&id) {
@@ -1211,7 +1250,7 @@ fn tick_boss_appearance(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drop(s);
 
     // Place boss at its initial lissajous position (top-center).
-    let spawn_x = BOSS_ARENA_CENTER_X - BOSS_SIZE * 0.5;
+    let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
     let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
     if let Some(obj) = c.get_game_object_mut("boss") {
         obj.position = (spawn_x, spawn_y);
@@ -1229,7 +1268,7 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (cur_x, cur_y) = if let Some(obj) = c.get_game_object("boss") {
         (obj.position.0 + BOSS_SIZE * 0.5, obj.position.1 + BOSS_SIZE * 0.5)
     } else {
-        (BOSS_ARENA_CENTER_X, BOSS_Y_CENTER)
+        (arena_center_x(c), BOSS_Y_CENTER)
     };
 
     let mut s = st.lock().unwrap();
@@ -1248,7 +1287,7 @@ fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let y_liss = (phase * 2.0 + 0.5).sin();
 
     // Map to arena bounds: X = [-1,1] → [20000, 34000], Y = [-1,1] → [-6000, 2400]
-    let tx_base = BOSS_ARENA_CENTER_X + x_liss * BOSS_ARENA_HALF_W * 0.95;
+    let tx_base = arena_center_x(c) + x_liss * BOSS_ARENA_HALF_W * 0.95;
     let y_min = -6000.0;
     let y_max = 2400.0;
     let y_center = (y_min + y_max) * 0.5;
@@ -1603,14 +1642,35 @@ fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if hp <= 0 {
-        if let Some(obj) = c.get_game_object_mut("boss") {
-            obj.visible = false;
-            obj.position = (-6000.0, -6000.0);
+        // Recycle the objects the fight owns, then hand off to the real victory
+        // flow.
+        //
+        // This used to be an inline copy of the end-of-fight teardown, and it
+        // had drifted from `finish_boss`: it awarded no meta currency, showed no
+        // victory stasis, and never advanced `boss_index` — so with the sun-line
+        // finisher removed, killing the boss by weakpoint damage (the only way
+        // now, and the intended one) would have paid nothing and re-armed the
+        // SAME fight at the same threshold.
+        let asteroid_ids2 = asteroid_ids.clone();
+        {
+            let mut s2 = st.lock().unwrap();
+            let live: Vec<String> = s2.boss_bolt_live.iter().map(|(n, _, _, _)| n.clone()).collect();
+            for id in &live {
+                s2.boss_bolt_live.retain(|(n, _, _, _)| n != id);
+                s2.boss_bolt_free.push(id.clone());
+            }
+            s2.space_asteroid_live.retain(|id| !asteroid_ids2.contains(id));
+            s2.boss_dark_active = false;
+            s2.boss_dark_ticks = 0;
+            s2.boss_dark_cooldown = BOSS_DARK_INTERVAL;
+            drop(s2);
+            for id in &live {
+                if let Some(obj) = c.get_game_object_mut(id) {
+                    obj.visible = false;
+                    obj.position = (-7000.0, -7000.0);
+                }
+            }
         }
-        if let Some(obj) = c.get_game_object_mut("boss_hp_bar") {
-            obj.visible = false;
-        }
-        // Hide boss asteroids and remove from space_asteroid_live.
         for id in &asteroid_ids {
             if let Some(obj) = c.get_game_object_mut(id) {
                 obj.visible = false;
@@ -1618,70 +1678,17 @@ fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.momentum = (0.0, 0.0);
             }
         }
-        // Restore player gravity.
+        // Restore player gravity (the arena runs at a reduced scale).
         if let Some(obj) = c.get_game_object_mut("player") {
             let cur = obj.gravity;
             let sign = if cur < 0.0 { -1.0_f32 } else { 1.0_f32 };
             obj.gravity = sign * GRAVITY;
         }
-        // Recycle live bolts, remove boss asteroids from live list, and
-        // resume normal world spawning immediately after the fight.
-        let mut s2 = st.lock().unwrap();
-        let live: Vec<String> = s2.boss_bolt_live.iter().map(|(n, _, _, _)| n.clone()).collect();
-        for id in &live {
-            s2.boss_bolt_live.retain(|(n, _, _, _)| n != id);
-            s2.boss_bolt_free.push(id.clone());
-        }
-        s2.space_asteroid_live.retain(|id| !asteroid_ids.contains(id));
 
-        // Exit boss mode so tick_spawning/tick_culling run again.
-        s2.boss_active = false;
-        s2.boss_spawned = false;
-        s2.boss_cleared = false;
-        s2.boss_entry_ticks = 0;
-        s2.boss_shoot_timer = BOSS_SHOOT_INTERVAL;
-        s2.boss_dark_active = false;
-        s2.boss_dark_ticks = 0;
-        s2.boss_dark_cooldown = BOSS_DARK_INTERVAL;
-
-        // Rewind spawn frontiers behind the player so content repopulates now,
-        // not only after travelling far past old rightmost markers.
-        let backfill_x = s2.px - GEN_AHEAD * 0.35;
-        s2.rightmost_x = s2.rightmost_x.min(backfill_x);
-        s2.pad_rightmost = s2.pad_rightmost.min(backfill_x);
-        s2.spinner_rightmost = s2.spinner_rightmost.min(backfill_x);
-        s2.coin_rightmost = s2.coin_rightmost.min(backfill_x);
-        s2.flip_rightmost = s2.flip_rightmost.min(backfill_x);
-        s2.score_x2_rightmost = s2.score_x2_rightmost.min(backfill_x);
-        s2.zero_g_rightmost = s2.zero_g_rightmost.min(backfill_x);
-        s2.gate_rightmost = s2.gate_rightmost.min(backfill_x);
-        s2.gwell_rightmost = s2.gwell_rightmost.min(backfill_x);
-        s2.turret_rightmost = s2.turret_rightmost.min(backfill_x);
-        s2.rocket_pad_rightmost = s2.rocket_pad_rightmost.min(backfill_x);
-        s2.space_asteroid_rightmost = s2.space_asteroid_rightmost.min(backfill_x);
-
-        // Ensure hook spawning can restart even if pending queue was exhausted.
-        if s2.pending.is_empty() {
-            let mut seed = s2.seed;
-            let mut gen_head_x = s2.gen_head_x;
-            let mut gen_head_y = s2.gen_head_y;
-            let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s2.distance);
-            s2.seed = seed;
-            s2.gen_head_x = gen_head_x;
-            s2.gen_head_y = gen_head_y;
-            s2.pending.extend(batch);
-        }
-        drop(s2);
-
-        // Mark boss as cleared for this run to prevent immediate re-entry at same X.
-        c.set_var("boss_mode_cleared", true);
-
-        for id in &live {
-            if let Some(obj) = c.get_game_object_mut(id) {
-                obj.visible = false;
-                obj.position = (-7000.0, -7000.0);
-            }
-        }
+        // Meta reward, victory stasis, and — via `complete_boss_finish` when the
+        // player tethers out — the frontier rewind and the schedule advance that
+        // arms the next fight.
+        finish_boss(c, st);
     }
 }
 

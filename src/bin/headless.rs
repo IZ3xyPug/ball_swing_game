@@ -10,6 +10,7 @@ fn main() {
     let mut weakpoint_check = false;
     let mut flare_test = false;
     let mut shelter_check = false;
+    let mut start_minute: f32 = 0.0;
 
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -39,6 +40,12 @@ fn main() {
                 boss_warp = true;
                 weakpoint_check = true;
             }
+            "--at-minute" => {
+                if i + 1 < args.len() {
+                    start_minute = args[i + 1].parse().unwrap_or(0.0);
+                }
+                i += 1;
+            }
             "--flare-test" => {
                 flare_test = true;
             }
@@ -49,7 +56,7 @@ fn main() {
                 fall_test = true;
             }
             "--help" | "-h" => {
-                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-weakpoint-check] [--fall-test] [--flare-test] [--flare-shelter-check]");
+                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-weakpoint-check] [--fall-test] [--flare-test] [--flare-shelter-check] [--at-minute N]");
                 return;
             }
             _ => {}
@@ -57,7 +64,7 @@ fn main() {
         i += 1;
     }
 
-    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp, weakpoint_check, flare_test, shelter_check);
+    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp, weakpoint_check, flare_test, shelter_check, start_minute);
 
     println!("\n=== HEADLESS SUMMARY ===");
     println!(
@@ -89,5 +96,16 @@ fn main() {
     println!(
         "flares_fired={} flare_hearts_lost={} flare_saves={} flares_without_shelter={}",
         agg.flares_fired, agg.flare_hearts_lost, agg.flare_saves, agg.flares_without_shelter
+    );
+    println!(
+        "worst_frontier_overshoot={:.0} px (GEN_AHEAD={:.0})  frontier_repairs={}",
+        agg.worst_frontier_overshoot,
+        main::constants_gen_ahead(),
+        agg.frontier_repairs
+    );
+    let c = agg.census;
+    println!(
+        "census hooks={} pads={} spinners={} gwells={} turrets={} highAst={} driftAst={}",
+        c.hooks, c.pads, c.spinners, c.gwells, c.turrets, c.high_asteroids, c.drift_asteroids
     );
 }

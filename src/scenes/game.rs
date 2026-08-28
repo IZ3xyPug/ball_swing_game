@@ -15,6 +15,8 @@ mod gravity_cannon;
 mod boss;
 mod hearts;
 mod solar;
+mod eclipse;
+pub use eclipse::eclipse_curve;
 mod fx;
 mod upgrades;
 pub mod space_zone;

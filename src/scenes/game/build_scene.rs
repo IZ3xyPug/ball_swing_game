@@ -774,12 +774,25 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // Permanent upgrades resolve once, here, and travel with the run.
             let perm = crate::profile::permanent_bonuses();
 
+            // Test hook: start the run partway along the difficulty curve, so a
+            // harness can sample what the world looks like at any minute
+            // without simulating the play that would get there.
+            let canvas_mode_idx = match canvas.get_var(crate::mode::MODE_VAR) {
+                Some(Value::I32(i)) => Some(i),
+                _ => None,
+            };
+            let seeded_distance = match canvas.get_var("debug_start_distance") {
+                Some(Value::F32(d)) if d > 0.0 => d,
+                Some(Value::F64(d)) if d > 0.0 => d as f32,
+                _ => 0.0,
+            };
+
             let fresh_state = State {
                 px: start_px, py: start_py,
                 vx: 0.0, vy: 0.0,
                 hooked: false, hook_x: start_hook.0,
                 hook_y: start_hook.1, rope_len: start_rope_len,
-                active_hook: "hook_0".into(), distance: 0.0,
+                active_hook: "hook_0".into(), distance: seeded_distance,
                 score: 0, coin_count: perm.start_coins,
                 gravity_dir: 1.0, score_time_awards: 0,
                 score_distance_awards: 0,
@@ -950,6 +963,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 flare_active_ticks: 0,
                 flare_damage_timer: 0,
                 last_shield_x: SPAWN_X,
+                frontier_repairs: 0,
+                eclipse_active: false,
+                eclipse_t: 0.0,
+                eclipse_shadow_ids: Vec::new(),
                 perm_reach_mult: perm.reach_mult,
                 perm_momentum_mult: perm.momentum_mult,
                 perm_magnet_mult: perm.magnet_mult,
@@ -970,9 +987,92 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     *slot = Some(Arc::new(Mutex::new(fresh_state)));
                 }
             }
+
+            // Test hook: drop the run partway along the curve.
+            //
+            // Seeding `distance` alone was not enough — it gates the hazard
+            // schedule, but the boss threshold and the eclipse that precedes it
+            // are POSITION-based, so a harness that only moved the counter could
+            // never reach them. Move the player and every spawn frontier too, so
+            // the world generates around them from the first frame.
+            if seeded_distance > 0.0 {
+                let slot = persistent_state.lock().unwrap();
+                if let Some(state_arc) = slot.as_ref() {
+                    let mut s = state_arc.lock().unwrap();
+                    let at = SPAWN_X + seeded_distance;
+                    s.px = at;
+                    s.hook_x = at;
+                    s.rightmost_x = at;
+                    s.gen_head_x = at;
+                    // The reach clamp measures every new node against the last
+                    // PLACED one. Left at the starter hook it pinned all forty
+                    // seeded nodes back to ~3 800 px, leaving the seeded player
+                    // in an empty world — the clamp doing exactly its job
+                    // against stale input.
+                    s.last_hook_x = at;
+                    s.pending.clear();
+                    let mut seed = s.seed;
+                    let mut ghx = at;
+                    let mut ghy = s.gen_head_y;
+                    let batch = gen_hook_batch(&mut seed, at, &mut ghx, &mut ghy, seeded_distance);
+                    s.seed = seed;
+                    s.gen_head_x = ghx;
+                    s.gen_head_y = ghy;
+                    s.pending = batch;
+                    s.pad_rightmost = at;
+                    s.spinner_rightmost = at;
+                    s.coin_rightmost = at;
+                    s.flip_rightmost = at;
+                    s.score_x2_rightmost = at;
+                    s.zero_g_rightmost = at;
+                    s.gate_rightmost = at;
+                    s.gwell_rightmost = at;
+                    s.turret_rightmost = at;
+                    s.cannon_rightmost = at;
+                    s.rocket_pad_rightmost = at;
+                    s.upgrade_rightmost = at;
+                    s.space_asteroid_rightmost = at;
+                    s.last_shield_x = at;
+                    s.checkpoint_x = at;
+                    s.py = start_py;
+                    s.hook_y = start_py;
+                    s.last_hook_y = start_py;
+                    s.gen_head_y = start_py;
+                    // Advance past any fights this position is already beyond,
+                    // or the first one triggers on frame 1 and the seeded run
+                    // never samples the world it was pointed at.
+                    let mode = match canvas_mode_idx {
+                        Some(i) => crate::mode::GameMode::from_index(i),
+                        None => crate::mode::GameMode::default(),
+                    };
+                    let mut idx = 0u32;
+                    while let Some(d) = crate::mode::boss_trigger_distance(mode, idx) {
+                        if seeded_distance > d { idx += 1; } else { break; }
+                    }
+                    s.boss_index = idx;
+                }
+            }
+            if seeded_distance > 0.0 {
+                // Skip the "hold space to begin" standby orbit. It orbits the
+                // starter hook, which a seeded run has been teleported away
+                // from, so the run would sit in the intro forever and never
+                // reach the content being sampled.
+                canvas.set_var("start_prompt_active", false);
+                canvas.set_var("game_paused", false);
+                canvas.set_var("input_needs_edge_reset", false);
+                canvas.set_var("start_orbit_ticks", 0i32);
+                if let Some(obj) = canvas.get_game_object_mut("start_prompt_text") {
+                    obj.visible = false;
+                }
+            }
             let state =
                 persistent_state.lock().unwrap().as_ref().unwrap().clone();
 
+            let (start_px, start_py) = if seeded_distance > 0.0 {
+                (SPAWN_X + seeded_distance, start_py)
+            } else {
+                (start_px, start_py)
+            };
             if let Some(obj) = canvas.get_game_object_mut("player") {
                 obj.position = (start_px - PLAYER_R, start_py - PLAYER_R);
                 obj.momentum = (0.0, 0.0);
@@ -1884,6 +1984,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Roguelike upgrade nodes (spend coins) ──────────────
                     upgrades::tick_upgrades(c, &st);
+                    super::eclipse::tick_eclipse(c, &st);
 
                     // ── Upgrade dialogue / post-dialogue stasis hold ───────
                     // (The world is soft-paused while this is true, so this is a

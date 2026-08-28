@@ -145,6 +145,7 @@ fn tick_turret_shoot(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let hook_pos = (s.hook_x, s.hook_y);
     let rope_len = s.rope_len;
     let gravity_dir = s.gravity_dir;
+    let distance_now = s.distance;
 
     // Collect turrets that are ready to shoot.
     let mut ready: Vec<(String, usize)> = Vec::new(); // (turret_id, timer_index)
@@ -208,7 +209,10 @@ fn tick_turret_shoot(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
             }
 
-            let reset_ticks = if phase >= 2 { TURRET_SHOOT_INTERVAL_P2 } else { TURRET_SHOOT_INTERVAL_FAST };
+            let base = if phase >= 2 { TURRET_SHOOT_INTERVAL_P2 } else { TURRET_SHOOT_INTERVAL_FAST };
+            // Turrets fire more often the further into the run they appear.
+            // Phase escalation still applies on top of the introduction curve.
+            let reset_ticks = crate::hazards::turret_shoot_interval(distance_now, base);
             if let Some((_, ticks)) = s.turret_timers.get_mut(*timer_idx) {
                 *ticks = reset_ticks;
             }

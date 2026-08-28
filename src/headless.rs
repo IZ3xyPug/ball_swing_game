@@ -79,6 +79,40 @@ pub struct EpisodeReport {
     pub flare_hearts_lost: i32,
     pub flare_saves: i32,
     pub flares_without_shelter: i32,
+    /// Largest gap ever seen between the chain frontier and the player. Healthy
+    /// steady state hovers just above GEN_AHEAD; a large value means world
+    /// generation was switched off and the player was crossing empty world.
+    pub worst_frontier_overshoot: f32,
+    /// Times the frontier guard had to repair `rightmost_x`. Must stay 0.
+    pub frontier_repairs: i32,
+    /// How many of each hazard the episode ever saw alive. The introduction
+    /// schedule is only real if the world agrees with it, so the harness counts
+    /// objects rather than trusting the curve.
+    pub census: HazardCensus,
+}
+
+/// Peak simultaneous count of each object type seen during an episode.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HazardCensus {
+    pub hooks: usize,
+    pub pads: usize,
+    pub spinners: usize,
+    pub gwells: usize,
+    pub turrets: usize,
+    pub high_asteroids: usize,
+    pub drift_asteroids: usize,
+}
+
+impl HazardCensus {
+    fn absorb(&mut self, o: &Self) {
+        self.hooks = self.hooks.max(o.hooks);
+        self.pads = self.pads.max(o.pads);
+        self.spinners = self.spinners.max(o.spinners);
+        self.gwells = self.gwells.max(o.gwells);
+        self.turrets = self.turrets.max(o.turrets);
+        self.high_asteroids = self.high_asteroids.max(o.high_asteroids);
+        self.drift_asteroids = self.drift_asteroids.max(o.drift_asteroids);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -107,12 +141,25 @@ pub struct AggregateReport {
     pub flare_hearts_lost: i32,
     pub flare_saves: i32,
     pub flares_without_shelter: i32,
+    pub worst_frontier_overshoot: f32,
+    pub frontier_repairs: i32,
+    pub census: HazardCensus,
 }
 
 // ── Canvas factory (mirrors App::new but boots straight into the game) ────────
 
-fn build_canvas(ctx: &mut prism::Context) -> Canvas {
+/// `start_minute` must be applied BEFORE `load_scene("game")`: the game scene's
+/// `on_enter` builds `State` immediately, so a var set after this call arrives
+/// a whole run too late — which is exactly how the first version of the
+/// difficulty sampler silently reported an empty schedule at every minute.
+fn build_canvas(ctx: &mut prism::Context, start_minute: f32) -> Canvas {
     let mut canvas = Canvas::new(ctx, CanvasMode::Landscape);
+    if start_minute > 0.0 {
+        canvas.set_var(
+            "debug_start_distance",
+            Value::F32(start_minute * crate::difficulty::DIFFICULTY_PX_PER_MINUTE),
+        );
+    }
     canvas.add_scene(build_tutorial_scene(ctx));
     canvas.add_scene(build_menu_scene(ctx));
     canvas.add_scene(build_game_scene(ctx));
@@ -354,9 +401,9 @@ fn zone_for_distance(d: f32) -> usize {
 
 // ── Episode runner ────────────────────────────────────────────────────────────
 
-fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool) -> EpisodeReport {
+fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool, start_minute: f32) -> EpisodeReport {
     let (mut ctx, _recv) = prism::Context::new();
-    let mut canvas = build_canvas(&mut ctx);
+    let mut canvas = build_canvas(&mut ctx, start_minute);
     let sized = SizedTree::default();
 
     if boss_mode {
@@ -409,6 +456,8 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
     let mut worst_starve_streak: u64 = 0;
     let mut flares_without_shelter: i32 = 0;
     let mut prev_flare_count: i32 = 0;
+    let mut census = HazardCensus::default();
+    let mut worst_overshoot = 0.0f32;
 
     while frames < max_frames {
         // Observe (borrows canvas immutably, then released).
@@ -488,6 +537,53 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
                 if !shelter_near {
                     flares_without_shelter += 1;
                 }
+            }
+        }
+
+        // Census: count what is actually alive this frame. Cheap enough at
+        // headless speeds, and it is the only way to prove the introduction
+        // schedule reaches the world rather than just the curve.
+        {
+            let mut now = HazardCensus::default();
+            // No general enumeration API on Canvas, and a radius sweep from the
+            // player is the more meaningful measure anyway: it counts what is
+            // actually near enough to matter rather than everything pooled.
+            let nearby: Vec<&quartz::GameObject> = match canvas.get_game_object("player") {
+                Some(p) => canvas.objects_in_radius(p, crate::constants::GEN_AHEAD),
+                None => Vec::new(),
+            };
+            for obj in nearby {
+                if !obj.visible {
+                    continue;
+                }
+                let is_drift = obj.tags.iter().any(|t| t == crate::constants::ASTEROID_DRIFT_TAG);
+                if obj.id.starts_with("space_asteroid") {
+                    if is_drift { now.drift_asteroids += 1; } else { now.high_asteroids += 1; }
+                } else if obj.tags.iter().any(|t| t == "hook") {
+                    now.hooks += 1;
+                } else if obj.id.starts_with("pad_") && !obj.id.ends_with("_thruster") {
+                    now.pads += 1;
+                } else if obj.id.starts_with("spinner") {
+                    now.spinners += 1;
+                } else if obj.id.starts_with("gwell") {
+                    now.gwells += 1;
+                } else if obj.id.starts_with("turret") {
+                    now.turrets += 1;
+                }
+            }
+            census.absorb(&now);
+        }
+
+        // Frontier health: how far ahead of the player the chain claims to
+        // extend. Steady state sits just above GEN_AHEAD; a spike means
+        // generation stalled and the player is crossing empty world.
+        {
+            let frontier = match canvas.get_var("hook_frontier_ahead") {
+                Some(Value::F32(v)) => v,
+                _ => 0.0,
+            };
+            if frontier > worst_overshoot {
+                worst_overshoot = frontier;
             }
         }
 
@@ -585,7 +681,7 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         if canvas.get_game_object("boss").map(|b| b.visible).unwrap_or(false) {
             boss_entered = true;
         }
-        if canvas.get_bool("boss_mode_cleared") {
+        if matches!(canvas.get_var("boss_defeated_this_fight"), Some(Value::Bool(true))) {
             boss_killed = true;
         }
         let bh = get_i32_or(&canvas, "boss_hp", crate::constants::BOSS_MAX_HP);
@@ -629,16 +725,19 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         flare_hearts_lost: get_i32_or(&canvas, "flare_hearts_lost", 0),
         flare_saves: get_i32_or(&canvas, "flare_saves", 0),
         flares_without_shelter,
+        worst_frontier_overshoot: worst_overshoot,
+        frontier_repairs: get_i32_or(&canvas, "frontier_repairs", 0),
+        census,
     }
 }
 
 /// Run several episodes (each boots a fresh canvas) and aggregate.
-pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool) -> AggregateReport {
+pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool, start_minute: f32) -> AggregateReport {
     let mut agg = AggregateReport::default();
     let mut episode_idx = 0u64;
     while episode_idx < episodes {
         let ep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_episode(max_frames, boss_mode, force_fall, boss_warp, weakpoint_check, flare_test, shelter_check)
+            run_episode(max_frames, boss_mode, force_fall, boss_warp, weakpoint_check, flare_test, shelter_check, start_minute)
         }))
         .unwrap_or_else(|e| {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -672,6 +771,9 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
                 flare_hearts_lost: 0,
                 flare_saves: 0,
                 flares_without_shelter: 0,
+                worst_frontier_overshoot: 0.0,
+                frontier_repairs: 0,
+                census: HazardCensus::default(),
             }
         });
 
@@ -712,6 +814,9 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
         agg.flare_hearts_lost += ep.flare_hearts_lost;
         agg.flare_saves += ep.flare_saves;
         agg.flares_without_shelter += ep.flares_without_shelter;
+        agg.census.absorb(&ep.census);
+        agg.worst_frontier_overshoot = agg.worst_frontier_overshoot.max(ep.worst_frontier_overshoot);
+        agg.frontier_repairs += ep.frontier_repairs;
 
         // Progress line.
         println!(

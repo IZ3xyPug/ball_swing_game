@@ -498,6 +498,19 @@ pub struct State {
     /// placed on a fixed DISTANCE cadence rather than a probability roll, so a
     /// flare can never fire into a stretch that has no shelter in it.
     pub last_shield_x: f32,
+    /// How many times the chain frontier had to be repaired this run. Should be
+    /// zero; a non-zero value means something other than `spawn_hooks` wrote
+    /// `rightmost_x` and world generation would have stalled without the guard.
+    pub frontier_repairs: u32,
+
+    /// Solar-eclipse approach to a boss: whether it is running and how far
+    /// along it is (0 at the far edge, 1 at the teleporter).
+    pub eclipse_active: bool,
+    pub eclipse_t: f32,
+    /// Objects currently flagged as shadow occluders by the eclipse. Tracked so
+    /// teardown is exhaustive — a pooled object left flagged would keep casting
+    /// shadows for the rest of the run.
+    pub eclipse_shadow_ids: Vec<String>,
 
     // ── Permanent (meta-bought) upgrades, resolved once at run start ─────────
     // Held as multipliers/counts rather than re-read from the profile every

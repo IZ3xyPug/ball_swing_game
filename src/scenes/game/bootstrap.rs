@@ -531,6 +531,14 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     flare_banner.visible = false;
     flare_banner.layer = 61;
 
+    // Eclipse warning banner, above the flare banner so both can be up.
+    let mut eclipse_banner = GameObject::new_rect(ctx, "eclipse_banner".into(),
+        None::<Image>, (1900.0, 96.0), (VW * 0.5 - 950.0, VH * 0.09),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    eclipse_banner.ignore_zoom = true;
+    eclipse_banner.visible = false;
+    eclipse_banner.layer = 62;
+
     // Animated catcoingold icon overlaid on the coin counter slot.
     // coin_counter is at (26, 24), icon slot is at (12, 28) within it → abs (38, 52).
     let mut coin_icon_anim = GameObject::new_rect(ctx, "coin_icon_anim".into(),
@@ -588,6 +596,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("zero_g_overlay",    zero_g_overlay)
         .with_object("flare_overlay",     flare_overlay)
         .with_object("flare_banner",      flare_banner)
+        .with_object("eclipse_banner",    eclipse_banner)
         .with_object("coin_icon_anim",    coin_icon_anim)
         .with_object("flip_icon",         flip_icon)
         .with_object("zero_g_icon",       zero_g_icon)

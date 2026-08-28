@@ -154,10 +154,14 @@ pub const HOP_REACH_MARGIN: f32 = 0.97;
 
 pub const PAD_POOL_SIZE:  usize = 32;
 
-/// X gap between consecutive bounce pads (px). Wide range for variety.
-/// Increase both to make pads rarer. Decrease for more frequent pads.
-pub const PAD_GAP_MIN:    f32 = 5000.0;
-pub const PAD_GAP_MAX:    f32 = 9000.0;
+/// X gap between consecutive bounce pads (px), AT THE START OF A RUN.
+///
+/// Pads are the anti-fall net, so the opening is deliberately generous — one
+/// roughly every four seconds — and `hazards::Support::Pad` widens these gaps
+/// as the run goes on, bottoming out around 6 700–11 500 px. Change these to
+/// move the early game; change the support floor to move the late game.
+pub const PAD_GAP_MIN:    f32 = 3000.0;
+pub const PAD_GAP_MAX:    f32 = 5200.0;
 
 // techbouncernew.gif is decoded into this fixed gameplay footprint.
 // Art scaling changes should happen in the loader, not by changing pad geometry.
@@ -450,6 +454,10 @@ pub const ASSET_HOOK_ARTIFACT_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/
 pub const ASSET_HOOK_ARTIFACT_GREEN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact_green.gif");
 /// Average ticks between automatic comet spawn attempts (at 60 fps ≈ 5 seconds).
 pub const COMET_SPAWN_INTERVAL: u32 = 300;
+/// Ticks each successive comet in a back-to-back burst is advanced by, so a
+/// wave arrives in sequence instead of as one wide wall. A wall has no gap to
+/// swing through, which is the difference between harder and unfair.
+pub const COMET_BURST_STAGGER: u32 = 26;
 pub const HOOK_ARTIFACT_FPS: f32 = 13.0;
 pub const HOOK_ARTIFACT_INTRO_FPS: f32 = 24.0;
 pub const ASSET_THRUSTER1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/thruster1.gif");
@@ -596,7 +604,13 @@ pub const C_BOSS_BARRIER:         (u8, u8, u8) = (120, 160, 255);
 pub const BOSS_BARRIER_Y:         f32   = -3600.0;
 /// Y (more negative) the boss must cross after the barrier drops to fall into
 /// the sun (the bait-and-bail finisher).
-pub const BOSS_SUN_KILL_Y:        f32   = -4300.0;
+/// Ceiling the boss is clamped to during a lunge.
+///
+/// Was `BOSS_SUN_KILL_Y`: crossing it ENDED the fight, because the original
+/// design let the player bait the boss into the sun. The sun is no longer part
+/// of this battle — it is generators first, then buffed weakpoint damage — so
+/// the line is now just the top of the arena and the lunge is clamped to it.
+pub const BOSS_ARENA_TOP_Y:       f32   = -4300.0;
 /// Ticks of telegraph before the boss's final desperation lunge.
 pub const BOSS_LUNGE_TELEGRAPH:   u32   = 90;
 
@@ -636,9 +650,43 @@ pub const BOSS_WORMHOLE_D:        f32   = 1000.0;
 pub const BOSS_MARKER_D:          f32   = 3200.0;
 /// Y-centre of the boss teleport threshold marker (covers the approach path).
 pub const BOSS_MARKER_Y:          f32   = 1000.0;
+// ── Solar eclipse (boss approach) ────────────────────────────────────────────
+/// How far before a boss teleporter the eclipse begins. At ~300 px/s of real
+/// play this is a little under three minutes of build-up.
+pub const BOSS_ECLIPSE_RANGE: f32 = 50_000.0;
+/// How far before the teleporter the eclipse has fully lifted.
+///
+/// The dark peaks here and releases over the last stretch, so the player
+/// arrives at the black hole in daylight. Running the darkness right into the
+/// teleport made the two events read as one; separating them lets the eclipse
+/// be its own beat that passes, and leaves the black hole clearly visible at
+/// the moment it matters.
+pub const BOSS_ECLIPSE_RELEASE: f32 = 5_000.0;
+/// Fraction of the darkening ramp spent at full light with the warning up,
+/// before the dark starts falling. The warning has to land before the world
+/// reacts to it.
+pub const ECLIPSE_WARN_FRACTION: f32 = 0.18;
+/// Ambient strength at the darkest point. Never 0 — the horizon and the danger
+/// floor must stay readable.
+pub const ECLIPSE_MIN_AMBIENT: f32 = 0.14;
+/// The player's lamp during the eclipse. Deliberately large: the player becomes
+/// the light source, and the radius grows as the ambient falls.
+pub const ECLIPSE_PLAYER_LIGHT_R: f32 = 2600.0;
+pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 1.25;
+/// Faint marker lights on the nearest grab nodes, so the route stays readable
+/// without revealing the hazards.
+pub const ECLIPSE_NODE_LIGHT_R: f32 = 460.0;
+pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 0.55;
+
+/// Size of the down-pointing arrow above the black-hole threshold marker.
+pub const BOSS_MARKER_ARROW_D:    f32   = 220.0;
 /// How far before the boss threshold dedicated approach grapple nodes are
 /// placed, so the player always has a swing path up to the portal.
-pub const BOSS_APPROACH_RANGE:    f32   = 6000.0;
+/// How far before the teleport threshold the black-hole marker and its arrow
+/// appear. At ~300 px/s of real play 20 000 px is about a minute of approach —
+/// long enough to see it coming and commit, where the old 6 000 px was a few
+/// seconds and easy to miss entirely.
+pub const BOSS_APPROACH_RANGE:    f32   = 20_000.0;
 
 // ── Comets ────────────────────────────────────────────────────────────────────
 pub const COMET_POOL_SIZE:        usize = 8;
@@ -1145,6 +1193,9 @@ pub const SPACE_ASTEROID_VY_MAX: f32 =  2.0;
 // Fraction of the player's incoming velocity transferred to an asteroid on hook.
 // Scaled by (SIZE_MIN / actual_size) so smaller asteroids receive more impulse.
 pub const ASTEROID_HOOK_IMPULSE_FACTOR: f32 = 0.28;
+/// Tag on asteroids that drift through the grab-node band (as opposed to the
+/// ones parked high above it). Both are tetherable; only these are in the way.
+pub const ASTEROID_DRIFT_TAG: &str = "asteroid_drift";
 
 /// Scales the player's closing speed into an asteroid body-hit impulse.
 /// impulse = base 1.5 + closing_speed * factor (capped at 22.0 px/frame).

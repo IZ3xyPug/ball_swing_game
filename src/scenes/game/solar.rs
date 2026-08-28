@@ -107,7 +107,17 @@ fn tick_flare_state(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // has no shielded nodes to reach.
     let (suspended, distance) = {
         let s = st.lock().unwrap();
-        (s.in_space_mode || s.space_launch_active || s.boss_active || s.god_mode || s.dead,
+        // Flares are the LAST hazard introduced (minute 44), so for most of a
+        // run the whole system is dormant. Shielded nodes still spawn from the
+        // start — the player should have seen them, and wondered about them,
+        // long before the first flare explains what they are for.
+        // The debug interval override also lifts the introduction gate, so the
+        // harness can exercise flares without simulating 44 minutes of play.
+        let forced = matches!(c.get_var("debug_flare_interval"), Some(Value::I32(t)) if t > 0);
+        let too_early = !forced
+            && !crate::hazards::hazard_active(s.distance, crate::hazards::Hazard::SolarFlare);
+        (too_early || s.in_space_mode || s.space_launch_active || s.boss_active
+            || s.god_mode || s.dead,
          s.distance)
     };
     if suspended {
