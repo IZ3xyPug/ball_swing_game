@@ -670,17 +670,34 @@ pub const ECLIPSE_WARN_FRACTION: f32 = 0.10;
 /// Ambient strength at the darkest point. Never 0 — the horizon and the danger
 /// floor must stay readable.
 pub const ECLIPSE_MIN_AMBIENT: f32 = 0.14;
-/// The player's lamp during the eclipse, as a multiple of the player's own
-/// width — the eclipse only reads as dark if there is a visible EDGE to the
-/// light, and the radius has to be small enough relative to the viewport for
-/// that edge to be on screen.
+/// The player's lamp during the eclipse.
 ///
-/// The first pass used a flat 2600 px. That is a 5 200 px pool across a 3 840 px
-/// viewport, so the lit circle was wider than the screen and the "eclipse"
-/// looked like a slightly dimmer day with no falloff visible anywhere.
-pub const ECLIPSE_PLAYER_LIGHT_WIDTHS: f32 = 5.5;
-pub const ECLIPSE_PLAYER_LIGHT_R: f32 = PLAYER_R * 2.0 * ECLIPSE_PLAYER_LIGHT_WIDTHS;
-pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 1.25;
+/// SIZED FROM THE TRAIL, because the trail is what makes a wrong size obvious.
+/// The mid trail emitter lives 0.40 s, so at a cruising ~45 px/tick it streams
+/// roughly 1 080 px behind the player. A lamp smaller than that lights the near
+/// half of the trail and leaves the rest in the dark, which reads as a bug
+/// rather than as lighting — the first pass at 5.5 player-widths (638 px) did
+/// exactly that. The pass before it went the other way at a flat 2 600 px,
+/// wider than the viewport, so nothing was dark at all.
+pub const PLAYER_TRAIL_LIFETIME_S: f32 = 0.40;
+/// Cruising speed the lamp is sized against (px/tick).
+pub const ECLIPSE_LAMP_REF_SPEED: f32 = 45.0;
+/// Slack past the trail's tail so its end fades inside the light, not at its edge.
+pub const ECLIPSE_LAMP_MARGIN: f32 = 220.0;
+pub const ECLIPSE_PLAYER_LIGHT_R: f32 =
+    PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED + ECLIPSE_LAMP_MARGIN;
+
+/// A second, wider, much dimmer light on the player.
+///
+/// A single point light is brightest at its centre and falls away fast, so the
+/// player sat in a hotspot with the trail dimming out behind them. The fill
+/// raises the base level across the whole lamp so the falloff reads as gentle
+/// instead of as a spotlight. It deliberately does NOT cast shadows — one
+/// shadow-casting source is what keeps the shadows DEFINED rather than doubled
+/// and soft.
+pub const ECLIPSE_FILL_LIGHT_R: f32 = ECLIPSE_PLAYER_LIGHT_R * 2.0;
+pub const ECLIPSE_FILL_LIGHT_INTENSITY: f32 = 0.55;
+pub const ECLIPSE_PLAYER_LIGHT_INTENSITY: f32 = 2.4;
 /// Faint marker lights on the nearest grab nodes, so the route stays readable
 /// without revealing the hazards.
 pub const ECLIPSE_NODE_LIGHT_R: f32 = 460.0;

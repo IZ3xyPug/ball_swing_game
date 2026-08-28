@@ -830,28 +830,38 @@ fn the_boss_approach_is_long_enough_to_read() {
 }
 
 #[test]
-fn the_eclipse_lamp_leaves_visible_darkness() {
-    // The eclipse only reads as dark if the lit pool has an EDGE the player can
-    // see. The first pass used a flat 2600 px radius — a 5200 px circle across a
-    // 3840 px viewport, so the light was wider than the screen and there was no
-    // falloff anywhere on it.
-    let lit_across = ECLIPSE_PLAYER_LIGHT_R * 2.0;
+fn the_eclipse_lamp_contains_the_player_trail() {
+    // The trail is what makes a wrong lamp size obvious: too small and its far
+    // half sits in the dark behind a lit player, which reads as a bug rather
+    // than as lighting. Both earlier passes failed this from opposite sides —
+    // 638 px lit only the near half, 2600 px was wider than the viewport and
+    // left nothing dark at all.
+    let trail_len = PLAYER_TRAIL_LIFETIME_S * 60.0 * ECLIPSE_LAMP_REF_SPEED;
     assert!(
-        lit_across < VW * 0.6,
-        "the lamp is {lit_across:.0} px across against a {VW:.0} px viewport — no visible edge"
+        ECLIPSE_PLAYER_LIGHT_R >= trail_len,
+        "lamp radius {ECLIPSE_PLAYER_LIGHT_R:.0} px does not reach the {trail_len:.0} px trail"
     );
     assert!(
-        lit_across > PLAYER_R * 2.0 * 4.0,
-        "the lamp is too small to swing by: {lit_across:.0} px"
+        ECLIPSE_PLAYER_LIGHT_R <= trail_len * 1.6,
+        "lamp is far larger than the trail it is sized for; darkness will not read"
     );
-    // Stated in player widths, so the constant explains itself.
+    // Darkness still has to exist somewhere on screen.
     assert!(
-        (4.0..8.0).contains(&ECLIPSE_PLAYER_LIGHT_WIDTHS),
-        "lamp radius of {ECLIPSE_PLAYER_LIGHT_WIDTHS} player-widths is outside the intended band"
+        ECLIPSE_PLAYER_LIGHT_R * 2.0 < VW,
+        "the lit pool is wider than the viewport — nothing is ever dark"
     );
-    // Even at full growth it must not swallow the viewport.
-    let widest = ECLIPSE_PLAYER_LIGHT_R * (0.85 + 0.30) * 2.0;
-    assert!(widest < VW * 0.8, "the lamp grows to {widest:.0} px and fills the screen");
+
+    // The fill exists to flatten the falloff, not to light the level: wider
+    // than the lamp, and much dimmer.
+    assert!(ECLIPSE_FILL_LIGHT_R > ECLIPSE_PLAYER_LIGHT_R, "fill is not wider than the lamp");
+    assert!(
+        ECLIPSE_FILL_LIGHT_INTENSITY < ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.4,
+        "the fill is bright enough to be a second lamp; shadows will read as doubled"
+    );
+
+    // "On but dim" must still look like a working light.
+    let dimmest = ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.70;
+    assert!(dimmest > 1.0, "the lamp starts too faint to read as lit: {dimmest:.2}");
 }
 
 #[test]
@@ -877,4 +887,53 @@ fn the_eclipse_reaches_darkness_before_it_is_over() {
     // And the warning still lands before anything changes.
     assert!(ECLIPSE_WARN_FRACTION > 0.05, "no warning window at all");
     assert!(ECLIPSE_WARN_FRACTION < 0.25, "the warning holds full light too long");
+}
+
+// ── Gravity cannon under flipped gravity ─────────────────────────────────────
+
+#[test]
+fn the_cannon_fires_forward_in_both_gravity_orientations() {
+    // Flipped gravity draws the world upside down. The barrel angle mirrors
+    // about the horizontal axis; it does NOT rotate a half-turn, which would
+    // negate the horizontal component too and fire the player back down the
+    // level. It also has to SWEEP the mirrored way while charging, or it winds
+    // up visibly backwards before firing backwards.
+    fn launch(rotation_deg: f32, flipped: bool) -> (f32, f32) {
+        let base = if flipped { -rotation_deg } else { rotation_deg };
+        let r = base.to_radians();
+        let vx = CANNON_LAUNCH_VX * r.cos() - CANNON_LAUNCH_VY * r.sin();
+        let vy = CANNON_LAUNCH_VX * r.sin() + CANNON_LAUNCH_VY * r.cos();
+        (vx, if flipped { -vy } else { vy })
+    }
+    fn dir(flipped: bool) -> f32 { if flipped { -1.0 } else { 1.0 } }
+
+    for flipped in [false, true] {
+        let rest = if flipped {
+            CANNON_DEFAULT_ROTATION + 180.0
+        } else {
+            CANNON_DEFAULT_ROTATION
+        };
+        // The barrel ends its charge sweep here.
+        let fired_at = rest + CANNON_CHARGE_ROTATION_DEG * dir(flipped);
+        let (vx, vy) = launch(fired_at, flipped);
+
+        assert!(vx > 0.0, "cannon fires backwards when flipped={flipped}: vx={vx:.0}");
+        assert!(
+            vx > CANNON_LAUNCH_VX * 0.4,
+            "cannon barely moves the player forward when flipped={flipped}: vx={vx:.0}"
+        );
+        // "Up" is -Y normally and +Y in a vertically mirrored world; either way
+        // the launch must carry the player AWAY from the floor they stand on.
+        let up = if flipped { vy } else { -vy };
+        assert!(up > 0.0, "cannon fires into the floor when flipped={flipped}: vy={vy:.0}");
+    }
+
+    // Both orientations must produce the same shot, just mirrored.
+    let un = launch(CANNON_DEFAULT_ROTATION + CANNON_CHARGE_ROTATION_DEG, false);
+    let fl = launch(
+        (CANNON_DEFAULT_ROTATION + 180.0) - CANNON_CHARGE_ROTATION_DEG,
+        true,
+    );
+    assert!((un.0 - fl.0).abs() < 0.01, "forward speed differs between orientations");
+    assert!((un.1 + fl.1).abs() < 0.01, "vertical speed is not a clean mirror");
 }

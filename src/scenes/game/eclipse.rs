@@ -22,6 +22,7 @@ use crate::state::*;
 
 /// Light ids, so teardown can be exhaustive.
 const PLAYER_LIGHT: &str = "eclipse_player_light";
+const FILL_LIGHT: &str = "eclipse_fill_light";
 const NODE_LIGHT_COUNT: usize = 16;
 
 fn node_light_id(i: usize) -> String {
@@ -122,6 +123,23 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     c.set_light_enabled(PLAYER_LIGHT, true);
 
+    // Wide dim fill, no shadows. Flattens the point light's falloff so the
+    // player is not sitting in a hotspot with their own trail fading out behind
+    // them; leaving shadows to the single main lamp is what keeps them defined.
+    if c.get_light(FILL_LIGHT).is_none() {
+        let mut ls = LightSource::new(
+            FILL_LIGHT,
+            (0.0, 0.0),
+            Color(215, 228, 255, 255),
+            ECLIPSE_FILL_LIGHT_R,
+            ECLIPSE_FILL_LIGHT_INTENSITY,
+        );
+        ls.casts_shadows = false;
+        c.add_light(ls);
+        c.attach_light(FILL_LIGHT, "player", (0.0, 0.0));
+    }
+    c.set_light_enabled(FILL_LIGHT, true);
+
     // A bounded pool of marker lights. Bounded because the lighting config caps
     // at 64 and the boss fight wants a chunk of those for its bolts — one light
     // per live node would blow the budget the moment the node count rises.
@@ -155,6 +173,7 @@ fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     if c.has_lighting() {
         c.set_light_enabled(PLAYER_LIGHT, false);
+        c.set_light_enabled(FILL_LIGHT, false);
         for i in 0..NODE_LIGHT_COUNT {
             c.set_light_enabled(&node_light_id(i), false);
         }
@@ -206,12 +225,17 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
     // The player's lamp widens as the dark deepens, so visibility falls less
     // sharply than the ambient does — the world gets darker, the player's reach
     // into it gets longer.
+    // The lamp holds its size — it is sized to contain the trail, and a lamp
+    // that grows into that size spends the first half of the eclipse showing a
+    // half-lit trail. Only the intensity ramps, and from a high floor: "on but
+    // dim" still has to read as a working light, not a fault.
     if let Some(light) = c.get_light_mut(PLAYER_LIGHT) {
-        // Grows modestly as the dark deepens, so visibility falls less sharply
-        // than the ambient does — but stays a POOL with a visible edge, which
-        // is the whole reason the eclipse reads as one.
-        light.radius = ECLIPSE_PLAYER_LIGHT_R * (0.85 + 0.30 * fall);
-        light.intensity = ECLIPSE_PLAYER_LIGHT_INTENSITY * (0.45 + 0.55 * fall);
+        light.radius = ECLIPSE_PLAYER_LIGHT_R;
+        light.intensity = ECLIPSE_PLAYER_LIGHT_INTENSITY * (0.70 + 0.30 * fall);
+    }
+    if let Some(light) = c.get_light_mut(FILL_LIGHT) {
+        light.radius = ECLIPSE_FILL_LIGHT_R;
+        light.intensity = ECLIPSE_FILL_LIGHT_INTENSITY * (0.70 + 0.30 * fall);
     }
 
     // Marker lights on the nearest live grab nodes. Nodes only: pads, spinners
@@ -256,9 +280,18 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
 /// the eclipse would keep casting shadows for the rest of the run, and the flag
 /// is invisible in the editor.
 fn set_shadow_casters(c: &mut Canvas, st: &Arc<Mutex<State>>, on: bool) {
+    // Everything solid enough to read as an object casts. Grab nodes do NOT —
+    // they are the route, they carry their own marker lights, and a node that
+    // throws a shadow across the line you are swinging into is noise.
     let (pads, spinners, already) = {
         let s = st.lock().unwrap();
-        (s.pad_live.clone(), s.spinner_live.clone(), s.eclipse_shadow_ids.clone())
+        let mut solid: Vec<String> = Vec::new();
+        solid.extend(s.pad_live.iter().cloned());
+        solid.extend(s.spinner_live.iter().cloned());
+        solid.extend(s.gwell_live.iter().cloned());
+        solid.extend(s.turret_live.iter().cloned());
+        solid.extend(s.space_asteroid_live.iter().cloned());
+        (solid, Vec::<String>::new(), s.eclipse_shadow_ids.clone())
     };
     if !on {
         if !already.is_empty() {

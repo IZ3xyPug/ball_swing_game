@@ -94,6 +94,33 @@ fn barrel_mouth_world(pos: (f32, f32), rotation_deg: f32) -> (f32, f32) {
 
 /// The resting barrel rotation for a cannon, accounting for gravity flip.
 /// Normal gravity points the barrel up (-90°); flipped gravity mirrors it (+90°).
+/// Mirror a barrel angle into UNFLIPPED screen space.
+///
+/// Flipped gravity draws the world upside down, so a barrel angle mirrors about
+/// the horizontal axis: theta -> -theta. The flipped rest angle (+90, pointing
+/// down) maps to the unflipped rest (-90, pointing up), and the flipped firing
+/// angle maps to the unflipped one.
+///
+/// NOT a 180-degree rotation. A half-turn negates BOTH components of the launch
+/// vector, so it reverses the direction of travel as well as the vertical — the
+/// cannon fired the player back down the level. Flipped gravity mirrors the
+/// world vertically; it does not send you the other way.
+#[inline]
+fn mirror_rotation(rotation_deg: f32, flipped: bool) -> f32 {
+    if flipped { -rotation_deg } else { rotation_deg }
+}
+
+/// Which way the barrel sweeps while charging.
+///
+/// Screen Y points down, so a rising angle is clockwise. Unflipped that sweeps
+/// the barrel from up toward forward-right, which is the shot. Mirrored, the
+/// same rising angle sweeps from down toward BACKWARD-left — the cannon visibly
+/// winding up the wrong way before firing the wrong way.
+#[inline]
+fn cannon_rot_dir(flipped: bool) -> f32 {
+    if flipped { -1.0 } else { 1.0 }
+}
+
 fn cannon_default_rotation(flipped: bool) -> f32 {
     if flipped {
         CANNON_DEFAULT_ROTATION + 180.0
@@ -327,7 +354,7 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 let warp_active = matches!(c.get_var("warp_flash_ticks"), Some(Value::I32(v)) if v > 0);
                 let revealing = matches!(c.get_var("cannon_ft_reveal_ticks"), Some(Value::I32(v)) if v > 0);
                 if warp_active || revealing {
-                    phase.rotation = rest - 45.0;
+                    phase.rotation = rest - 45.0 * cannon_rot_dir(phase.flipped);
                     if revealing {
                         let mut v = match c.get_var("cannon_ft_reveal_ticks") { Some(Value::I32(n)) => n, _ => 0 };
                         v = v.saturating_sub(1);
@@ -401,7 +428,8 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     s.vx = 0.0;
                     s.vy = 0.0;
                 }
-                let rot_step = CANNON_CHARGE_ROTATION_DEG / CANNON_CHARGE_TICKS as f32;
+                let rot_step = (CANNON_CHARGE_ROTATION_DEG / CANNON_CHARGE_TICKS as f32)
+                    * cannon_rot_dir(phase.flipped);
                 phase.rotation += rot_step;
                 if ticks == 0 {
                     set_cannon_frame(c, &phase.id, CANNON_DEFAULT_FRAME_INDEX);
@@ -445,11 +473,7 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         // world vertically; it does not reverse the direction of
                         // travel.
                         let flipped = gravity_dir < 0.0;
-                        let base_rot = if flipped {
-                            phase.rotation - 180.0
-                        } else {
-                            phase.rotation
-                        };
+                        let base_rot = mirror_rotation(phase.rotation, flipped);
                         let rot_rad = base_rot.to_radians();
                         let vx = CANNON_LAUNCH_VX * rot_rad.cos() - CANNON_LAUNCH_VY * rot_rad.sin();
                         let vy_unflipped =
@@ -745,7 +769,8 @@ fn perform_cannon_warp_teleport(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     phase.state = CannonState::Capturing { seq_idx: 0, frame_timer: CANNON_CAPTURE_TICKS_PER_FRAME };
                     // Arrive ~45° LEFT of rest so the cannon clearly catches the
                     // player on the upper-left, then rotates forward/right to fire.
-                    phase.rotation = cannon_default_rotation(phase.flipped) - 45.0;
+                    phase.rotation = cannon_default_rotation(phase.flipped)
+                        - 45.0 * cannon_rot_dir(phase.flipped);
                     windup_rot = phase.rotation;
                 }
             }
