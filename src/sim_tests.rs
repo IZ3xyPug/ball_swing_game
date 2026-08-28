@@ -987,3 +987,40 @@ fn the_boss_buff_is_a_window_not_a_licence() {
         "the buff covers most of a fight on its own"
     );
 }
+
+#[test]
+fn shadow_casters_stay_under_the_renderer_limit() {
+    // wgpu_canvas uploads at most `MAX_OCCLUDERS` (32) and silently DROPS the
+    // rest, and quartz collects them in object-store order rather than by
+    // distance — so exceeding the cap does not degrade gracefully, it makes an
+    // arbitrary subset cast. That is what made spinners throw shadows while
+    // pads, flagged in the same pass, did not.
+    const RENDERER_MAX_OCCLUDERS: usize = 32;
+    assert!(
+        ECLIPSE_MAX_SHADOW_CASTERS < RENDERER_MAX_OCCLUDERS,
+        "the eclipse alone flags {ECLIPSE_MAX_SHADOW_CASTERS} occluders against a hard cap of \
+         {RENDERER_MAX_OCCLUDERS}"
+    );
+    // Headroom for anything else in the scene that sets `shadow_caster`.
+    assert!(
+        RENDERER_MAX_OCCLUDERS - ECLIPSE_MAX_SHADOW_CASTERS >= 8,
+        "no headroom left for other shadow casters"
+    );
+    // Enough to actually populate a scene.
+    assert!(ECLIPSE_MAX_SHADOW_CASTERS >= 12, "too few casters to read as a lit world");
+}
+
+#[test]
+fn the_eclipse_light_budget_fits() {
+    // The lighting config caps at 64 lights. The eclipse must fit with room for
+    // the boss fight's own lights, even though the two never overlap in time.
+    const MAX_LIGHTS: usize = 64;
+    let eclipse = 1 /* lamp */ + 1 /* fill */ + 16 /* node markers */
+        + ECLIPSE_GWELL_LIGHT_COUNT;
+    assert!(
+        eclipse < MAX_LIGHTS / 2,
+        "the eclipse claims {eclipse} of {MAX_LIGHTS} lights"
+    );
+    // Well lights are markers, not illumination — dimmer than the player lamp.
+    assert!(ECLIPSE_GWELL_LIGHT_INTENSITY < ECLIPSE_PLAYER_LIGHT_INTENSITY * 0.5);
+}

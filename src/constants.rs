@@ -715,6 +715,26 @@ pub const ECLIPSE_NODE_LIGHT_INTENSITY: f32 = 0.55;
 /// staleness is invisible while the saving is most of the effect's cost.
 pub const ECLIPSE_LIGHT_REFRESH_TICKS: u32 = 6;
 
+/// How many objects may be flagged as shadow occluders at once.
+///
+/// THE RENDERER CAPS OCCLUDERS AT 32 (`wgpu_canvas::gpu_types::MAX_OCCLUDERS`)
+/// and silently drops the rest, and quartz collects them in object-store order
+/// rather than by distance — so which 32 survive is arbitrary. Flagging every
+/// pad, spinner, turret and asteroid in range blew past that, which is why
+/// spinners cast shadows and pads did not: the pads were simply past the cut.
+///
+/// 20 leaves headroom for anything else in the scene that sets `shadow_caster`,
+/// and shadows are only visible inside the lamp anyway, so the nearest 20 are
+/// the only ones that could have been seen.
+pub const ECLIPSE_MAX_SHADOW_CASTERS: usize = 20;
+
+/// Gravity wells light themselves rather than casting shadows: they are a
+/// hazard the player must see coming even when the lamp is nowhere near them,
+/// and a well-shaped hole in the light reads as geometry rather than danger.
+pub const ECLIPSE_GWELL_LIGHT_COUNT: usize = 6;
+pub const ECLIPSE_GWELL_LIGHT_R: f32 = 620.0;
+pub const ECLIPSE_GWELL_LIGHT_INTENSITY: f32 = 0.85;
+
 /// Size of the down-pointing arrow above the black-hole threshold marker.
 pub const BOSS_MARKER_ARROW_D:    f32   = 220.0;
 /// How far before the boss threshold dedicated approach grapple nodes are

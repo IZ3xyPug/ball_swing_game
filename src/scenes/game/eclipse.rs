@@ -23,6 +23,10 @@ use crate::state::*;
 /// Light ids, so teardown can be exhaustive.
 const PLAYER_LIGHT: &str = "eclipse_player_light";
 const FILL_LIGHT: &str = "eclipse_fill_light";
+
+fn gwell_light_id(i: usize) -> String {
+    format!("eclipse_gwell_light_{i}")
+}
 const NODE_LIGHT_COUNT: usize = 16;
 
 fn node_light_id(i: usize) -> String {
@@ -159,6 +163,26 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         c.set_light_enabled(&id, true);
     }
 
+    // Gravity wells light THEMSELVES. They are a hazard the player has to see
+    // coming even when the lamp is nowhere near them, and a well-shaped hole in
+    // the dark reads as geometry rather than as danger. They are excluded from
+    // the shadow casters for the same reason.
+    for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
+        let id = gwell_light_id(i);
+        if c.get_light(&id).is_none() {
+            let mut ls = LightSource::new(
+                id.clone(),
+                (0.0, 0.0),
+                Color(190, 120, 255, 255),
+                ECLIPSE_GWELL_LIGHT_R,
+                0.0,
+            );
+            ls.casts_shadows = false;
+            c.add_light(ls);
+        }
+        c.set_light_enabled(&id, true);
+    }
+
     let _ = st;
 }
 
@@ -176,6 +200,9 @@ fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         c.set_light_enabled(FILL_LIGHT, false);
         for i in 0..NODE_LIGHT_COUNT {
             c.set_light_enabled(&node_light_id(i), false);
+        }
+        for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
+            c.set_light_enabled(&gwell_light_id(i), false);
         }
         // Full daylight again. The boss fight sets its own ambient on entry, so
         // this only matters when the eclipse ends by backtracking.
@@ -293,6 +320,30 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
         }
         st.lock().unwrap().eclipse_node_buf = nodes;
 
+        // Nearest wells get a self-light so they stay readable outside the lamp.
+        let wells: Vec<String> = st.lock().unwrap().gwell_live.clone();
+        let mut ranked: Vec<(f32, f32, f32)> = wells
+            .iter()
+            .filter_map(|id| c.get_game_object(id))
+            .filter(|o| o.visible)
+            .map(|o| {
+                let cx = o.position.0 + o.size.0 * 0.5;
+                let cy = o.position.1 + o.size.1 * 0.5;
+                ((cx - px) * (cx - px) + (cy - py) * (cy - py), cx, cy)
+            })
+            .collect();
+        ranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
+            let id = gwell_light_id(i);
+            match ranked.get(i) {
+                Some(&(_, cx, cy)) => {
+                    c.set_light_position(&id, cx, cy);
+                    c.set_light_enabled(&id, true);
+                }
+                None => c.set_light_enabled(&id, false),
+            }
+        }
+
         set_shadow_casters(c, st, fall > 0.05);
     }
 
@@ -300,6 +351,11 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
     for i in 0..NODE_LIGHT_COUNT {
         if let Some(light) = c.get_light_mut(&node_light_id(i)) {
             light.intensity = ECLIPSE_NODE_LIGHT_INTENSITY * fall;
+        }
+    }
+    for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
+        if let Some(light) = c.get_light_mut(&gwell_light_id(i)) {
+            light.intensity = ECLIPSE_GWELL_LIGHT_INTENSITY * fall;
         }
     }
 }
@@ -313,21 +369,17 @@ fn set_shadow_casters(c: &mut Canvas, st: &Arc<Mutex<State>>, on: bool) {
     // Everything solid enough to read as an object casts. Grab nodes do NOT —
     // they are the route, they carry their own marker lights, and a node that
     // throws a shadow across the line you are swinging into is noise.
-    // (ids, how many of them are round, previous set)
-    let (solid, round_from, already) = {
+    // Candidates, and how many of the leading ones are rectangular. Gravity
+    // wells are deliberately absent — they light themselves instead.
+    let (rect, round, already, px, py) = {
         let s = st.lock().unwrap();
-        let mut solid: Vec<String> = Vec::new();
-        solid.extend(s.pad_live.iter().cloned());
-        solid.extend(s.spinner_live.iter().cloned());
-        solid.extend(s.turret_live.iter().cloned());
-        // Everything from here on is round; index recorded so the occluder can
-        // be given a circular silhouette instead of its bounding box.
-        let round_from = solid.len();
-        solid.extend(s.gwell_live.iter().cloned());
-        solid.extend(s.space_asteroid_live.iter().cloned());
-        (solid, round_from, s.eclipse_shadow_ids.clone())
+        let mut rect: Vec<String> = Vec::new();
+        rect.extend(s.pad_live.iter().cloned());
+        rect.extend(s.spinner_live.iter().cloned());
+        rect.extend(s.turret_live.iter().cloned());
+        let round: Vec<String> = s.space_asteroid_live.clone();
+        (rect, round, s.eclipse_shadow_ids.clone(), s.px, s.py)
     };
-    let pads = solid;
     if !on {
         if !already.is_empty() {
             clear_shadow_casters(c, st);
@@ -347,23 +399,35 @@ fn set_shadow_casters(c: &mut Canvas, st: &Arc<Mutex<State>>, on: bool) {
         }
     }
 
+    // Rank by distance and keep only what the renderer can actually upload.
+    // Anything past the cap would be dropped silently, and anything outside the
+    // lamp casts a shadow nobody can see.
+    let mut ranked: Vec<(f32, &String, bool)> = Vec::new();
+    for (id, is_round) in rect.iter().map(|i| (i, false)).chain(round.iter().map(|i| (i, true))) {
+        let Some(obj) = c.get_game_object(id) else { continue };
+        if !obj.visible {
+            continue;
+        }
+        let cx = obj.position.0 + obj.size.0 * 0.5;
+        let cy = obj.position.1 + obj.size.1 * 0.5;
+        let d = (cx - px) * (cx - px) + (cy - py) * (cy - py);
+        if d > ECLIPSE_FILL_LIGHT_R * ECLIPSE_FILL_LIGHT_R {
+            continue;
+        }
+        ranked.push((d, id, is_round));
+    }
+    ranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.truncate(ECLIPSE_MAX_SHADOW_CASTERS);
+
     let mut flagged = std::mem::take(&mut st.lock().unwrap().eclipse_shadow_ids);
     flagged.clear();
-    for (i, id) in pads.iter().enumerate() {
-        let round = i >= round_from;
+    for (_, id, is_round) in &ranked {
         if let Some(obj) = c.get_game_object_mut(id) {
-            // Asteroids and gravity wells are discs; without this they cast the
-            // shadow of their bounding box, which reads as a floating slab.
-            obj.shadow_circle = round;
-            // Invisible pooled objects must never cast: an unseen occluder
-            // throwing a hard shadow across the level is the strangest possible
-            // artefact, and it is exactly what was happening.
-            if !obj.visible {
-                obj.shadow_caster = false;
-                continue;
-            }
+            // Asteroids are discs; without this they cast the shadow of their
+            // bounding box, which reads as a floating slab.
+            obj.shadow_circle = *is_round;
             obj.shadow_caster = true;
-            flagged.push(id.clone());
+            flagged.push((*id).clone());
         }
     }
     st.lock().unwrap().eclipse_shadow_ids = flagged;
