@@ -62,6 +62,10 @@ impl App {
         // on_enter registration didn't persist for mouse presses, so this is the
         // reliable point. It guards on is_scene("menu") so it's harmless here.
         menu::push_menu_press_handler(&mut canvas);
+        // Register the game's left-mouse handlers at app start too, so a mouse
+        // hold-to-start counts even when the click that navigated into the game
+        // scene is still held down.
+        scenes::game::events::register_mouse_handlers(&mut canvas);
         canvas.load_scene("profile");
         canvas
     }

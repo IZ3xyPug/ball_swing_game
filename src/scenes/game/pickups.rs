@@ -242,7 +242,8 @@ fn tick_coin_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 fn tick_powerup_magnet(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let (px, py) = (s.px, s.py);
-    let magnet_r = POWERUP_MAGNET_RADIUS;
+    // Track the MAGNETISM ranks so powerups widen with the same in-run upgrade.
+    let magnet_r = crate::gameplay::player_powerup_magnet_radius(&s);
 
     let new_flip  = detect_magnet_locks(c, &s.flip_live.clone(),     &s.flip_magnet_locked,     px, py, magnet_r);
     let new_x2    = detect_magnet_locks(c, &s.score_x2_live.clone(), &s.score_x2_magnet_locked, px, py, magnet_r);

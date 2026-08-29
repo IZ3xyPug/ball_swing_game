@@ -17,11 +17,13 @@ pub fn player_max_momentum(s: &State) -> f32 {
             _ => 1.36,
         };
         let base = MOMENTUM_CAP * zone_mult * s.perm_momentum_mult;
+        // Small percentage boost per momentum-upgrade purchase (rather than a
+        // big cap jump). The cannon's random momentum buff adds one free step.
+        let mut steps = s.run_momentum_buys as f32;
         if s.upgrade_momentum_bonus {
-            base.max(UPGRADE_MOMENTUM_CAP * s.perm_momentum_mult)
-        } else {
-            base
+            steps += 1.0;
         }
+        base * (1.0 + MOMENTUM_UPGRADE_PER_STEP * steps)
     }
 }
 /// Re-exported from `difficulty.rs`, which owns the curve. Kept here because
@@ -179,5 +181,12 @@ pub fn player_grab_reach(s: &State) -> f32 {
 /// Coin pickup radius for the current run, including MAGNETISM ranks.
 #[inline]
 pub fn player_magnet_radius(s: &State) -> f32 {
-    COIN_MAGNET_RADIUS * s.perm_magnet_mult
+    COIN_MAGNET_RADIUS * s.perm_magnet_mult * (1.0 + MAGNET_UPGRADE_PER_STEP * s.run_magnet_buys as f32)
+}
+
+/// Powerup (flip/score_x2/zero-g) pickup radius, tracking the same MAGNETISM
+/// ranks and permanent multiplier as the coin magnet so the upgrade is global.
+#[inline]
+pub fn player_powerup_magnet_radius(s: &State) -> f32 {
+    POWERUP_MAGNET_RADIUS * s.perm_magnet_mult * (1.0 + MAGNET_UPGRADE_PER_STEP * s.run_magnet_buys as f32)
 }

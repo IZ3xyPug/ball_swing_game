@@ -127,12 +127,11 @@ fn run_breath_cost(s: &State) -> u32 {
 fn run_momentum_cost(s: &State) -> u32 {
     (UPGRADE_MOMENTUM_BASE as f32 * UPGRADE_MOMENTUM_GROWTH.powi(s.run_momentum_buys as i32)).round() as u32
 }
-
-/// Current permanent-extra-heart price in meta currency.
-fn perm_heart_cost() -> u64 {
-    let g = crate::profile::profile();
-    let owned = g.lock().unwrap().permanent_extra_hearts;
-    crate::profile::permanent_heart_cost(owned)
+fn run_heart_refill_cost(s: &State) -> u32 {
+    (UPGRADE_HEART_REFILL_BASE as f32 * UPGRADE_HEART_REFILL_GROWTH.powi(s.run_heart_refill_buys as i32)).round() as u32
+}
+fn run_magnet_cost(s: &State) -> u32 {
+    (UPGRADE_MAGNET_BASE as f32 * UPGRADE_MAGNET_GROWTH.powi(s.run_magnet_buys as i32)).round() as u32
 }
 
 // ── Dialogue interaction ─────────────────────────────────────────────────────
@@ -290,10 +289,11 @@ pub fn upgrade_dialogue_key(c: &mut Canvas, st: &Arc<Mutex<State>>, key: &Key) -
         Key::Character(ch) if ch == "3" => 3,
         Key::Character(ch) if ch == "4" => 4,
         Key::Character(ch) if ch == "5" => 5,
-        Key::Named(NamedKey::Escape) => 5,
+        Key::Character(ch) if ch == "6" => 6,
+        Key::Named(NamedKey::Escape) => 6,
         _ => return false,
     };
-    if opt == 5 {
+    if opt == 6 {
         close_dialogue(c, st);
         return true;
     }
@@ -319,12 +319,16 @@ fn buy_option(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) {
             s.run_heart_buys += 1;
         }
         2 => {
-            if !crate::profile::buy_permanent_heart() {
+            let (cost, coins) = {
+                let s = st.lock().unwrap();
+                (run_magnet_cost(&s), s.coin_count)
+            };
+            if coins < cost {
                 return;
             }
             let mut s = st.lock().unwrap();
-            s.max_hearts += 1;
-            s.hearts += 1;
+            s.coin_count -= cost;
+            s.run_magnet_buys += 1;
         }
         3 => {
             let (cost, coins) = {
@@ -349,8 +353,23 @@ fn buy_option(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) {
             }
             let mut s = st.lock().unwrap();
             s.coin_count -= cost;
-            s.upgrade_momentum_bonus = true;
+            // Momentum is now a small % boost stacked per purchase (see
+            // `player_max_momentum`), so it no longer flips a cap jump flag.
             s.run_momentum_buys += 1;
+        }
+        5 => {
+            let (cost, coins, hearts, max_hearts) = {
+                let s = st.lock().unwrap();
+                (run_heart_refill_cost(&s), s.coin_count, s.hearts, s.max_hearts)
+            };
+            // Can't refill a full heart bar; only restores toward current max.
+            if hearts >= max_hearts || coins < cost {
+                return;
+            }
+            let mut s = st.lock().unwrap();
+            s.coin_count -= cost;
+            s.hearts = (s.hearts + 1).min(s.max_hearts);
+            s.run_heart_refill_buys += 1;
         }
         _ => {}
     }
@@ -362,6 +381,7 @@ fn hide_dialogue(c: &mut Canvas) {
     for name in [
         "upgrade_dialogue_panel", "upgrade_dialogue_title", "upgrade_dialogue_meta",
         "upgrade_opt_0", "upgrade_opt_1", "upgrade_opt_2", "upgrade_opt_3", "upgrade_opt_4",
+        "upgrade_opt_5",
     ] {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.visible = false;
@@ -382,19 +402,16 @@ fn set_text(c: &mut Canvas, name: &str, text: &str, rgba: (u8, u8, u8, u8)) {
 }
 
 fn update_dialogue_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (coins, r_h_b, r_b_b, r_m_b) = {
+    let (coins, r_h_b, r_b_b, r_m_b, r_h_r_b, r_mag_b, hearts, max_hearts) = {
         let s = st.lock().unwrap();
-        (s.coin_count, s.run_heart_buys, s.run_breath_buys, s.run_momentum_buys)
+        (s.coin_count, s.run_heart_buys, s.run_breath_buys, s.run_momentum_buys,
+         s.run_heart_refill_buys, s.run_magnet_buys, s.hearts, s.max_hearts)
     };
     let rhc = (UPGRADE_RUN_HEART_BASE as f32 * UPGRADE_RUN_HEART_GROWTH.powi(r_h_b as i32)).round() as u32;
     let rbc = (UPGRADE_BREATH_BASE as f32 * UPGRADE_BREATH_GROWTH.powi(r_b_b as i32)).round() as u32;
     let rmc = (UPGRADE_MOMENTUM_BASE as f32 * UPGRADE_MOMENTUM_GROWTH.powi(r_m_b as i32)).round() as u32;
-    let phc = perm_heart_cost();
-    let (meta, perm_owned) = {
-        let g = crate::profile::profile();
-        let p = g.lock().unwrap();
-        (p.meta_currency, p.permanent_extra_hearts)
-    };
+    let rfc = (UPGRADE_HEART_REFILL_BASE as f32 * UPGRADE_HEART_REFILL_GROWTH.powi(r_h_r_b as i32)).round() as u32;
+    let rmgc = (UPGRADE_MAGNET_BASE as f32 * UPGRADE_MAGNET_GROWTH.powi(r_mag_b as i32)).round() as u32;
 
     if let Some(obj) = c.get_game_object_mut("upgrade_dialogue_panel") {
         obj.visible = true;
@@ -402,7 +419,7 @@ fn update_dialogue_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     set_text(c, "upgrade_dialogue_title", "UPGRADE NODE", (255, 255, 255, 255));
     set_text(
         c, "upgrade_dialogue_meta",
-        &format!("Coins: {coins}   \u{2022}   Meta: {meta}   \u{2022}   Perm. Hearts: {perm_owned}"),
+        &format!("Coins: {coins}"),
         (200, 220, 255, 230),
     );
 
@@ -416,11 +433,14 @@ fn update_dialogue_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     let (t0, c0) = line(coins >= rhc, format!("1)  Extra Heart (this run)  \u{2014}  {rhc} coins"));
     set_text(c, "upgrade_opt_0", &t0, c0);
-    let (t1, c1) = line(meta >= phc, format!("2)  +1 Permanent Heart  \u{2014}  {phc} meta"));
+    let (t1, c1) = line(coins >= rmgc, format!("2)  Magnetism (run)  \u{2014}  {rmgc} coins"));
     set_text(c, "upgrade_opt_1", &t1, c1);
     let (t2, c2) = line(coins >= rbc, format!("3)  Controlled Breathing (run)  \u{2014}  {rbc} coins"));
     set_text(c, "upgrade_opt_2", &t2, c2);
     let (t3, c3) = line(coins >= rmc, format!("4)  Momentum (run)  \u{2014}  {rmc} coins"));
     set_text(c, "upgrade_opt_3", &t3, c3);
-    set_text(c, "upgrade_opt_4", "5)  Close  (Esc)", (215, 230, 255, 255));
+    let can_refill = hearts < max_hearts;
+    let (t4, c4) = line(coins >= rfc && can_refill, format!("5)  Heart Refill (this run)  \u{2014}  {rfc} coins"));
+    set_text(c, "upgrade_opt_4", &t4, c4);
+    set_text(c, "upgrade_opt_5", "6)  Close  (Esc)", (215, 230, 255, 255));
 }

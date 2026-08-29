@@ -62,13 +62,34 @@ pub fn tick_spawn_animations(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     if s.spawn_animations.is_empty() { return; }
 
-    // Always start the drop-in animation so placed hooks/obstacles reliably
-    // animate to their target and become visible. (The previous proximity
-    // trigger kept far-ahead hooks stuck off-screen and invisible until the
-    // player got close — which left "empty" stretches even though the hooks
-    // existed.)
+    // Trigger the drop-in from the player's position plus a speed-proportional
+    // lookahead (the merge_test mechanic), not from a fixed band at the camera's
+    // right edge. This makes the fly-in begin as the object approaches the
+    // visible area, so it visibly flies into place as the player advances
+    // instead of popping in mid-screen. It is also direction-aware: objects
+    // already behind the player have long since started and settled, so going
+    // left never re-triggers them.
+    let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0).max(0.1);
+    let visible_half_w = (VW * 0.5) / zoom;
+    // Use the player's *effective* momentum cap (buffs/upgrades raise it above
+    // MOMENTUM_CAP) so the lookahead keeps growing as the player gets faster
+    // instead of saturating at the base cap — this is what keeps the fly-in
+    // responsive to a player who has speeded up.
+    let cap = player_max_momentum(&*s).max(1.0);
+    let speed_t = (s.vx.abs() / cap).min(1.0);
+    // Half the visible width, plus a speed-scaled extra so a fast player starts
+    // the drop earlier and it settles before arrival.
+    let trigger_ahead = visible_half_w + VW * speed_t * 0.5;
+    let trigger_x = s.px + trigger_ahead;
+    let vx_now = s.vx;
     for anim in s.spawn_animations.iter_mut() {
-        anim.started = true;
+        if !anim.started && anim.target_x < trigger_x {
+            anim.started = true;
+            // Recompute the drop duration from the player's speed NOW, not the
+            // (possibly stale) speed at generation time, so a player who sped
+            // up en route gets a quick enough drop to settle before reaching it.
+            anim.total = spawn_anim_ticks_for_speed(vx_now, cap);
+        }
     }
 
     // Collect per-anim updates, then release the lock before touching game objects.

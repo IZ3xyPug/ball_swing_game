@@ -203,6 +203,21 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             target_y
         };
 
+        // Show the triggering achievement's title/description. The generic
+        // toast path stores them in achievement_toast_title/_desc; gold_master
+        // falls back to its constants when those are absent.
+        if let Some(font) = crate::scenes::game::helpers::ui_font() {
+            let s = c.virtual_scale();
+            let title = match c.get_var("achievement_toast_title") { Some(Value::Str(v)) => v.clone(), _ => GOLD_MASTER_TITLE.to_string() };
+            let desc  = match c.get_var("achievement_toast_desc")  { Some(Value::Str(v)) => v.clone(), _ => GOLD_MASTER_DESCRIPTION.to_string() };
+            if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
+                obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&title, &font, 46.0 * s, Color(250, 225, 120, 255), 1080.0 * s)));
+            }
+            if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
+                obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&desc, &font, 26.0 * s, Color(210, 220, 235, 230), 1080.0 * s)));
+            }
+        }
+
         if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_PANEL_NAME) {
             obj.position = (target_x, y);
             obj.visible = true;

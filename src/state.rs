@@ -459,6 +459,8 @@ pub struct State {
     pub run_heart_buys:     u32,
     pub run_breath_buys:    u32,
     pub run_momentum_buys:  u32,
+    pub run_heart_refill_buys: u32,
+    pub run_magnet_buys:    u32,
     /// True while the roguelike upgrade choice dialogue is open.
     pub upgrade_dialogue_active: bool,
     /// Id of the upgrade node the dialogue is attached to.

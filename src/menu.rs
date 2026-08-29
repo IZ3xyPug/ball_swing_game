@@ -55,13 +55,21 @@ pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
                     && world.1 >= obj.position.1
                     && world.1 <= obj.position.1 + obj.size.1;
                 if hit {
-                    // Load the profile scene directly, bypassing the custom
-                    // event, so this button works even if the "goto_profile"
-                    // event registration is somehow stale or missing.
-                    if *name == "menu_profile_btn" {
-                        c.load_scene("profile");
-                    } else {
-                        c.run(Action::Custom { name: event.to_string() });
+                    // Load the target scene directly rather than relying on the
+                    // custom-event dispatch, which wasn't reliably firing for
+                    // these buttons from inside the mouse-press handler. The
+                    // START button (sets mode) and SHOP button (sub-view) keep
+                    // their custom events.
+                    match *name {
+                        "menu_shop_btn" | "start_btn" => {
+                            c.run(Action::Custom { name: event.to_string() });
+                        }
+                        "menu_settings_btn" => c.set_var("queue_scene", "menu_settings"),
+                        "menu_achievements_btn" => c.set_var("queue_scene", "achievements"),
+                        "menu_stats_btn" => c.set_var("queue_scene", "stats"),
+                        "menu_daily_btn" => c.set_var("queue_scene", "daily_reward"),
+                        "menu_profile_btn" => c.set_var("queue_scene", "profile"),
+                        _ => {}
                     }
                     return;
                 }
@@ -517,6 +525,49 @@ pub(crate) fn apply_profile_text(canvas: &mut Canvas) {
         if let Some(obj) = canvas.get_game_object_mut(&format!("profile_slot_text_{i}")) {
             obj.set_drawable(Box::new(ui_text_spec(&label, &font, 32.0 * s, Color(210, 225, 245, 255), 1080.0 * s)));
         }
+        if let Some(obj) = canvas.get_game_object_mut(&format!("profile_delete_text_{i}")) {
+            obj.set_drawable(Box::new(ui_text_spec("DELETE", &font, 26.0 * s, Color(255, 215, 215, 255), 200.0 * s)));
+        }
+    }
+}
+
+/// Show/hide the delete-confirmation modal and refresh its text to name the
+/// slot under `profile_delete_pending`. Call whenever the pending var changes.
+fn update_profile_delete_confirm(canvas: &mut Canvas) {
+    let pending = match canvas.get_var("profile_delete_pending") {
+        Some(Value::I32(v)) => v,
+        _ => -1,
+    };
+    let show = pending >= 0;
+    for name in [
+        "profile_delete_dim",
+        "profile_delete_panel", "profile_delete_title", "profile_delete_note",
+        "profile_delete_confirm", "profile_delete_confirm_text",
+        "profile_delete_cancel", "profile_delete_cancel_text",
+    ] {
+        if let Some(obj) = canvas.get_game_object_mut(name) {
+            obj.visible = show;
+        }
+    }
+    if !show { return; }
+    let Some(font) = ui_font() else { return; };
+    let s = canvas.virtual_scale();
+    let (name, meta) = {
+        let profiles = crate::profile::all_profiles();
+        let p = profiles.get(pending as usize).cloned().unwrap_or_default();
+        (p.name, p.meta_currency)
+    };
+    if let Some(obj) = canvas.get_game_object_mut("profile_delete_title") {
+        obj.set_drawable(Box::new(ui_text_spec("DELETE THIS PROFILE?", &font, 46.0 * s, Color(255, 120, 120, 255), 1220.0 * s)));
+    }
+    if let Some(obj) = canvas.get_game_object_mut("profile_delete_note") {
+        obj.set_drawable(Box::new(ui_text_spec(&format!("{name}   \u{2022}   Meta {meta}   \u{2014}   this cannot be undone."), &font, 30.0 * s, Color(220, 230, 245, 245), 1200.0 * s)));
+    }
+    if let Some(obj) = canvas.get_game_object_mut("profile_delete_confirm_text") {
+        obj.set_drawable(Box::new(ui_text_spec("CONFIRM", &font, 34.0 * s, Color(255, 235, 235, 255), 380.0 * s)));
+    }
+    if let Some(obj) = canvas.get_game_object_mut("profile_delete_cancel_text") {
+        obj.set_drawable(Box::new(ui_text_spec("CANCEL", &font, 34.0 * s, Color(225, 235, 250, 255), 380.0 * s)));
     }
 }
 
@@ -541,10 +592,12 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
         .build(ctx);
     scene = scene.with_object("profile_title", title);
 
-    // Slot buttons + text.
+    // Slot buttons + text + a per-slot DELETE button on the right.
     for i in 0..crate::profile::SLOT_COUNT {
         let id = format!("profile_slot_{i}");
         let txt_id = format!("profile_slot_text_{i}");
+        let del_id = format!("profile_delete_btn_{i}");
+        let del_txt_id = format!("profile_delete_text_{i}");
         let y = VH * (0.26 + i as f32 * 0.15);
         let btn = GameObject::new_rect(ctx, id.clone().into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (1080.0, 120.0), 0.0), image: solid(45, 50, 80, 220).into(), color: None }),
@@ -557,6 +610,83 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
             .tag("ui")
             .build(ctx);
         scene = scene.with_object(&txt_id, txt);
+        // Delete button sits to the right of the slot band.
+        let del_x = VW * 0.5 + 570.0;
+        let del_btn = GameObject::new_rect(ctx, del_id.clone().into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (200.0, 80.0), 0.0), image: solid(140, 45, 60, 230).into(), color: None }),
+            (200.0, 80.0), (del_x, y + 20.0),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        scene = scene.with_object(&del_id, del_btn);
+        let del_txt = GameObject::build(&del_txt_id)
+            .size(200.0, 80.0)
+            .position(del_x, y + 20.0 + (80.0 - 30.0) * 0.5)
+            .tag("ui")
+            .build(ctx);
+        scene = scene.with_object(&del_txt_id, del_txt);
+    }
+
+    // ── Delete-confirmation modal (self-contained dialog) ──────────────────
+    // NOTE: `new_rect`'s last param is GRAVITY (not layer). Pass 0.0 so the
+    // dialog doesn't fall, then set `.layer` on the returned object to stack it
+    // above the slot rows.
+    let confirm_w = 1300.0;
+    let confirm_h = 460.0;
+    // Full-screen dim backdrop so the dialog clearly sits on top.
+    let mut dim = GameObject::new_rect(ctx, "profile_delete_dim".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (VW + 800.0, VH), 0.0), image: solid(0, 0, 0, 150).into(), color: None }),
+        (VW + 800.0, VH), (-400.0, 0.0),
+        vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    dim.layer = 29;
+    let mut confirm_bg = GameObject::new_rect(ctx, "profile_delete_panel".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (confirm_w, confirm_h), 0.0), image: solid(28, 32, 48, 250).into(), color: None }),
+        (confirm_w, confirm_h), (VW * 0.5 - confirm_w * 0.5, VH * 0.5 - confirm_h * 0.5),
+        vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    confirm_bg.layer = 30;
+    let confirm_title = GameObject::build("profile_delete_title")
+        .size(confirm_w, 80.0)
+        .position(VW * 0.5 - confirm_w * 0.5 + 40.0, VH * 0.5 - 150.0)
+        .tag("ui")
+        .layer(32)
+        .build(ctx);
+    let confirm_note = GameObject::build("profile_delete_note")
+        .size(confirm_w, 60.0)
+        .position(VW * 0.5 - confirm_w * 0.5 + 40.0, VH * 0.5 - 40.0)
+        .tag("ui")
+        .layer(32)
+        .build(ctx);
+    let mut confirm_btn = GameObject::new_rect(ctx, "profile_delete_confirm".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (420.0, 100.0), 0.0), image: solid(140, 45, 60, 255).into(), color: None }),
+        (420.0, 100.0), (VW * 0.5 - 460.0, VH * 0.5 + 120.0),
+        vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    confirm_btn.layer = 31;
+    let confirm_btn_text = GameObject::build("profile_delete_confirm_text")
+        .size(420.0, 100.0)
+        .position(VW * 0.5 - 460.0, VH * 0.5 + 120.0 + (100.0 - 36.0) * 0.5)
+        .tag("ui")
+        .layer(32)
+        .build(ctx);
+    let mut cancel_btn = GameObject::new_rect(ctx, "profile_delete_cancel".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (420.0, 100.0), 0.0), image: solid(60, 66, 90, 255).into(), color: None }),
+        (420.0, 100.0), (VW * 0.5 + 40.0, VH * 0.5 + 120.0),
+        vec!["ui".into(), "button".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    cancel_btn.layer = 31;
+    let cancel_btn_text = GameObject::build("profile_delete_cancel_text")
+        .size(420.0, 100.0)
+        .position(VW * 0.5 + 40.0, VH * 0.5 + 120.0 + (100.0 - 36.0) * 0.5)
+        .tag("ui")
+        .layer(32)
+        .build(ctx);
+    for (n, o) in [
+        ("profile_delete_dim", dim),
+        ("profile_delete_panel", confirm_bg),
+        ("profile_delete_title", confirm_title),
+        ("profile_delete_note", confirm_note),
+        ("profile_delete_confirm", confirm_btn),
+        ("profile_delete_confirm_text", confirm_btn_text),
+        ("profile_delete_cancel", cancel_btn),
+        ("profile_delete_cancel_text", cancel_btn_text),
+    ] {
+        scene = scene.with_object(n, o);
     }
 
     let mut scene = scene.on_enter(|canvas| {
@@ -564,6 +694,7 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
         // labels render in the same coordinate space (mirrors the gameover scene;
         // inheriting a leftover camera from the menu can shift UI text sideways).
         canvas.set_camera(Camera::new((VW, VH), (VW, VH)));
+        canvas.set_var("profile_delete_pending", -1i32);
         // Register the click handler once (guard against re-registration).
         if !matches!(canvas.get_var("profile_events_registered"), Some(Value::Bool(true))) {
             canvas.on_mouse_press(move |c, btn, pos| {
@@ -571,11 +702,48 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
                     return;
                 }
                 let world = c.screen_to_world(pos);
+                let hit = |obj: &GameObject| {
+                    world.0 >= obj.position.0 && world.0 <= obj.position.0 + obj.size.0
+                        && world.1 >= obj.position.1 && world.1 <= obj.position.1 + obj.size.1
+                };
+                // If a delete-confirmation modal is showing, only its buttons are active.
+                let pending = match c.get_var("profile_delete_pending") {
+                    Some(Value::I32(v)) => v,
+                    _ => -1,
+                };
+                if pending >= 0 {
+                    if let Some(obj) = c.get_game_object("profile_delete_confirm") {
+                        if hit(obj) {
+                            crate::profile::delete_profile(pending as usize);
+                            c.set_var("profile_delete_pending", -1i32);
+                            update_profile_delete_confirm(c);
+                            apply_profile_text(c);
+                            return;
+                        }
+                    }
+                    if let Some(obj) = c.get_game_object("profile_delete_cancel") {
+                        if hit(obj) {
+                            c.set_var("profile_delete_pending", -1i32);
+                            update_profile_delete_confirm(c);
+                            return;
+                        }
+                    }
+                    return; // modal blocks everything else
+                }
+                // Per-slot DELETE buttons.
+                for i in 0..crate::profile::SLOT_COUNT {
+                    if let Some(obj) = c.get_game_object(&format!("profile_delete_btn_{i}")) {
+                        if hit(obj) {
+                            c.set_var("profile_delete_pending", i as i32);
+                            update_profile_delete_confirm(c);
+                            return;
+                        }
+                    }
+                }
+                // Slot buttons.
                 for i in 0..crate::profile::SLOT_COUNT {
                     if let Some(obj) = c.get_game_object(&format!("profile_slot_{i}")) {
-                        if world.0 >= obj.position.0 && world.0 <= obj.position.0 + obj.size.0
-                            && world.1 >= obj.position.1 && world.1 <= obj.position.1 + obj.size.1
-                        {
+                        if hit(obj) {
                             select_profile_and_continue(c, i);
                             return;
                         }
@@ -588,6 +756,7 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
         // Title + slot labels. Applied here AND re-applied via on_update while
         // profile_text_dirty is set, so the boot scene gets the correct scale.
         apply_profile_text(canvas);
+        update_profile_delete_confirm(canvas); // ensure the modal is hidden on entry
         canvas.set_var("profile_text_dirty", true);
 
         // Re-apply labels once the canvas has been sized (fixes the boot scene,
@@ -608,6 +777,7 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
                 if !dirty && (last - s).abs() < 0.0001 { return; }
                 c.set_var("profile_text_last_scale", s);
                 apply_profile_text(c);
+                update_profile_delete_confirm(c);
                 c.set_var("profile_text_dirty", false);
             });
             canvas.set_var("profile_text_update_registered", true);
@@ -946,6 +1116,19 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 canvas.on_update(|c| {
                     if !c.is_scene("menu") { return; }
 
+                    // Consume a queued scene switch. load_scene cannot be
+                    // called reliably from inside a mouse-press callback, so
+                    // the press handler queues the target here.
+                    match c.get_var("queue_scene") {
+                        Some(Value::Str(s)) if !s.is_empty() => {
+                            let scene = s.clone();
+                            c.set_var("queue_scene", "");
+                            c.load_scene(&scene);
+                            return;
+                        }
+                        _ => {}
+                    }
+
                     // Re-apply menu text whenever the canvas scale changes
                     // (window resize), so labels stay aligned with their button
                     // hit-boxes. `menu_text_dirty` is also set on scene entry.
@@ -1169,11 +1352,14 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
 
     // Three label objects — one above each slider track.
     let make_ms_label = |ctx: &mut Context, id: &str, y: f32| {
-        GameObject::build(id)
+        let mut obj = GameObject::build(id)
             .size(MS_SLIDER_TRACK_W, 80.0)
             .position(MS_SLIDER_TRACK_X, y)
             .tag("ui")
-            .build(ctx)
+            .build(ctx);
+        obj.ignore_zoom = true;
+        obj.layer = 12_004;
+        obj
     };
     let ms_label_0 = make_ms_label(ctx, MS_LABEL_NAMES[0], MS_SLIDER_Y[0] - 100.0);
     let ms_label_1 = make_ms_label(ctx, MS_LABEL_NAMES[1], MS_SLIDER_Y[1] - 100.0);
@@ -1273,11 +1459,13 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
             // inside on_update, unlike on_enter which may fire before the
             // first real build() pass sets actual_size).
             canvas.set_var("ms_text_dirty", true);
+            // Also set them now so they're present even if the dirty-flush is
+            // skipped; the on_update re-renders at the real scale afterwards.
+            menu_settings_update_labels(canvas);
 
             if let Some(font) = ui_font() {
                 let s = canvas.virtual_scale();
-                if let Some(obj) = canvas.get_game_object_mut("ms_title_text") {
-                    obj.set_drawable(Box::new(ui_text_spec(
+                if let Some(obj) = canvas.get_game_object_mut("ms_title_text") {                    obj.set_drawable(Box::new(ui_text_spec(
                         "SETTINGS", &font, 72.0 * s, Color(200, 230, 255, 255), 1400.0 * s,
                     )));
                 }
@@ -1625,6 +1813,7 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
     let card_check_obj = GameObject::build(GOLD_MASTER_CARD_CHECK_NAME).size(120.0, 96.0).position(VW * 0.5 + 600.0, VH * 0.318).tag("ui").build(ctx);
     let title_obj  = GameObject::build("ach_title_text").size(1400.0, 200.0).position(VW * 0.5 - 700.0, VH * 0.08).tag("ui").build(ctx);
     let back_text  = GameObject::build("ach_back_text").size(420.0, 110.0).position(VW / 2.0 - 210.0, VH * 0.86 + (110.0 - 36.0) / 2.0).tag("ui").build(ctx);
+    let list_text  = GameObject::build("ach_list_text").size(1400.0, 760.0).position(VW * 0.5 - 700.0, VH * 0.46).tag("ui").build(ctx);
 
     Scene::new("achievements")
         .with_object("ach_bg",         bg)
@@ -1636,6 +1825,7 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
         .with_object(GOLD_MASTER_CARD_DESC_NAME,  card_desc_obj)
         .with_object(GOLD_MASTER_CARD_CHECK_NAME, card_check_obj)
         .with_object("ach_back_text",  back_text)
+        .with_object("ach_list_text",  list_text)
         .with_event(
             GameEvent::MousePress {
                 action: Action::Custom { name: "ach_back".into() },
@@ -1668,6 +1858,25 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
                 }
                 if let Some(obj) = canvas.get_game_object_mut("ach_back_text") {
                     obj.set_drawable(Box::new(ui_text_spec("\u{25C4}  BACK", &font, 32.0 * s, Color(220, 235, 255, 255), 420.0 * s)));
+                }
+                // List the rest of the unlocked achievements below the featured card.
+                let unlocked = {
+                    let p = crate::profile::profile();
+                    let g = p.lock().unwrap();
+                    g.achievements.clone()
+                };
+                let mut lines = String::new();
+                for id in &unlocked {
+                    if id == "gold_master" { continue; } // shown as the featured card
+                    if let Some((title, desc)) = crate::achievements::achi_def(id) {
+                        lines.push_str(&format!("\u{2713}  {}  \u{2014}  {}\n\n", title, desc));
+                    }
+                }
+                if lines.is_empty() {
+                    lines = "No other achievements yet \u{2014} keep swinging!".to_string();
+                }
+                if let Some(obj) = canvas.get_game_object_mut("ach_list_text") {
+                    obj.set_drawable(Box::new(ui_text_left_spec(&lines, &font, 26.0 * s, Color(210, 225, 245, 235), 1400.0 * s)));
                 }
             }
 
@@ -1758,22 +1967,30 @@ pub fn build_stats_scene(ctx: &mut Context) -> Scene {
                     )));
                 }
 
-                // Left column: 4 stats.  Values are all 0 (not yet tracked).
+                // Left column: 4 per-profile lifetime stats.
                 let lc_name = Color(190, 210, 255, 220);
                 let lc_val  = Color(255, 240, 200, 255);
                 let col_w   = 1380.0 * s;
 
-                let left_stats = [
-                    ("COINS COLLECTED", "0"),
-                    ("DEATHS",          "0"),
-                    ("BEST DISTANCE",   "0"),
-                    ("TURRETS DESTROYED", "0"),
+                let (total_coins, deaths, best_dist, runs, bosses,
+                     best_casual, best_normal, best_bossrush) = {
+                    let p = crate::profile::profile();
+                    let g = p.lock().unwrap();
+                    (g.total_coins, g.deaths, g.best_distance, g.runs_played,
+                     g.bosses_defeated,
+                     g.best_distance_casual, g.best_distance_normal, g.best_distance_bossrush)
+                };
+                let left_stats: [(&str, String); 4] = [
+                    ("COINS COLLECTED", format!("{}", total_coins)),
+                    ("DEATHS",          format!("{}", deaths)),
+                    ("BEST DISTANCE",   format!("{} px", best_dist)),
+                    ("RUNS PLAYED",     format!("{}", runs)),
                 ];
-                let right_stats = [
-                    ("HOOKS",           "0"),
-                    ("TIME PLAYED",     "0"),
-                    ("BOSSES DEFEATED", "0"),
-                    ("BOUNCES",         "0"),
+                let right_stats: [(&str, String); 4] = [
+                    ("BEST  NORMAL",    format!("{} px", best_normal)),
+                    ("BEST  CASUAL",    format!("{} px", best_casual)),
+                    ("BEST  BOSS RUSH", format!("{} px", best_bossrush)),
+                    ("BOSSES DEFEATED", format!("{}", bosses)),
                 ];
 
                 let make_stat_text = |name: &str, val: &str, font: &Font, s: f32, name_col: Color, val_col: Color, w: f32| {
@@ -1799,7 +2016,7 @@ pub fn build_stats_scene(ctx: &mut Context) -> Scene {
                 let gap_h  = Some(28.0 * s);
                 let _ = make_stat_text; // suppress unused warning
 
-                for (i, &(name, val)) in left_stats.iter().enumerate() {
+                for (i, (name, val)) in left_stats.iter().enumerate() {
                     left_spans.push(Span::new(name.to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
                     left_spans.push(Span::new(format!("\n"), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
                     left_spans.push(Span::new(val.to_string(), 52.0 * s, line_h, Arc::new(font.clone()), lc_val, 0.0));
@@ -1807,7 +2024,7 @@ pub fn build_stats_scene(ctx: &mut Context) -> Scene {
                         left_spans.push(Span::new("\n\n".to_string(), 20.0 * s, gap_h, Arc::new(font.clone()), lc_val, 0.0));
                     }
                 }
-                for (i, &(name, val)) in right_stats.iter().enumerate() {
+                for (i, (name, val)) in right_stats.iter().enumerate() {
                     right_spans.push(Span::new(name.to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
                     right_spans.push(Span::new("\n".to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
                     right_spans.push(Span::new(val.to_string(), 52.0 * s, line_h, Arc::new(font.clone()), lc_val, 0.0));

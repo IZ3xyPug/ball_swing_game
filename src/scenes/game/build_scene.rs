@@ -949,6 +949,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 run_heart_buys: 0,
                 run_breath_buys: 0,
                 run_momentum_buys: 0,
+                run_heart_refill_buys: 0,
+                run_magnet_buys: 0,
                 upgrade_dialogue_active: false,
                 upgrade_dialogue_node: String::new(),
                 upgrade_hold_x: 0.0,
@@ -1263,15 +1265,19 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.set_var("start_prompt_active", true);
             canvas.set_var("game_paused", true);
             // Reset the hold-to-start counter so a fresh run (incl. a retry
-            // click) must again hold for START_HOLD_TICKS.
+            // click) must again hold for START_HOLD_TICKS. A quick click still
+            // can't auto-start because releasing resets the counter below
+            // START_HOLD_TICKS.
             canvas.set_var("start_hold_ticks", 0i32);
-            // Clear any mouse hold left over from the click that navigated here
-            // (e.g. the game-over RETRY button) so it can't count toward the
-            // hold-to-start, and reset the grab edge detector so the first
-            // launched frame always sees the held input as a fresh press and
-            // auto-grabs — regardless of the stale `_was_down` state carried
-            // over from a previous run.
-            canvas.set_var("mouse_left_held", false);
+            // Do NOT clear `mouse_left_held` here: if the player is still
+            // holding the click that navigated here (e.g. the game-over RETRY
+            // button), letting it stand means the hold-to-start counts from the
+            // moment the title appears, so "click and keep holding" starts the
+            // run instead of silently doing nothing. A quick click is harmless:
+            // the release immediately drops the counter back to 0.
+            // Reset the grab edge detector so the first launched frame always
+            // sees the held input as a fresh press and auto-grabs — regardless
+            // of the stale `_was_down` state carried over from a previous run.
             canvas.set_var("input_needs_edge_reset", true);
             // Do not hard-pause the engine here: hard-pause skips
             // apply_camera_transform, which can leave stale zoom from
@@ -1417,16 +1423,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 return;
                             }
 
-                            // pos is world-space; multiply by zoom to get virtual-screen space
-                            // so ignore_zoom UI hit tests are correct at any camera zoom level.
-                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
+                            // Pause/settings UI is ignore_zoom, so it renders at fixed
+                            // virtual positions (VW/VH) regardless of camera zoom. Input
+                            // `pos` from on_mouse_move is already virtual, so hit-test it
+                            // directly instead of scaling by the camera zoom.
 
                             // If dragging a settings slider, update its position/value.
                             let dragging = c.get_i32("settings_dragging");
                             if dragging >= 0 && c.get_bool("settings_open") {
                                 let idx = dragging as usize;
                                 if idx < 3 {
-                                    let vol = ((pos.0 * zoom - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                    let vol = ((pos.0 - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
                                     set_volume_value(c, SLIDER_VARS[idx], vol);
                                     let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
                                     let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
@@ -1441,8 +1448,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 return;
                             }
 
-                            let ux = pos.0 * zoom;
-                            let uy = pos.1 * zoom;
+                            let ux = pos.0;
+                            let uy = pos.1;
                             let bx = (VW - 700.0) / 2.0;
 
                             let over_resume = ux >= bx && ux <= bx + 700.0 && uy >= 780.0 && uy <= 950.0;
@@ -1494,11 +1501,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             return;
                         }
 
-                        // pos is world-space (divided by zoom); ignore_zoom UI lives in
-                        // virtual-screen space (0..VW, 0..VH). Multiply by zoom to convert.
-                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
-                        let ux = pos.0 * zoom;
-                        let uy = pos.1 * zoom;
+                        // Pause/settings UI is ignore_zoom, so it renders at fixed
+                        // virtual positions (0..VW, 0..VH) regardless of camera zoom.
+                        // Input `pos` is already virtual, so hit-test it directly.
+                        let ux = pos.0;
+                        let uy = pos.1;
 
                         // If settings panel is open, check for slider track hits first.
                         if c.get_bool("settings_open") {
@@ -1644,6 +1651,22 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         let s = st.lock().unwrap();
                         if s.dead {
                             return;
+                        }
+                    }
+
+                    // ── Achievements: pop toasts mid-run (like gold-master) ──
+                    // Gold-master fires on coin pickup; the lifetime achievements
+                    // only fired on death, so their toasts never showed. Poll
+                    // the live run stats here so they pop while the run is live.
+                    if !c.get_bool("game_paused") && !c.get_bool("start_prompt_active") {
+                        let (run_coins, run_dist) = {
+                            let s = st.lock().unwrap();
+                            (s.coin_count as u64, s.distance)
+                        };
+                        let ticks = c.get_i32("achievement_check_ticks").saturating_add(1);
+                        c.set_var("achievement_check_ticks", ticks);
+                        if ticks % 30 == 0 {
+                            crate::achievements::check_achievements(c, run_coins, run_dist);
                         }
                     }
 
@@ -2383,8 +2406,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if meta_gain > 0 {
                             crate::profile::award_meta_currency(meta_gain);
                         }
+                        // Record lifetime run stats on the active profile.
+                        let run_distance = s.distance;
+                        let run_coins = s.coin_count as u64;
+                        let run_seconds = (s.ticks / 60) as u64;
                         s.dead = true;
                         drop(s);
+                        crate::profile::record_death();
+                        let mode_idx = crate::mode::current_mode(c).index();
+                        crate::profile::record_run(mode_idx, run_distance, run_coins, run_seconds);
+                        // Run is already recorded, so no extra run coins/distance.
+                        crate::achievements::check_achievements(c, 0, 0.0);
                         // Boss darkness must not carry into the game-over menu.
                         if c.has_lighting() {
                             c.set_ambient(Color(255, 255, 255, 255), 1.0);
@@ -2407,16 +2439,19 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if died_to_sun {
                             c.set_var("died_to_sun", false);
                             c.set_var("died_to_oxygen", false);
+                            crate::achievements::record_death_cause(c, "sun");
                             play_death_sound(c);
                             c.load_scene("gameover_sun");
                         } else if died_to_oxygen {
                             c.set_var("died_to_oxygen", false);
+                            crate::achievements::record_death_cause(c, "oxygen");
                             play_death_sound(c);
                             c.load_scene("gameover_oxygen");
                         } else {
                             if !died_to_oxygen {
                                 c.set_var("died_to_oxygen", false);
                             }
+                            crate::achievements::record_death_cause(c, "fall");
                             play_death_sound(c);
                             c.load_scene("gameover");
                         }

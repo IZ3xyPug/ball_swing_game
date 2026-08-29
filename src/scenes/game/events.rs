@@ -229,20 +229,31 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
     });
 
     // ── Mouse ────────────────────────────────────────────────────────────
-    // Callbacks only latch a flag; the on_update tick polls it with
-    // edge-detection so mouse and spacebar trigger at exactly the same
-    // point in the frame, avoiding inter-tick timing differences.
+    // Callbacks are registered once at app start (see `register_mouse_handlers`)
+    // so `mouse_left_held` is live on the canvas that receives input regardless
+    // of which scene is active or how many times the game scene is re-entered.
+    // They only latch a flag; the on_update tick polls it with edge-detection so
+    // mouse and spacebar trigger at exactly the same point in the frame,
+    // avoiding inter-tick timing differences.
+}
+
+/// Register the left-mouse press/release handlers that track `mouse_left_held`.
+/// Called once at app start (mirrors `menu::push_menu_press_handler`) so the
+/// flag is reliable no matter when the game scene is entered. This is what lets
+/// a mouse hold-to-start count even when the click that navigated into the game
+/// scene is still held down (e.g. the menu START or the game-over RETRY button),
+/// because the handler is already live when that click happens.
+pub fn register_mouse_handlers(canvas: &mut Canvas) {
     let mouse_registered = matches!(canvas.get_var("game_mouse_registered"), Some(Value::Bool(true)));
-    if !mouse_registered {
-        canvas.on_mouse_press(move |c, btn, _pos| {
-            if btn != MouseButton::Left { return; }
-            c.set_var("mouse_left_held", true);
-        });
-        canvas.on_mouse_release(move |c, btn, _pos| {
-            if btn != MouseButton::Left { return; }
-            c.set_var("mouse_left_held", false);
-        });
-        canvas.set_var("mouse_left_held", false);
-        canvas.set_var("game_mouse_registered", true);
-    }
+    if mouse_registered { return; }
+    canvas.on_mouse_press(move |c, btn, _pos| {
+        if btn != MouseButton::Left { return; }
+        c.set_var("mouse_left_held", true);
+    });
+    canvas.on_mouse_release(move |c, btn, _pos| {
+        if btn != MouseButton::Left { return; }
+        c.set_var("mouse_left_held", false);
+    });
+    canvas.set_var("mouse_left_held", false);
+    canvas.set_var("game_mouse_registered", true);
 }

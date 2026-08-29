@@ -267,8 +267,10 @@ pub const SPINNER_HIT_PUSH_Y:f32 = -28.0;
 pub const COIN_POOL_SIZE:    usize = 30;
 
 /// X gap between coin spawns (px). Narrower = more coins.
-pub const COIN_GAP_MIN:      f32 = 2200.0;
-pub const COIN_GAP_MAX:      f32 = 4200.0;
+/// Tightened 2026-08-28 so a dedicated normal-zone run can reach tier-1 costs
+/// by the first boss (~46 coins full-collection at px 20,000, up from ~39).
+pub const COIN_GAP_MIN:      f32 = 950.0;   // was 1900 — doubled spawn density
+pub const COIN_GAP_MAX:      f32 = 1700.0;  // was 3400 — doubled spawn density
 
 pub const COIN_R:            f32 = 48.0;
 pub const COIN_SCORE:        u32 = 125;
@@ -615,8 +617,9 @@ pub const BOSS_ARENA_TOP_Y:       f32   = -4300.0;
 pub const BOSS_LUNGE_TELEGRAPH:   u32   = 90;
 
 // ── Gravity cannon hyper-transit (fast travel) ────────────────────────────────
-/// Coin cost to use a cannon as fast travel.
-pub const CANNON_FAST_TRAVEL_COST:      u32   = 300;
+/// Coin cost to use a cannon as fast travel. Lowered 2026-08-28 to match the
+/// new economy — was priced for the old (unreachable-on-foot) income.
+pub const CANNON_FAST_TRAVEL_COST:      u32   = 110;
 /// How far ahead a cannon fast-travel launches the player (px).
 pub const CANNON_FAST_TRAVEL_DISTANCE:  f32   = VW * 3.0;
 /// Ticks of no-grab grace after arriving at the receiver.
@@ -1154,12 +1157,25 @@ pub const UPGRADE_GAP_MAX: f32 = 55000.0;
 pub const UPGRADE_R: f32 = 96.0;
 pub const UPGRADE_SPAWN_BUDGET_PER_TICK: usize = 1;
 /// Run-persisting upgrades: cheap first buy, escalating per purchase this run.
-pub const UPGRADE_RUN_HEART_BASE: u32 = 200;
+/// Bases lowered 2026-08-28 so a dedicated normal-zone run can afford tier-1
+/// by the first boss (~46 coins full-collection at px 20,000).
+pub const UPGRADE_RUN_HEART_BASE: u32 = 80;   // was 200 — strongest effect, keep priciest run upgrade
 pub const UPGRADE_RUN_HEART_GROWTH: f32 = 2.0;
-pub const UPGRADE_BREATH_BASE: u32 = 150;
+pub const UPGRADE_BREATH_BASE: u32 = 45;      // was 150 — cheapest, foot-reachable
 pub const UPGRADE_BREATH_GROWTH: f32 = 1.6;
-pub const UPGRADE_MOMENTUM_BASE: u32 = 200;
+pub const UPGRADE_MOMENTUM_BASE: u32 = 60;    // was 200 — second cheapest
 pub const UPGRADE_MOMENTUM_GROWTH: f32 = 1.6;
+/// Cheap heart-refill (heal toward current max, NOT a new max heart). Distinct
+/// from the Extra Heart option so the player can always see both costs.
+pub const UPGRADE_HEART_REFILL_BASE: u32 = 25;
+pub const UPGRADE_HEART_REFILL_GROWTH: f32 = 1.3;
+/// Magnetism (in-run) — widens the coin/item pickup radius per purchase.
+pub const UPGRADE_MAGNET_BASE: u32 = 50;
+pub const UPGRADE_MAGNET_GROWTH: f32 = 1.5;
+/// Fractional radius increase each time the run Magnetism upgrade is bought.
+pub const MAGNET_UPGRADE_PER_STEP: f32 = 0.15;
+/// Fractional momentum-cap increase each time the run Momentum upgrade is bought.
+pub const MOMENTUM_UPGRADE_PER_STEP: f32 = 0.08;
 /// Permanent extra-heart upgrade (persists across runs; meta currency, exponential).
 pub const UPGRADE_PERM_HEART_BASE: u64 = 5000;
 pub const UPGRADE_PERM_HEART_GROWTH: f32 = 2.5;

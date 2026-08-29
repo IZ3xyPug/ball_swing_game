@@ -331,6 +331,7 @@ pub fn tick_space_zone(c: &mut Canvas, st: &Arc<Mutex<State>>, frame: u32) {
 // ── Entry / Exit ─────────────────────────────────────────────────────────────
 
 fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    crate::achievements::award_space_cadet(c);
     {
         let mut s = st.lock().unwrap();
         s.in_space_mode       = true;
@@ -488,6 +489,12 @@ fn enter_space(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         c.set_var("game_paused", true);
         c.set_var("start_prompt_active", true);
         c.set_var("start_orbit_ticks", 0i32);
+        // Require a fresh deliberate hold to leave the entry stasis. A player
+        // who swung up into space while holding the mouse must release and
+        // press again, instead of the stasis auto-launching off the swing-hold
+        // (which is what made holding the mouse "glitch" on space entry).
+        c.set_var("mouse_left_held", false);
+        c.set_var("start_hold_ticks", 0i32);
         let _ = px_done;
 
         // Update prompt text
@@ -637,6 +644,9 @@ pub fn exit_space(c: &mut Canvas, st: &Arc<Mutex<State>>, forced: bool) {
             c.set_var("game_paused", true);
             c.set_var("start_prompt_active", true);
             c.set_var("start_orbit_ticks", 0i32);
+            // Require a fresh deliberate hold to resume (see entry stasis).
+            c.set_var("mouse_left_held", false);
+            c.set_var("start_hold_ticks", 0i32);
 
             if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
                 let scale = c.virtual_scale();
@@ -2256,6 +2266,12 @@ fn cull_all_space_objects(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for n in s.space_asteroid_live.drain(..).collect::<Vec<_>>() {
         if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.momentum = (0.0, 0.0); obj.position = (-12000.0, -12000.0); }
         s.space_asteroid_free.push(n);
+    }
+    // Oxygen canisters must be culled on exit too, or one stays visible in the
+    // normal area after returning from space.
+    for n in s.space_oxygen_pickup_live.drain(..).collect::<Vec<_>>() {
+        if let Some(obj) = c.get_game_object_mut(&n) { obj.visible = false; obj.position = (-9800.0, -9800.0); }
+        s.space_oxygen_pickup_free.push(n);
     }
     for n in s.space_coin_spent.drain(..).collect::<Vec<_>>()     { s.space_coin_free.push(n); }
     for n in s.space_blue_coin_spent.drain(..).collect::<Vec<_>>() { s.space_blue_coin_free.push(n); }

@@ -1033,8 +1033,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Roguelike upgrade choice dialogue (HUD) ─────────────────────────
     // Shown while the player is held at an upgrade node; options are set by
     // upgrades.rs::update_dialogue_text and selected with keys 1-5 / Esc.
+    // Panel is tall enough for the title + meta + up to 6 option lines.
     let dlg_panel = {
-        let (w, h) = (1100u32, 620u32);
+        let (w, h) = (1100u32, 780u32);
         let mut img = image::RgbaImage::new(w, h);
         for py in 0..h {
             for px in 0..w {
@@ -1053,7 +1054,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     };
     let mut dlg_title = GameObject::build("upgrade_dialogue_title")
         .size(1000.0, 80.0)
-        .position(VW * 0.5 - 500.0, VH * 0.36)
+        .position(VW * 0.5 - 500.0, VH * 0.5 - 320.0)
         .tag("hud")
         .build(ctx);
     dlg_title.visible = false;
@@ -1061,15 +1062,15 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     dlg_title.layer = 10_001;
     let mut dlg_meta = GameObject::build("upgrade_dialogue_meta")
         .size(1000.0, 70.0)
-        .position(VW * 0.5 - 500.0, VH * 0.43)
+        .position(VW * 0.5 - 500.0, VH * 0.5 - 255.0)
         .tag("hud")
         .build(ctx);
     dlg_meta.visible = false;
     dlg_meta.ignore_zoom = true;
     dlg_meta.layer = 10_001;
     let mut dlg_opts = Vec::new();
-    for i in 0..5 {
-        let y = VH * 0.50 + i as f32 * 82.0;
+    for i in 0..6 {
+        let y = VH * 0.5 - 187.0 + i as f32 * 84.0;
         let mut o = GameObject::build(format!("upgrade_opt_{i}"))
             .size(1000.0, 72.0)
             .position(VW * 0.5 - 500.0, y)

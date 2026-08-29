@@ -21,7 +21,7 @@ use crate::achievements::TOTAL_COINS_COLLECTED_VAR;
 use crate::menu::{
     build_tutorial_scene, build_menu_scene, build_gameover_oxygen_scene, build_gameover_scene,
     build_gameover_sun_scene, build_menu_settings_scene, build_achievements_scene,
-    build_stats_scene, build_daily_reward_scene,
+    build_stats_scene, build_daily_reward_scene, build_profile_scene,
 };
 use crate::scenes::game::build_game_scene;
 
@@ -153,6 +153,10 @@ pub struct AggregateReport {
 /// a whole run too late — which is exactly how the first version of the
 /// difficulty sampler silently reported an empty schedule at every minute.
 fn build_canvas(ctx: &mut prism::Context, start_minute: f32) -> Canvas {
+    // Point saves at a temp dir so headless runs (which award meta / write
+    // profiles) never clobber the real save slots.
+    let tmp = std::env::temp_dir().join("ball_swing_headless_saves");
+    crate::profile::set_saves_dir(tmp.to_str().unwrap_or("saves"));
     let mut canvas = Canvas::new(ctx, CanvasMode::Landscape);
     if start_minute > 0.0 {
         canvas.set_var(
@@ -170,6 +174,8 @@ fn build_canvas(ctx: &mut prism::Context, start_minute: f32) -> Canvas {
     canvas.add_scene(build_achievements_scene(ctx));
     canvas.add_scene(build_stats_scene(ctx));
     canvas.add_scene(build_daily_reward_scene(ctx));
+    canvas.add_scene(build_profile_scene(ctx));
+    crate::scenes::game::events::register_mouse_handlers(&mut canvas);
     canvas.load_scene("game");
     canvas
 }

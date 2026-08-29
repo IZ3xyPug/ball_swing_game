@@ -1,6 +1,6 @@
 pub mod helpers;
 mod bootstrap;
-mod events;
+pub mod events;
 mod physics;
 mod spawning;
 mod culling;

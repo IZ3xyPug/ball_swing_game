@@ -1111,6 +1111,7 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Award meta currency for the permanent-roguelike upgrade pool.
     crate::profile::award_meta_currency(META_BOSS_REWARD);
+    crate::profile::record_boss_defeated();
     // Direct defeat signal. `boss_mode_cleared` now means "no fights left this
     // run", which is only true of the last one, so it is the wrong thing for a
     // per-fight check to read.

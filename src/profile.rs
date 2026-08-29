@@ -14,6 +14,21 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// How many profile slots are available.
 pub const SLOT_COUNT: usize = 4;
 
+/// Directory saves are read from / written to. Default "saves" (relative to the
+/// process CWD). Redirected in the headless driver so automated runs never
+/// clobber the real save slots.
+static SAVES_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Override the saves directory (e.g. a temp dir for headless runs). Only the
+/// first call wins.
+pub fn set_saves_dir(dir: &str) {
+    let _ = SAVES_DIR.set(PathBuf::from(dir));
+}
+
+fn saves_dir() -> &'static PathBuf {
+    SAVES_DIR.get_or_init(|| PathBuf::from("saves"))
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PlayerProfile {
     /// Display name for the slot.
@@ -38,11 +53,27 @@ pub struct PlayerProfile {
     pub cosmetic_rope: u32,
     pub cosmetic_bg: u32,
     pub cosmetic_trail: u32,
+    /// Lifetime stats, tracked per profile for the Stats screen.
+    pub best_distance: u32,
+    pub total_coins: u64,
+    pub deaths: u32,
+    pub bosses_defeated: u32,
+    pub runs_played: u32,
+    pub hooks_grabbed: u64,
+    pub powerups_collected: u32,
+    pub time_played_seconds: u64,
+    /// Per-mode best distance (px) and run counts, for mode-specific stats.
+    pub best_distance_casual: u32,
+    pub best_distance_normal: u32,
+    pub best_distance_bossrush: u32,
+    pub runs_casual: u32,
+    pub runs_normal: u32,
+    pub runs_bossrush: u32,
 }
 
 impl PlayerProfile {
     fn path(idx: usize) -> PathBuf {
-        PathBuf::from(format!("saves/profile_{idx}.txt"))
+        saves_dir().join(format!("profile_{idx}.txt"))
     }
 
     fn load(idx: usize) -> Self {
@@ -84,6 +115,20 @@ impl PlayerProfile {
                         "cosmetic_rope" => p.cosmetic_rope = v.parse().unwrap_or(0),
                         "cosmetic_bg" => p.cosmetic_bg = v.parse().unwrap_or(0),
                         "cosmetic_trail" => p.cosmetic_trail = v.parse().unwrap_or(0),
+                        "best_distance" => p.best_distance = v.parse().unwrap_or(0),
+                        "total_coins" => p.total_coins = v.parse().unwrap_or(0),
+                        "deaths" => p.deaths = v.parse().unwrap_or(0),
+                        "bosses_defeated" => p.bosses_defeated = v.parse().unwrap_or(0),
+                        "runs_played" => p.runs_played = v.parse().unwrap_or(0),
+                        "hooks_grabbed" => p.hooks_grabbed = v.parse().unwrap_or(0),
+                        "powerups_collected" => p.powerups_collected = v.parse().unwrap_or(0),
+                        "time_played_seconds" => p.time_played_seconds = v.parse().unwrap_or(0),
+                        "best_distance_casual" => p.best_distance_casual = v.parse().unwrap_or(0),
+                        "best_distance_normal" => p.best_distance_normal = v.parse().unwrap_or(0),
+                        "best_distance_bossrush" => p.best_distance_bossrush = v.parse().unwrap_or(0),
+                        "runs_casual" => p.runs_casual = v.parse().unwrap_or(0),
+                        "runs_normal" => p.runs_normal = v.parse().unwrap_or(0),
+                        "runs_bossrush" => p.runs_bossrush = v.parse().unwrap_or(0),
                         _ => {}
                     }
                 }
@@ -100,12 +145,16 @@ impl PlayerProfile {
             }
         }
         let mut body = format!(
-            "# FlowMake ball_swing profile slot {}\nname={}\ntutorial_done={}\nmeta_currency={}\npremium_currency={}\npermanent_extra_hearts={}\nachievements={}\ncosmetic_char={}\ncosmetic_rope={}\ncosmetic_bg={}\ncosmetic_trail={}\n",
+            "# FlowMake ball_swing profile slot {}\nname={}\ntutorial_done={}\nmeta_currency={}\npremium_currency={}\npermanent_extra_hearts={}\nachievements={}\ncosmetic_char={}\ncosmetic_rope={}\ncosmetic_bg={}\ncosmetic_trail={}\nbest_distance={}\ntotal_coins={}\ndeaths={}\nbosses_defeated={}\nruns_played={}\nhooks_grabbed={}\npowerups_collected={}\ntime_played_seconds={}\nbest_distance_casual={}\nbest_distance_normal={}\nbest_distance_bossrush={}\nruns_casual={}\nruns_normal={}\nruns_bossrush={}\n",
             idx, self.name,
             if self.tutorial_done { "1" } else { "0" },
             self.meta_currency, self.premium_currency, self.permanent_extra_hearts,
             self.achievements.join(","),
             self.cosmetic_char, self.cosmetic_rope, self.cosmetic_bg, self.cosmetic_trail,
+            self.best_distance, self.total_coins, self.deaths, self.bosses_defeated,
+            self.runs_played, self.hooks_grabbed, self.powerups_collected, self.time_played_seconds,
+            self.best_distance_casual, self.best_distance_normal, self.best_distance_bossrush,
+            self.runs_casual, self.runs_normal, self.runs_bossrush,
         );
         // Written in table order, not insertion order, so the file is stable.
         for u in PERM_UPGRADES {
@@ -163,11 +212,59 @@ pub fn slot_exists(idx: usize) -> bool {
     PlayerProfile::path(idx).exists()
 }
 
+/// Delete a profile slot: remove its save file and, if it was the active slot,
+/// reset the in-memory active profile so the next run starts fresh. Returns true
+/// if a save file was actually removed.
+pub fn delete_profile(idx: usize) -> bool {
+    let idx = idx.min(SLOT_COUNT - 1);
+    let path = PlayerProfile::path(idx);
+    let existed = path.exists();
+    let _ = std::fs::remove_file(&path);
+    if active_index() == idx {
+        *profile().lock().unwrap() = PlayerProfile::default();
+    }
+    existed
+}
+
 /// Persist the active profile to its slot.
 pub fn save_profile() {
     let idx = active_index();
     let g = profile();
     g.lock().unwrap().save(idx);
+}
+
+/// Record a finished run's lifetime stats on the active profile and persist.
+/// `mode_idx` is the GameMode::index() of the run (0 casual, 1 normal, 2 boss rush).
+pub fn record_run(mode_idx: i32, distance_px: f32, coins_on_hand: u64, seconds: u64) {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    let d = distance_px.max(0.0) as u32;
+    if d > p.best_distance { p.best_distance = d; }
+    match mode_idx {
+        0 => { if d > p.best_distance_casual { p.best_distance_casual = d; } p.runs_casual += 1; }
+        2 => { if d > p.best_distance_bossrush { p.best_distance_bossrush = d; } p.runs_bossrush += 1; }
+        _ => { if d > p.best_distance_normal { p.best_distance_normal = d; } p.runs_normal += 1; }
+    }
+    p.total_coins = p.total_coins.saturating_add(coins_on_hand);
+    p.runs_played += 1;
+    p.time_played_seconds = p.time_played_seconds.saturating_add(seconds);
+    p.save(active_index());
+}
+
+/// Increment the active profile's death counter.
+pub fn record_death() {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    p.deaths += 1;
+    p.save(active_index());
+}
+
+/// Increment the active profile's boss-defeated counter.
+pub fn record_boss_defeated() {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    p.bosses_defeated += 1;
+    p.save(active_index());
 }
 
 // ── Meta / upgrades (operate on the active profile) ─────────────────────────
@@ -180,28 +277,6 @@ pub fn award_meta_currency(amount: u64) {
         p.meta_currency = p.meta_currency.saturating_add(amount);
     }
     g.lock().unwrap().save(active_index());
-}
-
-/// Current permanent-extra-heart price in meta currency (exponential).
-pub fn permanent_heart_cost(owned: u32) -> u64 {
-    (crate::constants::UPGRADE_PERM_HEART_BASE as f64
-        * (crate::constants::UPGRADE_PERM_HEART_GROWTH as f64).powi(owned as i32))
-        .round() as u64
-}
-
-/// Attempt to buy one permanent extra heart with meta currency. Returns true on
-/// success (deducts, increments owned, persists).
-pub fn buy_permanent_heart() -> bool {
-    let g = profile();
-    let mut p = g.lock().unwrap();
-    let cost = permanent_heart_cost(p.permanent_extra_hearts);
-    if p.meta_currency < cost {
-        return false;
-    }
-    p.meta_currency -= cost;
-    p.permanent_extra_hearts += 1;
-    p.save(active_index());
-    true
 }
 
 // ── Achievement helpers ───────────────────────────────────────────────────────
