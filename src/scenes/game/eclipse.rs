@@ -88,6 +88,17 @@ pub fn tick_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
          s.dead, s.boss_index, s.eclipse_active)
     };
 
+    // Boss Rush is a timed gauntlet of back-to-back fights: the next boss is
+    // always within BOSS_ECLIPSE_RANGE, so the eclipse window would never close
+    // and its lighting would run constantly (the blackhole-portal lag). The
+    // eclipse build-up belongs to Normal pacing, not Boss Rush.
+    if matches!(mode, crate::mode::GameMode::BossRush) {
+        if was_active {
+            end_eclipse(c, st);
+        }
+        return;
+    }
+
     // How far to the next fight. `None` means this mode/run has none left, so
     // there is nothing to build up to.
     let to_threshold = crate::mode::boss_trigger_distance(mode, boss_index)
@@ -248,7 +259,11 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let _ = st;
 }
 
-fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+/// End the eclipse and restore full lighting. Public so the death flow can
+/// force-clean the eclipse (it normally ends via `tick_eclipse`, but that isn't
+/// reached once the player is dead — which left the eclipse lights running into
+/// a boss-rush restart and caused the blackhole-portal lag).
+pub fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let mut s = st.lock().unwrap();
         s.eclipse_active = false;

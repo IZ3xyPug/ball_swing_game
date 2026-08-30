@@ -228,6 +228,11 @@ fn clear_pause_state(c: &mut Canvas) {
 /// so that resume returns to the stasis rather than straight to gameplay.
 fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
     c.set_var("pause_came_from_stasis", from_stasis);
+    // Reset any leftover settings state so the main pause buttons are always
+    // hit-testable when the menu first opens (a stale `settings_open` would
+    // route clicks to the settings-slider branch and swallow them).
+    c.set_var("settings_open", false);
+    c.set_var("settings_dragging", -1i32);
     c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
     c.remove_emitter(PLAYER_TRAIL_MID_NAME);
     if let Some(obj) = c.get_game_object_mut("player") {
@@ -1423,17 +1428,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 return;
                             }
 
-                            // Pause/settings UI is ignore_zoom, so it renders at fixed
-                            // virtual positions (VW/VH) regardless of camera zoom. Input
-                            // `pos` from on_mouse_move is already virtual, so hit-test it
-                            // directly instead of scaling by the camera zoom.
+                            // Pause/settings UI is ignore_zoom: its offset stays at the
+                            // object's virtual position and is rendered with base_scale
+                            // (scale/zoom). Input `pos` is virtual (= obj.position/zoom),
+                            // so multiply by zoom to recover the object's position.
+                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
 
                             // If dragging a settings slider, update its position/value.
                             let dragging = c.get_i32("settings_dragging");
                             if dragging >= 0 && c.get_bool("settings_open") {
                                 let idx = dragging as usize;
                                 if idx < 3 {
-                                    let vol = ((pos.0 - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                    let vol = ((pos.0 * zoom - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
                                     set_volume_value(c, SLIDER_VARS[idx], vol);
                                     let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
                                     let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
@@ -1448,8 +1454,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 return;
                             }
 
-                            let ux = pos.0;
-                            let uy = pos.1;
+                            let ux = pos.0 * zoom;
+                            let uy = pos.1 * zoom;
                             let bx = (VW - 700.0) / 2.0;
 
                             let over_resume = ux >= bx && ux <= bx + 700.0 && uy >= 780.0 && uy <= 950.0;
@@ -1501,11 +1507,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             return;
                         }
 
-                        // Pause/settings UI is ignore_zoom, so it renders at fixed
-                        // virtual positions (0..VW, 0..VH) regardless of camera zoom.
-                        // Input `pos` is already virtual, so hit-test it directly.
-                        let ux = pos.0;
-                        let uy = pos.1;
+                        // Pause/settings UI is ignore_zoom: its offset stays at the
+                        // object's virtual position and is rendered with base_scale
+                        // (scale/zoom). Input `pos` is virtual (= obj.position/zoom),
+                        // so multiply by zoom to recover the object's position.
+                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
+                        let ux = pos.0 * zoom;
+                        let uy = pos.1 * zoom;
 
                         // If settings panel is open, check for slider track hits first.
                         if c.get_bool("settings_open") {
@@ -2417,6 +2425,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         crate::profile::record_run(mode_idx, run_distance, run_coins, run_seconds);
                         // Run is already recorded, so no extra run coins/distance.
                         crate::achievements::check_achievements(c, 0, 0.0);
+                        // Force-clean the solar eclipse: `tick_eclipse` is not
+                        // reached once dead, so its lights/post-override would
+                        // leak into the next run (boss-rush restart → acting as
+                        // if still in an eclipse, with lag at the blackhole).
+                        super::eclipse::end_eclipse(c, &st);
                         // Boss darkness must not carry into the game-over menu.
                         if c.has_lighting() {
                             c.set_ambient(Color(255, 255, 255, 255), 1.0);
