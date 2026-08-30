@@ -52,7 +52,13 @@ fn spawn_upgrade_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         && !s.upgrade_free.is_empty()
         && s.upgrade_rightmost < s.px + GEN_AHEAD
     {
-        let gap = lcg_range(&mut s.seed, UPGRADE_GAP_MIN, UPGRADE_GAP_MAX);
+        // Boss Rush links are short, so use a far smaller gap so an upgrade
+        // node actually appears between back-to-back fights.
+        let gap = if matches!(crate::mode::current_mode(c), crate::mode::GameMode::BossRush) {
+            lcg_range(&mut s.seed, BOSS_RUSH_UPGRADE_GAP_MIN, BOSS_RUSH_UPGRADE_GAP_MAX)
+        } else {
+            lcg_range(&mut s.seed, UPGRADE_GAP_MIN, UPGRADE_GAP_MAX)
+        };
         let x = s.upgrade_rightmost + gap;
         let y = lcg_range(&mut s.seed, HOOK_Y_MIN, HOOK_Y_MAX);
         let Some(id) = s.upgrade_free.pop() else { break; };

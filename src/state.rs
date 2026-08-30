@@ -369,6 +369,8 @@ pub struct State {
     pub cannon_fast_travel_grace: u32,
     // ── Boss fight ────────────────────────────────────────────────────────────
     pub boss_active: bool,
+    /// Which boss the current (or next) fight is; selected from `boss_index`.
+    pub boss_kind: crate::constants::BossKind,
     pub boss_entry_ticks: u32,      // counts up after crossing threshold
     pub boss_spawned: bool,         // body object made visible
     pub boss_cleared: bool,         // arena cleared on entry (one-shot)

@@ -211,6 +211,7 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         place_arena(c, index);
         let mut s = st.lock().unwrap();
         s.boss_active = true;
+        s.boss_kind = crate::constants::boss_kind_for_index(index);
         s.boss_cleared = false;
         s.boss_entry_ticks = 0;
         s.boss_phase = 0.0;
@@ -1109,9 +1110,14 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         generator_ids = s.boss_generators.clone();
     }
 
-    // Award meta currency for the permanent-roguelike upgrade pool.
+    // Award meta currency for the permanent-roguelike upgrade pool, and coins
+    // (on-hand) so a boss kill funds an in-run upgrade in the next link section.
     crate::profile::award_meta_currency(META_BOSS_REWARD);
     crate::profile::record_boss_defeated();
+    {
+        let mut s = st.lock().unwrap();
+        s.coin_count = s.coin_count.saturating_add(BOSS_COIN_REWARD);
+    }
     // Direct defeat signal. `boss_mode_cleared` now means "no fights left this
     // run", which is only true of the last one, so it is the wrong thing for a
     // per-fight check to read.
@@ -1137,11 +1143,12 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Drop the player into the victory stasis orbit, then set the congrats text.
     enter_boss_stasis(c, st);
+    let boss_name = st.lock().unwrap().boss_kind.name();
     if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
         let scale = c.virtual_scale();
         if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
             obj.set_drawable(Box::new(crate::objects::ui_text_spec(
-                &format!("CONGRATULATIONS! You defeated {BOSS_NAME}!  +{META_BOSS_REWARD} META"),
+                &format!("CONGRATULATIONS! You defeated {boss_name}!  +{META_BOSS_REWARD} META"),
                 &font,
                 46.0 * scale,
                 Color(255, 230, 140, 255),
@@ -1199,16 +1206,20 @@ fn complete_boss_finish(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.gwell_rightmost = s.gwell_rightmost.min(backfill_x);
         s.turret_rightmost = s.turret_rightmost.min(backfill_x);
         s.rocket_pad_rightmost = s.rocket_pad_rightmost.min(backfill_x);
-        if s.pending.is_empty() {
-            let mut seed = s.seed;
-            let mut gen_head_x = s.gen_head_x.min(backfill_x);
-            let mut gen_head_y = s.gen_head_y;
-            let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
-            s.seed = seed;
-            s.gen_head_x = gen_head_x;
-            s.gen_head_y = gen_head_y;
-            s.pending.extend(batch);
-        }
+        s.upgrade_rightmost = s.upgrade_rightmost.min(backfill_x);
+        // ALWAYS rebuild the pending hook queue from the backfilled position.
+        // Leftover pre-arena hooks (when `pending` wasn't empty) sit at the
+        // arena's stretch of X, which left a barren link section after the boss
+        // that the player couldn't swing through until they died once.
+        s.pending.clear();
+        let mut seed = s.seed;
+        let mut gen_head_x = s.gen_head_x.min(backfill_x);
+        let mut gen_head_y = s.gen_head_y;
+        let batch = gen_hook_batch(&mut seed, backfill_x, &mut gen_head_x, &mut gen_head_y, s.distance);
+        s.seed = seed;
+        s.gen_head_x = gen_head_x;
+        s.gen_head_y = gen_head_y;
+        s.pending.extend(batch);
     }
     if let Some(obj) = c.get_game_object_mut("boss_hp_bar") {
         obj.visible = false;
@@ -1248,7 +1259,18 @@ fn tick_boss_appearance(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Spawn phase starts from the top of the lissajous sweep.
     s.boss_phase = std::f32::consts::FRAC_PI_2;
+    let boss_name = s.boss_kind.name();
     drop(s);
+
+    // Show this boss's name on the banner (set once, at spawn).
+    if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+        let sc = c.virtual_scale();
+        if let Some(obj) = c.get_game_object_mut("boss_name_text") {
+            obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                boss_name, &font, 42.0 * sc, Color(200, 60, 220, 255), 1000.0 * sc,
+            )));
+        }
+    }
 
     // Place boss at its initial lissajous position (top-center).
     let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;

@@ -641,6 +641,56 @@ pub const C_BOSS_HP_FILL:        (u8,u8,u8) = (220, 40,  40);  // red fill
 pub const C_BOSS_HP_BG:          (u8,u8,u8) = (40,  10,  10);  // dark bg
 /// Ominous name for the first boss (fits the sun/devourer theme).
 pub const BOSS_NAME: &str = "THE SUN DEVOURER";
+
+/// Which boss is being fought. The 0-based `boss_index` selects it, so the
+/// schedule drives the roster. Seven slots; the existing barrier + generators
+/// fight is the finale (slot 7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BossKind {
+    Colossus,
+    Conductor,
+    TetherEater,
+    FlareTitan,
+    Mirror,
+    Serpent,
+    SunDevourer,
+}
+
+impl BossKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            BossKind::Colossus   => "THE COLOSSUS",
+            BossKind::Conductor  => "THE CONDUCTOR",
+            BossKind::TetherEater => "THE TETHER EATER",
+            BossKind::FlareTitan => "THE FLARE TITAN",
+            BossKind::Mirror     => "THE MIRROR",
+            BossKind::Serpent    => "THE SERPENT",
+            BossKind::SunDevourer => "THE SUN DEVOURER",
+        }
+    }
+
+    /// Whether this boss is a multi-part fight (needs the BossPart model).
+    pub fn is_multi_part(self) -> bool {
+        matches!(self, BossKind::Colossus | BossKind::Serpent)
+    }
+}
+
+/// Select the boss for a 0-based roster slot. Order follows the "Boss Roster &
+/// Run Structure" spec: the Colossus first (teaches multi-part + shielding,
+/// which three later fights reuse), the Serpent late (the mobility test), the
+/// Sun Devourer finale last. Any out-of-range index falls back to the existing
+/// finale so an old save / debug warp still fights something.
+pub fn boss_kind_for_index(index: u32) -> BossKind {
+    match index {
+        0 => BossKind::Colossus,
+        1 => BossKind::Conductor,
+        2 => BossKind::TetherEater,
+        3 => BossKind::FlareTitan,
+        4 => BossKind::Mirror,
+        5 => BossKind::Serpent,
+        _ => BossKind::SunDevourer,
+    }
+}
 /// Lower bound on camera zoom while the boss fight is active. The Dune-style
 /// height zoom would otherwise pull the camera way out on the tall arena; this
 /// keeps the boss readable (less zoomed out).
@@ -1154,6 +1204,11 @@ pub const UPGRADE_POOL_SIZE: usize = 12;
 pub const UPGRADE_HOLD_MAX_TICKS: u32 = 480;
 pub const UPGRADE_GAP_MIN: f32 = 30000.0;
 pub const UPGRADE_GAP_MAX: f32 = 55000.0;
+/// Boss Rush link sections are only ~BOSS_RUSH_LINK_DISTANCE long, so the
+/// normal 30k–55k upgrade gap would skip them entirely. Use a short gap so an
+/// upgrade node appears in each link between fights.
+pub const BOSS_RUSH_UPGRADE_GAP_MIN: f32 = 2500.0;
+pub const BOSS_RUSH_UPGRADE_GAP_MAX: f32 = 5000.0;
 pub const UPGRADE_R: f32 = 96.0;
 pub const UPGRADE_SPAWN_BUDGET_PER_TICK: usize = 1;
 /// Run-persisting upgrades: cheap first buy, escalating per purchase this run.
@@ -1189,6 +1244,9 @@ pub const META_EXTRA_HEARTS_VAR: &str = "meta_extra_hearts";
 /// Meta currency awarded (and shown) when the boss is defeated, for permanent
 /// roguelike upgrades.
 pub const META_BOSS_REWARD: u64 = 50;
+/// Coins awarded (on-hand) when the boss is defeated, enough to fund an in-run
+/// upgrade in the link section after the fight.
+pub const BOSS_COIN_REWARD: u32 = 150;
 
 // Black hole parameters
 pub const SPACE_BLACKHOLE_GAP_MIN:       f32 = 5000.0;

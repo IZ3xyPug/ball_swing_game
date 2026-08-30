@@ -914,6 +914,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 cannon_ft_prompt:  false, cannon_ft_active: false,
                 cannon_fast_travel_grace: 0,
                 boss_active:       false,
+                boss_kind:         crate::constants::boss_kind_for_index(0),
                 boss_entry_ticks:  0, boss_spawned:      false,
                 boss_cleared:      false, boss_hp:           crate::constants::BOSS_MAX_HP,
                 boss_approach_nodes_spawned: false,
