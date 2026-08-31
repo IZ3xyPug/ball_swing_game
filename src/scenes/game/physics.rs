@@ -271,33 +271,44 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
 
     if !s.space_launch_active {
-        // Skip speed cap on the frame immediately after a pad bounce so the full
-        // bounce velocity is preserved. The flag is set by tick_pad_bounce and cleared here.
-        let post_bounce = matches!(c.get_var("post_bounce"), Some(Value::Bool(true)));
-        let special_hook_ticks = match c.get_var("special_hook_boost_ticks") {
-            Some(Value::I32(v)) => v.max(0),
+        // A boss strike knocks the player back hard; bypass the cap for a few
+        // frames so the throw actually reads and risks, rather than being
+        // clamped to normal momentum and absorbed.
+        let boss_knockback = match c.get_var("boss_knockback_ticks") {
+            Some(Value::I32(n)) => n.max(0),
             _ => 0,
         };
-        if post_bounce {
-            c.set_var("post_bounce", false);
-        } else if special_hook_ticks > 0 {
-            let cap = if s.in_space_mode {
-                SPACE_MOMENTUM_CAP
-            } else {
-                SPECIAL_HOOK_MOMENTUM_CAP
-            };
-            let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
-            if speed > cap {
-                s.vx = s.vx / speed * cap;
-                s.vy = s.vy / speed * cap;
-            }
-            c.set_var("special_hook_boost_ticks", special_hook_ticks - 1);
+        if boss_knockback > 0 {
+            c.set_var("boss_knockback_ticks", Value::I32(boss_knockback - 1));
         } else {
-            let cap = crate::gameplay::player_max_momentum(&s);
-            let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
-            if speed > cap {
-                s.vx = s.vx / speed * cap;
-                s.vy = s.vy / speed * cap;
+            // Skip speed cap on the frame immediately after a pad bounce so the full
+            // bounce velocity is preserved. The flag is set by tick_pad_bounce and cleared here.
+            let post_bounce = matches!(c.get_var("post_bounce"), Some(Value::Bool(true)));
+            let special_hook_ticks = match c.get_var("special_hook_boost_ticks") {
+                Some(Value::I32(v)) => v.max(0),
+                _ => 0,
+            };
+            if post_bounce {
+                c.set_var("post_bounce", false);
+            } else if special_hook_ticks > 0 {
+                let cap = if s.in_space_mode {
+                    SPACE_MOMENTUM_CAP
+                } else {
+                    SPECIAL_HOOK_MOMENTUM_CAP
+                };
+                let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
+                if speed > cap {
+                    s.vx = s.vx / speed * cap;
+                    s.vy = s.vy / speed * cap;
+                }
+                c.set_var("special_hook_boost_ticks", special_hook_ticks - 1);
+            } else {
+                let cap = crate::gameplay::player_max_momentum(&s);
+                let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
+                if speed > cap {
+                    s.vx = s.vx / speed * cap;
+                    s.vy = s.vy / speed * cap;
+                }
             }
         }
     }

@@ -8,6 +8,7 @@ fn main() {
     let mut fall_test = false;
     let mut boss_warp = false;
     let mut weakpoint_check = false;
+    let mut stasis_down = false;
     let mut flare_test = false;
     let mut shelter_check = false;
     let mut start_minute: f32 = 0.0;
@@ -40,6 +41,11 @@ fn main() {
                 boss_warp = true;
                 weakpoint_check = true;
             }
+            "--boss-stasis-down" => {
+                boss_mode = true;
+                boss_warp = true;
+                stasis_down = true;
+            }
             "--at-minute" => {
                 if i + 1 < args.len() {
                     start_minute = args[i + 1].parse().unwrap_or(0.0);
@@ -56,7 +62,7 @@ fn main() {
                 fall_test = true;
             }
             "--help" | "-h" => {
-                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-weakpoint-check] [--fall-test] [--flare-test] [--flare-shelter-check] [--at-minute N]");
+                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-stasis-down] [--boss-weakpoint-check] [--fall-test] [--flare-test] [--flare-shelter-check] [--at-minute N]");
                 return;
             }
             _ => {}
@@ -64,7 +70,7 @@ fn main() {
         i += 1;
     }
 
-    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp, weakpoint_check, flare_test, shelter_check, start_minute);
+    let agg = main::headless::run(episodes, frames, boss_mode, fall_test, boss_warp, weakpoint_check, stasis_down, flare_test, shelter_check, start_minute);
 
     println!("\n=== HEADLESS SUMMARY ===");
     println!(

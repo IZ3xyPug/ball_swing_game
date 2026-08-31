@@ -141,7 +141,170 @@ pub fn solid(r: u8, g: u8, b: u8, a: u8) -> image::RgbaImage {
 /// Turret composite image: circle body at center with a rectangular barrel
 /// extending to the right.  The object is square so the rotation pivot is
 /// the body's centre.
-pub fn turret_img(
+
+/// Translucent danger zone: a soft filled disc (alpha ~64) with a bright ring
+/// (alpha 255) so it reads as "this area will be hit" during a boss telegraph.
+/// `radius` is in pixels (the full diameter is 2×radius).
+pub fn danger_zone(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+    let d = (radius * 2).max(2) as u32;
+    let mut img = image::RgbaImage::new(d, d);
+    let c = radius as f32;
+    let ring_w = 6.0f32;
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 - c + 0.5;
+            let dy = py as f32 - c + 0.5;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist <= c {
+                let a = if dist >= c - ring_w { 255 } else { 64 };
+                img.put_pixel(px, py, image::Rgba([r, g, b, a]));
+            }
+        }
+    }
+    img
+}
+
+// ── Composite body-part silhouette helpers ────────────────────────────────────
+// The Colossus parts are assembled out of primitives (circles + rounded rects)
+// into one rasterised silhouette, so a hand reads as a hand, a torso as a torso
+// and a head as a head — not a slightly-large circle. Built once at bootstrap.
+
+/// Fill a disc of radius `r` centred at `(cx, cy)`.
+pub fn fill_circle(img: &mut image::RgbaImage, cx: f32, cy: f32, r: f32, c: [u8; 4]) {
+    let (w, h) = img.dimensions();
+    let x0 = ((cx - r).max(0.0)) as i32;
+    let x1 = ((cx + r).min(w as f32)) as i32;
+    let y0 = ((cy - r).max(0.0)) as i32;
+    let y1 = ((cy + r).min(h as f32)) as i32;
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let dx = px as f32 + 0.5 - cx;
+            let dy = py as f32 + 0.5 - cy;
+            if dx * dx + dy * dy <= r * r {
+                img.put_pixel(px as u32, py as u32, image::Rgba(c));
+            }
+        }
+    }
+}
+
+/// Fill an axis-aligned rounded rectangle (`x..=x+w`, `y..=y+h`, corner radius `r`).
+pub fn fill_rounded_rect(
+    img: &mut image::RgbaImage,
+    x: f32, y: f32, w: f32, h: f32, r: f32, c: [u8; 4],
+) {
+    let (iw, ih) = img.dimensions();
+    let x1 = x + w;
+    let y1 = y + h;
+    let rr = r.min(w * 0.5).min(h * 0.5);
+    let px0 = x.max(0.0) as i32;
+    let px1 = (x1.min(iw as f32)) as i32;
+    let py0 = y.max(0.0) as i32;
+    let py1 = (y1.min(ih as f32)) as i32;
+    for py in py0..py1 {
+        for px in px0..px1 {
+            let cx = px as f32 + 0.5;
+            let cy = py as f32 + 0.5;
+            if cx < x || cx > x1 || cy < y || cy > y1 { continue; }
+            let dx = if cx < x + rr { x + rr - cx } else if cx > x1 - rr { cx - (x1 - rr) } else { 0.0 };
+            let dy = if cy < y + rr { y + rr - cy } else if cy > y1 - rr { cy - (y1 - rr) } else { 0.0 };
+            if dx > 0.0 && dy > 0.0 {
+                if dx * dx + dy * dy > rr * rr { continue; }
+            }
+            img.put_pixel(px as u32, py as u32, image::Rgba(c));
+        }
+    }
+}
+
+/// A large boss hand: a broad palm with four stubby fingers hanging below and a
+/// thumb on the side. `size` is the square output edge; `rgb` is the hand color.
+pub fn colossus_hand(size: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
+    let s = size as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let c = [rgb.0, rgb.1, rgb.2, 255];
+    let dark = [rgb.0.saturating_sub(30), rgb.1.saturating_sub(30), rgb.2.saturating_sub(30), 255];
+    // Palm: wide rounded blob in the upper-middle.
+    let palm_w = s * 0.58;
+    let palm_h = s * 0.42;
+    let palm_x = (s - palm_w) * 0.5;
+    let palm_y = s * 0.14;
+    fill_rounded_rect(&mut img, palm_x, palm_y, palm_w, palm_h, s * 0.20, c);
+    // Four fingers hanging from the palm.
+    let finger_w = s * 0.10;
+    let finger_h = s * 0.34;
+    let gap = (palm_w - finger_w * 4.0) / 5.0;
+    for f in 0..4 {
+        let fx = palm_x + gap + (f as f32) * (finger_w + gap);
+        let fy = palm_y + palm_h - s * 0.06;
+        fill_rounded_rect(&mut img, fx, fy, finger_w, finger_h, finger_w * 0.5, dark);
+    }
+    // Thumb on the inner side.
+    fill_rounded_rect(&mut img, palm_x - s * 0.10, palm_y + s * 0.16, s * 0.14, s * 0.26, s * 0.07, dark);
+    img
+}
+
+/// A large boss torso: broad shoulders, a chest, a narrower waist and a glowing
+/// core. `size` is the square output edge; `rgb` is the torso color.
+pub fn colossus_torso(size: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
+    let s = size as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let c = [rgb.0, rgb.1, rgb.2, 255];
+    let dark = [rgb.0.saturating_sub(30), rgb.1.saturating_sub(30), rgb.2.saturating_sub(30), 255];
+    let cx = s * 0.5;
+    // Shoulders: two circles.
+    fill_circle(&mut img, cx - s * 0.24, s * 0.30, s * 0.17, dark);
+    fill_circle(&mut img, cx + s * 0.24, s * 0.30, s * 0.17, dark);
+    // Chest: wide rounded rectangle.
+    fill_rounded_rect(&mut img, s * 0.18, s * 0.20, s * 0.64, s * 0.40, s * 0.14, c);
+    // Waist: narrower, lower.
+    fill_rounded_rect(&mut img, s * 0.30, s * 0.54, s * 0.40, s * 0.26, s * 0.12, dark);
+    // Glowing core.
+    fill_circle(&mut img, cx, s * 0.40, s * 0.13, [255, 220, 120, 255]);
+    img
+}
+
+/// A large boss head: a skull with a jaw, a crest and two glowing eyes.
+/// `size` is the square output edge; `rgb` is the head color.
+pub fn colossus_head(size: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
+    let s = size as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let c = [rgb.0, rgb.1, rgb.2, 255];
+    let dark = [rgb.0.saturating_sub(26), rgb.1.saturating_sub(26), rgb.2.saturating_sub(26), 255];
+    let cx = s * 0.5;
+    // Skull dome.
+    fill_circle(&mut img, cx, s * 0.44, s * 0.30, c);
+    // Jaw: a rounded rectangle / circle below the skull.
+    fill_rounded_rect(&mut img, cx - s * 0.20, s * 0.58, s * 0.40, s * 0.20, s * 0.10, dark);
+    // Crest horns on the sides of the skull.
+    fill_rounded_rect(&mut img, cx - s * 0.40, s * 0.22, s * 0.10, s * 0.22, s * 0.05, dark);
+    fill_rounded_rect(&mut img, cx + s * 0.30, s * 0.22, s * 0.10, s * 0.22, s * 0.05, dark);
+    // Glowing eyes.
+    fill_circle(&mut img, cx - s * 0.13, s * 0.42, s * 0.045, [255, 250, 120, 255]);
+    fill_circle(&mut img, cx + s * 0.13, s * 0.42, s * 0.045, [255, 250, 120, 255]);
+    img
+}
+
+/// Gravity-well visual for the head attack: a large translucent pull zone with
+/// faint concentric rings and a bright core, so the player can see the area the
+/// head's gravity reaches. `radius` is in pixels.
+pub fn gravity_well_img(radius: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
+    let d = (radius * 2).max(2) as u32;
+    let mut img = image::RgbaImage::new(d, d);
+    let c = radius as f32;
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 - c + 0.5;
+            let dy = py as f32 - c + 0.5;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist <= c {
+                let a = if dist < c * 0.08 { 200 }
+                    else if (dist as i32 % 260) < 14 { 110 }
+                    else { 24 };
+                img.put_pixel(px, py, image::Rgba([r, g, b, a]));
+            }
+        }
+    }
+    img
+}pub fn turret_img(
     body_r: u32,
     barrel_len: u32,
     barrel_w: u32,

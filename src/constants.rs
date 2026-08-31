@@ -649,9 +649,11 @@ pub const BOSS_NAME: &str = "THE SUN DEVOURER";
 pub enum BossKind {
     Colossus,
     Conductor,
-    TetherEater,
+    /// World-flip boss (uses the space_rift gravity inversion).
+    GravityWeaver,
     FlareTitan,
-    Mirror,
+    /// Gravity-well / magnet boss that drags the player's rope.
+    Magnetar,
     Serpent,
     SunDevourer,
 }
@@ -659,13 +661,13 @@ pub enum BossKind {
 impl BossKind {
     pub fn name(self) -> &'static str {
         match self {
-            BossKind::Colossus   => "THE COLOSSUS",
-            BossKind::Conductor  => "THE CONDUCTOR",
-            BossKind::TetherEater => "THE TETHER EATER",
-            BossKind::FlareTitan => "THE FLARE TITAN",
-            BossKind::Mirror     => "THE MIRROR",
-            BossKind::Serpent    => "THE SERPENT",
-            BossKind::SunDevourer => "THE SUN DEVOURER",
+            BossKind::Colossus      => "THE COLOSSUS",
+            BossKind::Conductor     => "THE CONDUCTOR",
+            BossKind::GravityWeaver => "THE GRAVITY WEAVER",
+            BossKind::FlareTitan    => "THE FLARE TITAN",
+            BossKind::Magnetar      => "THE MAGNETAR",
+            BossKind::Serpent       => "THE SERPENT",
+            BossKind::SunDevourer   => "THE SUN DEVOURER",
         }
     }
 
@@ -676,21 +678,206 @@ impl BossKind {
 }
 
 /// Select the boss for a 0-based roster slot. Order follows the "Boss Roster &
-/// Run Structure" spec: the Colossus first (teaches multi-part + shielding,
-/// which three later fights reuse), the Serpent late (the mobility test), the
-/// Sun Devourer finale last. Any out-of-range index falls back to the existing
-/// finale so an old save / debug warp still fights something.
+/// Run Structure" spec (Colossus first, Serpent late, Sun Devourer finale), with
+/// the Gravity Weaver and the Magnetar filling the two slots whose concepts were
+/// replaced. Any out-of-range index falls back to the finale so an old save /
+/// debug warp still fights something.
 pub fn boss_kind_for_index(index: u32) -> BossKind {
     match index {
         0 => BossKind::Colossus,
         1 => BossKind::Conductor,
-        2 => BossKind::TetherEater,
+        2 => BossKind::GravityWeaver,
         3 => BossKind::FlareTitan,
-        4 => BossKind::Mirror,
+        4 => BossKind::Magnetar,
         5 => BossKind::Serpent,
         _ => BossKind::SunDevourer,
     }
 }
+
+/// One destroyable part of a multi-part boss (Colossus, Serpent). Each part has
+/// its own HP, shield state, weakpoint window and attack timer. Single-body
+/// bosses (Sun Devourer) keep the scalar `boss_hp` path and leave this empty.
+///
+/// A part is an independent body with its own small FSM
+/// (`Idle → Telegraph → Attack → Recover`) so hands can attack while the head
+/// is still idling. `target` is the relative offset (from the anchor) it lunges
+/// to on `Attack`; `home_offset` is its idle orbit offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartState {
+    Idle,
+    Telegraph,
+    Attack,
+    Recover,
+}
+
+#[derive(Clone, Debug)]
+pub struct BossPart {
+    pub id:             &'static str,
+    pub hp:             i32,
+    pub max_hp:         i32,
+    /// Whether this part currently wears a shield (not hittable). Drawn once as
+    /// the `BIT_ENERGY_DOME` effect, not per-boss.
+    pub shielded:       bool,
+    /// Whether the weakpoint is open this frame (only hittable while true).
+    pub weakpoint_open: bool,
+    /// Ticks the weakpoint stays open (a window the player can exploit).
+    pub weakpoint_window: u32,
+    /// Per-part attack timer (beats / pulses / charges).
+    pub attack_timer:   u32,
+    /// Whether the part is destroyed (removed from the fight).
+    pub alive:          bool,
+    /// Per-part FSM state (segmented / modular bosses).
+    pub state:          PartState,
+    /// Ticks spent in the current FSM state.
+    pub state_ticks:    u32,
+    /// Relative offset (from the anchor) this part lunges to during `Attack`.
+    pub target:         (f32, f32),
+    /// Current idle orbit offset (relative to the anchor), set each tick.
+    pub home_offset:    (f32, f32),
+    /// Relative offset from which the part launches its `Attack` lunge (recorded
+    /// when it leaves the Telegraph), so the lunge can travel at a capped speed.
+    pub attack_start:   (f32, f32),
+    /// World position the part's attack path starts from (recorded when it
+    /// begins a Telegraph), so the path telegraph can show the actual trajectory.
+    pub path_start:     (f32, f32),
+    /// Head gaze beam: has the beam already hit the player this attack? Reset
+    /// when the beam fires, so a traveling beam only costs one heart per sweep.
+    pub beam_hit_done:  bool,
+}
+
+impl BossPart {
+    pub fn new(id: &'static str, hp: i32) -> Self {
+        BossPart {
+            id, hp, max_hp: hp,
+            shielded: true,
+            weakpoint_open: false,
+            weakpoint_window: 0,
+            attack_timer: 0,
+            alive: true,
+            state: PartState::Idle,
+            state_ticks: 0,
+            target: (0.0, 0.0),
+            home_offset: (0.0, 0.0),
+            attack_start: (0.0, 0.0),
+            path_start: (0.0, 0.0),
+            beam_hit_done: false,
+        }
+    }
+
+    pub fn unshielded(mut self) -> Self { self.shielded = false; self }
+}
+
+/// Build the initial part list for a given boss. Single-body bosses return empty
+/// (they use the scalar `boss_hp` path). Multi-part bosses return their parts in
+/// dependency order (destroying earlier parts unshields later ones).
+pub fn boss_parts_for_kind(kind: BossKind) -> Vec<BossPart> {
+    match kind {
+        // Four bodies: two hands, torso, head — see the Colossus spec. Phase 1
+        // the hands are the live targets; the torso and head stay shielded until
+        // both hands (then the torso) are destroyed.
+        BossKind::Colossus => vec![
+            BossPart::new("hand_l", 6).unshielded(),
+            BossPart::new("hand_r", 6).unshielded(),
+            BossPart::new("torso", 10),
+            BossPart::new("head", 12),
+        ],
+        // Eight segments + an invulnerable head (the head is `boss_hp`, not a
+        // part; it is only hittable once every segment is destroyed). Segments
+        // start exposed (unshielded) so they can all be damaged.
+        BossKind::Serpent => (0..8).map(|i| BossPart::new(if i % 2 == 0 { "seg_a" } else { "seg_b" }, 3).unshielded()).collect(),
+        // The remaining single-body bosses keep the scalar boss_hp path.
+        _ => Vec::new(),
+    }
+}
+
+// ── Colossus segmented-boss FSM ──────────────────────────────────────────────
+// Each part runs its own `Idle → Telegraph → Attack → Recover` machine. The
+// cycle is deliberately slow and intentional so the telegraph is readable, and
+// there is a long idle lull between attacks so the player can navigate.
+/// Wind-up length (ticks): the danger zone is shown and the part glows/pulls
+/// back, but no hit happens. ~1.0 s at 60 fps.
+pub const COLOSSUS_TELEGRAPH_TICKS: u32 = 60;
+/// The head's gaze attack lasts this long in the Attack state (beam fire + a
+/// short hold before it recovers).
+pub const COLOSSUS_HEAD_ATTACK_TICKS: u32 = 100;
+/// Ticks a part holds at the telegraphed target after it arrives, before it
+/// starts retracting (~1 s). The first half is a non-vulnerable beat; the second
+/// half it is already vulnerable while waiting to retract.
+pub const COLOSSUS_HOLD_TICKS: u32 = 60;
+/// The torso holds at the slam point even longer, so the body stays put while
+/// the summoned meteors fire and clear the screen (~3 s).
+pub const COLOSSUS_TORSO_HOLD_TICKS: u32 = 170;
+/// Ticks after a part arrives at its target before its weakpoint opens (0.5 s).
+pub const COLOSSUS_ATTACK_VULN_DELAY: u32 = 30;
+/// Recovery length (ticks): the part retracts to its idle orbit, slowly, and is
+/// vulnerable the whole way back.
+pub const COLOSSUS_RECOVER_TICKS: u32 = 70;
+/// Base idle time before a part re-attacks. Long on purpose: this is the lull
+/// where the player navigates. A small per-part jitter is added.
+pub const COLOSSUS_IDLE_TICKS: u32 = 220;
+/// How long (ticks) a part stays vulnerable AFTER it has returned to the body,
+/// so the counter window is generous and readable (~1 s at 60 fps).
+pub const COLOSSUS_VULN_AFTER_TICKS: u32 = 60;
+/// The head's post-well vulnerability window is a couple of seconds longer
+/// (~3 s), so the player has time to counter after the gaze attack.
+pub const COLOSSUS_HEAD_VULN_AFTER: u32 = 180;
+/// How far (px) a part visibly pulls back from its target while winding up.
+pub const COLOSSUS_TELEGRAPH_PULL: f32 = 260.0;
+/// Leash radius: a part may drift this far from its home orbit to strike, but no
+/// further — the parts stay loosely tethered instead of flying off-screen. The
+/// hands swing wide on their lunges, so the leash is generous.
+pub const COLOSSUS_LEASH: f32 = 2800.0;
+/// Min ticks the pattern director waits between allowing a new part to attack,
+/// so at most one part attacks at a time, with a lull in between.
+pub const COLOSSUS_PATTERN_COOLDOWN: u32 = 160;
+/// Thickness (px) of the translucent red attack-path telegraph strip.
+pub const COLOSSUS_PATH_THICKNESS: f32 = 60.0;
+/// How much of the player's velocity (px/tick) is added to a hand's target when
+/// it begins telegraphing, so it leads the player slightly — but the path is
+/// locked at that moment (no homing).
+pub const COLOSSUS_ATTACK_LEAD: f32 = 0.35;
+/// The head's gaze beam travels along its telegraphed path over this many ticks,
+/// so the player sees the sweep coming and can be off the line when it passes.
+pub const COLOSSUS_BEAM_TICKS: u32 = 40;
+/// Radius (px) of the head's gravity well visual, and how far its pull reaches.
+pub const COLOSSUS_GRAVITY_RANGE: f32 = 6400.0;
+/// Peak pull strength of the head's gravity well. It is STRONGEST far from the
+/// head (so it drags you in from across the arena) and weakens toward the core
+/// (so you aren't flung once you're close). High enough that the outer edge
+/// really hauls you in after you're untethered, rather than letting you fall.
+pub const COLOSSUS_GRAVITY_STRENGTH: f32 = 4.0;
+/// How many ticks (1 s) the boss is invulnerable after one part is destroyed,
+/// so two parts cannot be destroyed back-to-back in the same second.
+pub const COLOSSUS_PART_INVULN_TICKS: u32 = 60;
+/// Ticks the body stays still after the torso summons its meteors, so it doesn't
+/// start moving again until they've fired and cleared the screen (~3 s).
+pub const COLOSSUS_METEOR_LOCK_TICKS: u32 = 180;
+/// Beam-explosion growth life (ticks) for each little pop at the beam's contact
+/// point.
+pub const COLOSSUS_BEAM_EXPLODE_TTL: u32 = 14;
+/// Danger-zone radii per part id (where the attack actually lands). The zone
+/// marker is drawn with exactly this radius during the telegraph. Sized to the
+/// doubled body parts.
+pub const COLOSSUS_HAND_ZONE_R:  f32 = 640.0;
+pub const COLOSSUS_TORSO_ZONE_R: f32 = 1080.0;
+pub const COLOSSUS_HEAD_ZONE_R:  f32 = 760.0;
+
+/// Visual size (px, the square the composite silhouette is rasterized into) of
+/// each Colossus part by index. The body parts are large composite shapes.
+pub fn colossus_part_size(i: u32) -> f32 {
+    match i {
+        0 | 1 => 1280.0, // hands
+        2     => 1720.0, // torso
+        _     => 1240.0, // head
+    }
+}
+
+/// Larger-than-circle hit radius (px) for a buffed hit on a Colossus part, so a
+/// hit near the composite silhouette connects rather than only at its centre.
+pub fn colossus_part_hit_r(i: u32) -> f32 {
+    colossus_part_size(i) * 0.42
+}
+
 /// Lower bound on camera zoom while the boss fight is active. The Dune-style
 /// height zoom would otherwise pull the camera way out on the tall arena; this
 /// keeps the boss readable (less zoomed out).
@@ -1247,6 +1434,27 @@ pub const META_BOSS_REWARD: u64 = 50;
 /// Coins awarded (on-hand) when the boss is defeated, enough to fund an in-run
 /// upgrade in the link section after the fight.
 pub const BOSS_COIN_REWARD: u32 = 150;
+
+// ── Flare Titan boss (reuses the solar-flare mechanic) ───────────────────────
+pub const FLARE_TITAN_TELEGRAPH_TICKS: u32 = 180;  // 3 s warning
+pub const FLARE_TITAN_ACTIVE_TICKS:    u32 = 300;  // 5 s flare
+pub const FLARE_TITAN_DAMAGE_INTERVAL: u32 = 120;  // a heart every 2 s unsheltered
+pub const FLARE_TITAN_WINDOW_TICKS:    u32 = 240;  // 4 s weakpoint window after flame
+pub const FLARE_TITAN_INTERVAL:        u32 = 600;  // 10 s between flares
+
+// ── Gravity Weaver boss (uses the space_rift gravity inversion) ──────────────
+pub const GRAVITY_WEAVER_FLIP_INTERVAL: u32 = 300;  // 5 s between world flips
+pub const GRAVITY_WEAVER_WINDOW_TICKS:  u32 = 180;  // 3 s weakpoint after a flip
+
+// ── Magnetar boss (uses the gravity-well / magnet pull) ──────────────────────
+pub const MAGNETAR_PULL_INTERVAL: u32 = 360;  // 6 s between charges
+pub const MAGNETAR_PULL_TICKS:    u32 = 180;  // 3 s of active rope pull
+pub const MAGNETAR_WINDOW_TICKS:  u32 = 180;  // 3 s weakpoint while over-charged
+
+// ── Conductor boss (rhythm / Resonance) ─────────────────────────────────────
+pub const CONDUCTOR_RESONANCE_REQUIRED: u32 = 3;  // stacks to arm the weakpoint
+pub const CONDUCTOR_RELEASE_WINDOW:     u32 = 6;  // frames a release counts as on-beat
+pub const CONDUCTOR_PHASE2_BPM:         u32 = 120; // speeds up in phase two
 
 // Black hole parameters
 pub const SPACE_BLACKHOLE_GAP_MIN:       f32 = 5000.0;

@@ -407,7 +407,7 @@ fn zone_for_distance(d: f32) -> usize {
 
 // ── Episode runner ────────────────────────────────────────────────────────────
 
-fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool, start_minute: f32) -> EpisodeReport {
+fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, stasis_down: bool, flare_test: bool, shelter_check: bool, start_minute: f32) -> EpisodeReport {
     let (mut ctx, _recv) = prism::Context::new();
     let mut canvas = build_canvas(&mut ctx, start_minute);
     let sized = SizedTree::default();
@@ -424,6 +424,16 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         // The boss battle starts when the player tethers a node. The auto-player
         // holds space continuously so it never issues a fresh grab during the
         // entry stasis — bypass the tether so the validation can proceed.
+        canvas.set_var("debug_boss_stasis_down", true);
+        // Validate the existing Sun Devourer fight specifically, not whichever
+        // boss currently occupies roster slot 0 (the new bosses land there once
+        // implemented).
+        canvas.set_var("debug_boss_kind_sundev", true);
+    }
+    if stasis_down {
+        // Start whichever boss occupies the current roster slot (e.g. the
+        // Colossus at index 0) deterministically, without forcing the Sun
+        // Devourer. Lets the harness drive the multi-part bosses.
         canvas.set_var("debug_boss_stasis_down", true);
     }
     if flare_test || shelter_check {
@@ -738,12 +748,12 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
 }
 
 /// Run several episodes (each boots a fresh canvas) and aggregate.
-pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, flare_test: bool, shelter_check: bool, start_minute: f32) -> AggregateReport {
+pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bool, weakpoint_check: bool, stasis_down: bool, flare_test: bool, shelter_check: bool, start_minute: f32) -> AggregateReport {
     let mut agg = AggregateReport::default();
     let mut episode_idx = 0u64;
     while episode_idx < episodes {
         let ep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_episode(max_frames, boss_mode, force_fall, boss_warp, weakpoint_check, flare_test, shelter_check, start_minute)
+            run_episode(max_frames, boss_mode, force_fall, boss_warp, weakpoint_check, stasis_down, flare_test, shelter_check, start_minute)
         }))
         .unwrap_or_else(|e| {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {

@@ -21,24 +21,1635 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     tick_boss_zone_entry(c, st);
     tick_boss_stasis(c, st);
-    tick_boss_appearance(c, st);
-    tick_boss_movement(c, st);
-    tick_boss_asteroid_drift(c, st);
-    tick_boss_shooting(c, st);
-    tick_boss_darkness(c, st);
-    tick_boss_weakpoints(c, st);
     tick_warp_flash(c, st);
-    tick_boss_forcefield(c, st);
-    tick_generators(c, st);
-    tick_barrier(c, st);
-    tick_desperation(c, st);
-    tick_boss_bolts(c, st);
-    tick_boss_bolt_player_collision(c, st);
-    tick_boss_player_hits_boss(c, st);
+
+    // Multi-part bosses (Colossus, Serpent) run their own part-driven loop; the
+    // single-body bosses dispatch by kind below.
+    let is_multi = { let s = st.lock().unwrap(); !s.boss_parts.is_empty() };
+    if is_multi {
+        // The Serpent is a distinct multi-part fight (head-HP win, tetherable
+        // chain); the Colossus uses the shared part loop.
+        let kind = { let s = st.lock().unwrap(); s.boss_kind };
+        if kind == crate::constants::BossKind::Serpent {
+            tick_serpent(c, st);
+        } else {
+            tick_multi_part_boss(c, st);
+        }
+    } else {
+        let kind = { let s = st.lock().unwrap(); s.boss_kind };
+        match kind {
+            crate::constants::BossKind::FlareTitan => tick_flare_titan(c, st),
+            crate::constants::BossKind::GravityWeaver => tick_gravity_weaver(c, st),
+            crate::constants::BossKind::Magnetar => tick_magnetar(c, st),
+            crate::constants::BossKind::Conductor => tick_conductor(c, st),
+            _ => {
+                tick_boss_appearance(c, st);
+                tick_boss_movement(c, st);
+                tick_boss_asteroid_drift(c, st);
+                tick_boss_shooting(c, st);
+                tick_boss_darkness(c, st);
+                tick_boss_weakpoints(c, st);
+                tick_boss_forcefield(c, st);
+                tick_generators(c, st);
+                tick_barrier(c, st);
+                tick_desperation(c, st);
+                tick_boss_bolts(c, st);
+                tick_boss_bolt_player_collision(c, st);
+                tick_boss_player_hits_boss(c, st);
+            }
+        }
+    }
+
     tick_boss_hud(c, st);
     tick_boss_indicators(c, st);
     tick_boss_lights(c, st);
     tick_buff_node_elec(c, st);
+    tick_arena_walls(c, st);
+}
+
+/// Reveal the arena's boundary walls (left/right) so the player can see the
+/// play-area limits of the fight. No floor — you can fall to your doom below.
+/// The walls extend from high above the highest possible launch up to the bottom
+/// of the visible play area, so it never looks like you can hop over them.
+fn tick_arena_walls(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let active = { let s = st.lock().unwrap(); s.boss_active && !s.dead };
+    let (x1, x2) = arena_bounds(c);
+    let top = -9000.0;
+    let bottom = 600.0;
+    let wall_h = bottom - top;
+    let cy = (top + bottom) * 0.5;
+    if active {
+        if let Some(obj) = c.get_game_object_mut("arena_wall_l") {
+            obj.size = (140.0, wall_h);
+            obj.position = (x1 - 70.0, cy - wall_h * 0.5);
+            obj.visible = true;
+        }
+        if let Some(obj) = c.get_game_object_mut("arena_wall_r") {
+            obj.size = (140.0, wall_h);
+            obj.position = (x2 - 70.0, cy - wall_h * 0.5);
+            obj.visible = true;
+        }
+    } else {
+        for name in ["arena_wall_l", "arena_wall_r"] {
+            if let Some(obj) = c.get_game_object_mut(name) {
+                obj.visible = false;
+            }
+        }
+    }
+}
+
+/// Total remaining HP across all multi-part parts (drives the HUD + win check).
+pub fn boss_total_hp(s: &State) -> i32 {
+    s.boss_parts.iter().filter(|p| p.alive).map(|p| p.hp.max(0)).sum()
+}
+
+/// Boss-like layout offset for a part by index (Colossus), forming a distinct
+/// body pose: the two hands hang at the sides, the torso is the centre, the head
+/// sits above. Parts are near-still at idle (a slow, subtle, per-part breathing
+/// bob) rather than orbiting, so the body reads as a creature with a lull — and
+/// the parts never move in lockstep because each bob has its own phase. When
+/// `bob` is false (the body is frozen during an attack) the part sits exactly at
+/// its base pose.
+fn boss_part_offset(i: u32, phase: f32, bob: bool) -> (f32, f32) {
+    let base = match i {
+        0 => (-1120.0,  280.0), // hand_l (hangs at the left)
+        1 => ( 1120.0,  280.0), // hand_r (hangs at the right)
+        2 => (   0.0,    0.0),  // torso (centre)
+        _ => (   0.0, -1120.0), // head (above)
+    };
+    if !bob { return base; }
+    // Slow, independent breathing: each part bobs on its own phase, so no two
+    // parts move in unison, and the amplitude is small (near-still).
+    let bob = (phase * 0.55 + i as f32 * 1.7).sin() * 24.0
+            + (phase * 0.30 + i as f32 * 0.9).cos() * 14.0;
+    (base.0 + bob * 0.5, base.1 + bob)
+}
+
+/// Serpent chain offset: the head leads the body and each segment trails behind
+/// it on a travelling sine wave. The amplitude grows toward the tail and the wave
+/// phase lags per segment, so the whole body undulates end-to-end like a serpent
+/// rather than sitting in a fixed diagonal. Segment 0 is nearest the head.
+fn serpent_part_offset(i: f32, phase: f32) -> (f32, f32) {
+    // Trail horizontally behind the head with a slight downward cascade.
+    let x = -(i + 1.0) * 220.0;
+    let base_y = i * 70.0 - 240.0;
+    // Wave travels down the chain: tail amplitude is larger and lags further.
+    let amp = 70.0 + i * 18.0;
+    let wave = (phase - i * 0.9).sin();
+    // A little coiling on x too, but mostly a lateral (y) undulation.
+    let y = base_y + wave * amp;
+    let x_wave = (phase - i * 0.9).cos() * (10.0 + i * 4.0);
+    (x + x_wave, y)
+}
+
+// ── Segmented-boss helpers (Colossus FSM) ─────────────────────────────────────
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+
+fn lerp2(a: (f32, f32), b: (f32, f32), t: f32) -> (f32, f32) {
+    (lerp(a.0, b.0, t), lerp(a.1, b.1, t))
+}
+
+/// Move `from` toward `to` by up to `cap` px per tick for `ticks` ticks, clamped
+/// so the part never travels faster than `cap` (the player's momentum cap) and
+/// never overshoots the destination. This is what keeps the Colossus's attack
+/// lunges fair — the boss moves at the same speed ceiling the player does.
+fn capped_toward(from: (f32, f32), to: (f32, f32), ticks: u32, cap: f32) -> (f32, f32) {
+    let dx = to.0 - from.0;
+    let dy = to.1 - from.1;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist < 0.001 { return to; }
+    let traveled = (cap * ticks as f32).min(dist);
+    (from.0 + dx / dist * traveled, from.1 + dy / dist * traveled)
+}
+
+/// Distance from `p` to the line segment `a`→`b`. Used so the head's gaze beam
+/// can hit the player if they stand anywhere along the telegraphed path.
+fn point_segment_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let abx = b.0 - a.0;
+    let aby = b.1 - a.1;
+    let len2 = abx * abx + aby * aby;
+    if len2 < 0.0001 { return ((p.0 - a.0).powi(2) + (p.1 - a.1).powi(2)).sqrt(); }
+    let t = (((p.0 - a.0) * abx + (p.1 - a.1) * aby) / len2).clamp(0.0, 1.0);
+    let cx = a.0 + abx * t;
+    let cy = a.1 + aby * t;
+    ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
+}
+
+/// Clamp `to` so it is at most `max` px from `from` — the leash that keeps a
+/// part loosely tethered to its home orbit even while attacking.
+fn leash_clamp(from: (f32, f32), to: (f32, f32), max: f32) -> (f32, f32) {
+    let dx = to.0 - from.0;
+    let dy = to.1 - from.1;
+    let d = (dx * dx + dy * dy).sqrt();
+    if d <= max || d < 0.001 { return to; }
+    let f = max / d;
+    (from.0 + dx * f, from.1 + dy * f)
+}
+
+/// Ticks (at the player's momentum cap) it takes a part to lunge from `a` to
+/// `b`, so the FSM knows when it has physically arrived at its target.
+fn colossus_arrival(a: (f32, f32), b: (f32, f32)) -> u32 {
+    let dist = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    (dist / MOMENTUM_CAP).ceil() as u32
+}
+
+/// Danger-zone radius for a Colossus part, matching the sized telegraph disc.
+fn colossus_zone_r(id: &str) -> f32 {
+    match id {
+        "hand_l" | "hand_r" => COLOSSUS_HAND_ZONE_R,
+        "torso"             => COLOSSUS_TORSO_ZONE_R,
+        _                   => COLOSSUS_HEAD_ZONE_R,
+    }
+}
+
+/// Idle length per part: a base plus a small per-part jitter so parts never
+/// attack in lockstep (the pattern director additionally spaces them out).
+fn colossus_idle_len(i: usize) -> u32 {
+    COLOSSUS_IDLE_TICKS + (i as u32 % 2) * 26 + (i as u32 * 7) % 17
+}
+
+// ── Multi-part boss (Colossus / Serpent) ─────────────────────────────────────
+
+/// Run a multi-part boss fight. Parts live in `s.boss_parts`; the `boss` object
+/// is the visual/body anchor. The spec's core loop applies to every multi-part
+/// boss:
+///  * Parts are shielded until their dependency is destroyed (phase gating).
+///  * A buffed player hit near an unshielded part's weakpoint damages that part.
+///  * Unprotected body contact costs the player a heart (contact-rule inversion).
+///  * When the last part dies the fight is won.
+///
+/// The distinct attack behaviours per boss (hands, pulses, beams, segments) are
+/// layered on top of this loop; this is the shared skeleton they run on.
+fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active { return; }
+    if s.dead { return; }
+    // Entry/victory stasis: nothing to run yet.
+    if s.boss_stasis_active { return; }
+
+    // Appearance (once): reveal the boss body and set the banner name.
+    if !s.boss_spawned {
+        s.boss_spawned = true;
+        let name = s.boss_kind.name();
+        drop(s);
+        let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
+        let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
+        // The `boss` object is an anchor (for the off-screen arrow); the part
+        // circles are the visible multi-part body, so don't show the square.
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (spawn_x, spawn_y);
+            obj.visible = false;
+        }
+        if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+            let sc = c.virtual_scale();
+            if let Some(obj) = c.get_game_object_mut("boss_name_text") {
+                obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                    name, &font, 42.0 * sc, Color(200, 60, 220, 255), 1000.0 * sc,
+                )));
+            }
+        }
+        s = st.lock().unwrap();
+    }
+
+    // Move the boss on a slow lissajous so its parts visibly travel with it.
+    // The whole body FREEZES while any part is mid-attack (so the only thing
+    // that moves is the attacking part), and stays frozen after the torso's
+    // slam until the summoned meteors have fired and cleared.
+    let body_still = {
+        let any_attacking = s.boss_parts.iter().any(|p| {
+            p.alive && !p.shielded && p.state != PartState::Idle
+        });
+        any_attacking || s.boss_meteor_lock_ticks > 0
+    };
+    if !body_still {
+        s.boss_phase += 0.010;
+    }
+    {
+        let phase = s.boss_phase;
+        let x_liss = (phase * 2.1).sin();
+        let y_liss = (phase * 1.5 + 0.5).sin();
+        let nx = arena_center_x(c) + x_liss * 2600.0;
+        let ny = BOSS_Y_CENTER + y_liss * 1360.0;
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (nx - BOSS_SIZE * 0.5, ny - BOSS_SIZE * 0.5);
+        }
+    }
+
+    let phase = s.boss_phase;
+    let px = s.px;
+    let py = s.py;
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    drop(s);
+
+    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+    let mut any_alive = false;
+
+    // ── Colossus: per-part FSM (Idle → Telegraph → Attack → Recover) ──────
+    // Each part is an independent body with its own state machine and a leash:
+    // it never strays far from its home orbit unless it is attacking. The
+    // pattern director (`boss_pattern_cooldown`) stops both hands attacking at
+    // once. A part's danger zone is drawn while it Telegraphs so the player can
+    // see exactly where it will strike ~1s before it lands.
+    #[derive(Clone)]
+    struct PartFrame {
+        id: &'static str,
+        alive: bool,
+        shielded: bool,
+        weak_open: bool,
+        offset: (f32, f32),
+        state_ticks: u32,
+        zone_visible: bool,
+        zone_solid: bool,
+        zone_pos: (f32, f32),
+        zone_r: f32,
+        path_visible: bool,
+        path_start: (f32, f32),
+        strike_unhook: bool,
+        strike_kick: (f32, f32),
+        strike_heart: bool,
+        strike_consume_absorb: bool,
+        strike_big_throw: bool,
+        summon_meteors: bool,
+    }
+
+    let frames: Vec<PartFrame> = {
+        let mut s = st.lock().unwrap();
+        if s.boss_pattern_cooldown > 0 { s.boss_pattern_cooldown -= 1; }
+        if s.boss_part_invuln_ticks > 0 { s.boss_part_invuln_ticks -= 1; }
+        if s.boss_meteor_lock_ticks > 0 { s.boss_meteor_lock_ticks -= 1; }
+        let hooked = s.hooked;
+        // While the torso is mid-slam, the head rides along with the body, so it
+        // moves together with the torso instead of sitting still.
+        let mut torso_disp = (0.0_f32, 0.0_f32);
+        let mut frames = Vec::with_capacity(s.boss_parts.len());
+        for i in 0..s.boss_parts.len() {
+            let home = boss_part_offset(i as u32, phase, !body_still);
+            s.boss_parts[i].home_offset = home;
+            let pid = s.boss_parts[i].id;
+            let zone_r = colossus_zone_r(pid);
+            if pid == "torso" && s.boss_parts[i].alive {
+                // The torso's displacement from home, applied to the head so they
+                // move together during the slam.
+                let off = if s.boss_parts[i].state == PartState::Attack {
+                    capped_toward(s.boss_parts[i].attack_start, s.boss_parts[i].target, s.boss_parts[i].state_ticks, MOMENTUM_CAP)
+                } else { home };
+                torso_disp = (off.0 - home.0, off.1 - home.1);
+            }
+            if !s.boss_parts[i].alive {
+                frames.push(PartFrame {
+                    id: pid, alive: false, shielded: s.boss_parts[i].shielded,
+                    weak_open: false, offset: home, state_ticks: 0, zone_visible: false, zone_solid: false,
+                    zone_pos: (bcx + home.0, bcy + home.1), zone_r,
+                    path_visible: false, path_start: (bcx + home.0, bcy + home.1),
+                    strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
+                    strike_consume_absorb: false, strike_big_throw: false, summon_meteors: false,
+                });
+                continue;
+            }
+            any_alive = true;
+
+            // Shielded parts sit idle and are visible, but never attack nor open.
+            if s.boss_parts[i].shielded {
+                s.boss_parts[i].weakpoint_open = false;
+                s.boss_parts[i].state = PartState::Idle;
+                s.boss_parts[i].state_ticks = 0;
+                frames.push(PartFrame {
+                    id: pid, alive: true, shielded: true, weak_open: false,
+                    offset: home, state_ticks: 0, zone_visible: false, zone_solid: false,
+                    zone_pos: (bcx + home.0, bcy + home.1), zone_r,
+                    path_visible: false, path_start: (bcx + home.0, bcy + home.1),
+                    strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
+                    strike_consume_absorb: false, strike_big_throw: false, summon_meteors: false,
+                });
+                continue;
+            }
+
+            // ── FSM advance ──
+            let cooldown_ok = s.boss_pattern_cooldown == 0;
+            let vx = s.vx;
+            let vy = s.vy;
+            let mut began_attack = false;
+            {
+                let p = &mut s.boss_parts[i];
+                match p.state {
+                    PartState::Idle => {
+                        p.state_ticks += 1;
+                        if cooldown_ok && p.state_ticks >= colossus_idle_len(i) {
+                            p.state = PartState::Telegraph;
+                            p.state_ticks = 0;
+                            // The hands aim at (a slight prediction ahead of) the
+                            // player's position RIGHT NOW, then the path is locked
+                            // — no homing. The lead makes it feel intelligent and,
+                            // because the path is telegraphed, readable.
+                            //
+                            // The torso slams at the player (radial AoE), and the
+                            // head aims its gaze beam at the player — both also
+                            // lead slightly, and both paths are locked here.
+                            let world_target = match p.id {
+                                "hand_l" | "hand_r" => (px + vx * COLOSSUS_ATTACK_LEAD, py + vy * COLOSSUS_ATTACK_LEAD),
+                                "torso"             => (px + vx * COLOSSUS_ATTACK_LEAD, py + vy * COLOSSUS_ATTACK_LEAD),
+                                _                   => (px + vx * COLOSSUS_ATTACK_LEAD, py + vy * COLOSSUS_ATTACK_LEAD),
+                            };
+                            let home_world = (bcx + home.0, bcy + home.1);
+                            let clamped = leash_clamp(home_world, world_target, COLOSSUS_LEASH);
+                            p.target = (clamped.0 - bcx, clamped.1 - bcy);
+                            p.path_start = home_world;
+                            began_attack = true;
+                        }
+                    }
+                    PartState::Telegraph => {
+                        p.state_ticks += 1;
+                        if p.state_ticks >= COLOSSUS_TELEGRAPH_TICKS {
+                            p.state = PartState::Attack;
+                            p.state_ticks = 0;
+                            // Record where the part launches from (its wind-up
+                            // position), so the lunge travels at the cap rather
+                            // than teleporting to the target.
+                            let home = p.home_offset;
+                            let tgt = p.target;
+                            let dx = home.0 - tgt.0;
+                            let dy = home.1 - tgt.1;
+                            let d = (dx * dx + dy * dy).sqrt().max(0.001);
+                            p.attack_start = (
+                                home.0 + dx / d * COLOSSUS_TELEGRAPH_PULL,
+                                home.1 + dy / d * COLOSSUS_TELEGRAPH_PULL,
+                            );
+                            // Re-arm the head's gaze beam so a new sweep can hit.
+                            p.beam_hit_done = false;
+                        }
+                    }
+                    PartState::Attack => {
+                        p.state_ticks += 1;
+                        // The head holds its beak while firing the gaze; the hands
+                        // and torso hold at the lunge target after arriving (the
+                        // torso for longer, so the meteors can clear).
+                        let duration = if p.id == "head" {
+                            COLOSSUS_HEAD_ATTACK_TICKS
+                        } else {
+                            let arrival = colossus_arrival(p.attack_start, p.target);
+                            arrival + if p.id == "torso" { COLOSSUS_TORSO_HOLD_TICKS } else { COLOSSUS_HOLD_TICKS }
+                        };
+                        if p.state_ticks >= duration {
+                            p.state = PartState::Recover;
+                            p.state_ticks = 0;
+                        }
+                    }
+                    PartState::Recover => {
+                        p.state_ticks += 1;
+                        if p.state_ticks >= COLOSSUS_RECOVER_TICKS {
+                            p.state = PartState::Idle;
+                            p.state_ticks = 0;
+                        }
+                    }
+                }
+            }
+            if began_attack {
+                s.boss_pattern_cooldown = COLOSSUS_PATTERN_COOLDOWN;
+            }
+
+            let (off, weak_open, strike) = {
+                let p = &s.boss_parts[i];
+                let target = p.target;
+                // The head never leaves its perch — it opens a gravity well and
+                // fires a gaze beam from where it is. The hands and torso lunge.
+                let head_stays = p.id == "head";
+                let off = match p.state {
+                    PartState::Idle => home,
+                    PartState::Telegraph => {
+                        if head_stays { home } else {
+                            // Pull back from the target to visibly wind up.
+                            let dx = home.0 - target.0;
+                            let dy = home.1 - target.1;
+                            let d = (dx * dx + dy * dy).sqrt().max(0.001);
+                            (home.0 + dx / d * COLOSSUS_TELEGRAPH_PULL,
+                             home.1 + dy / d * COLOSSUS_TELEGRAPH_PULL)
+                        }
+                    }
+                    // The attack lunge and the return both move at the player's
+                    // momentum cap, so the boss never out-runs the player.
+                    PartState::Attack if head_stays => home,
+                    PartState::Attack => capped_toward(p.attack_start, target, p.state_ticks, MOMENTUM_CAP),
+                    PartState::Recover if head_stays => home,
+                    PartState::Recover => capped_toward(target, home, p.state_ticks, MOMENTUM_CAP),
+                };
+                // The head rides along with the torso's slam so the whole body
+                // moves together when the torso lunges (and sits still otherwise).
+                let off = if p.id == "head" {
+                    (off.0 + torso_disp.0, off.1 + torso_disp.1)
+                } else { off };
+                // Weakpoint timing:
+                //  * Hands/torso: opens 0.5s AFTER the part arrives at the
+                //    telegraphed target (not on arrival), stays open through the
+                //    hold, the slow retract, and 1s after getting home.
+                //  * Head: NOT vulnerable while it fires the gaze / gravity well;
+                //    it opens after (Recover) and for a long post-well window.
+                let arrival = if p.id == "head" { 0 } else { colossus_arrival(p.attack_start, target) };
+                let vuln_after = if p.id == "head" { COLOSSUS_HEAD_VULN_AFTER } else { COLOSSUS_VULN_AFTER_TICKS };
+                let weak_open = match p.state {
+                    PartState::Attack => {
+                        p.id != "head"
+                            && p.state_ticks >= arrival + COLOSSUS_ATTACK_VULN_DELAY
+                    }
+                    PartState::Recover => true,
+                    PartState::Idle => p.state_ticks < vuln_after,
+                    _ => false,
+                };
+                // Strike:
+                //  * Hands + torso: the moment the lunge physically reaches the
+                //    telegraphed zone (the hit and the motion line up).
+                //  * Head: the gaze beam is a travelling sweep handled by the
+                //    application loop, so the FSM does not strike for it here.
+                let strike = if p.state == PartState::Attack {
+                    if head_stays {
+                        false
+                    } else {
+                        let dist = ((target.0 - p.attack_start.0).powi(2)
+                                  + (target.1 - p.attack_start.1).powi(2)).sqrt();
+                        let now = MOMENTUM_CAP * p.state_ticks as f32 >= dist;
+                        let prev = MOMENTUM_CAP * p.state_ticks.saturating_sub(1) as f32 >= dist;
+                        // `now && (state_ticks == 1 || !prev)` catches the arrival
+                        // even when the target is right next to the launch point
+                        // (dist ~ 0, where `!prev` is false from tick 1).
+                        now && (p.state_ticks == 1 || !prev)
+                    }
+                } else { false };
+                (off, weak_open, strike)
+            };
+
+            {
+                let p = &mut s.boss_parts[i];
+                p.weakpoint_open = weak_open;
+            }
+
+            let zone_pos = (bcx + s.boss_parts[i].target.0, bcy + s.boss_parts[i].target.1);
+            let (zone_visible, zone_solid) = {
+                let p = &s.boss_parts[i];
+                (p.state == PartState::Telegraph || p.state == PartState::Attack,
+                 p.state == PartState::Attack)
+            };
+            // The path telegraph (trajectory) is shown while the part winds up,
+            // from where it started the telegraph to where it will strike.
+            let (path_visible, path_start) = {
+                let p = &s.boss_parts[i];
+                // The head's beam stays visible through the whole wind-up AND
+                // while it fires (so you can read the full path). Hands + torso
+                // only show the path during the wind-up.
+                (p.state == PartState::Telegraph
+                 || (p.id == "head" && p.state == PartState::Attack),
+                 p.path_start)
+            };
+            let mut strike_unhook = false;
+            let mut strike_kick = (0.0f32, 0.0f32);
+            let mut strike_heart = false;
+            let mut strike_consume_absorb = false;
+            let mut strike_big_throw = false;
+            let mut summon_meteors = false;
+            if strike {
+                // Hit detection:
+                //  * Hands/torso: the player is in the radial danger zone.
+                //  * Head: the player is on the gaze-beam line (path_start → target).
+                let hit = if pid == "head" {
+                    let (ax, ay) = (s.boss_parts[i].path_start.0, s.boss_parts[i].path_start.1);
+                    point_segment_dist((px, py), (ax, ay), zone_pos) < COLOSSUS_PATH_THICKNESS + PLAYER_R
+                } else {
+                    (px - zone_pos.0).powi(2) + (py - zone_pos.1).powi(2)
+                        < (PLAYER_R + zone_r).powi(2)
+                };
+                if hit {
+                    let d = ((px - zone_pos.0).powi(2) + (py - zone_pos.1).powi(2)).sqrt().max(1.0);
+                    // A direct hit throws the player HARD (much further than a
+                    // regular body-contact push), so being caught in an attack
+                    // is dangerous even when the buff protects your hearts.
+                    let power = 78.0;
+                    strike_kick = ((px - zone_pos.0) / d * power, (py - zone_pos.1) / d * power);
+                    strike_big_throw = true;
+                    if buffed {
+                        // The buff shields the heart, but you still get flung and
+                        // spend one absorption.
+                        strike_unhook = hooked;
+                        strike_consume_absorb = true;
+                    } else {
+                        strike_heart = true;
+                    }
+                }
+                // The torso's slam also calls down a burst of meteors (the
+                // existing comet system), whether or not the slam itself hit.
+                // It also holds the whole body still so the meteors can fire
+                // and clear before the body moves again.
+                if pid == "torso" {
+                    summon_meteors = true;
+                    s.boss_meteor_lock_ticks = COLOSSUS_METEOR_LOCK_TICKS;
+                }
+            }
+
+            frames.push(PartFrame {
+                id: pid, alive: true, shielded: false, weak_open, offset: off,
+                state_ticks: s.boss_parts[i].state_ticks, zone_visible, zone_solid, zone_pos, zone_r,
+                path_visible, path_start,
+                strike_unhook, strike_kick, strike_heart, strike_consume_absorb,
+                strike_big_throw, summon_meteors,
+            });
+        }
+        frames
+    };
+
+    // ── Apply per-part visuals + resolve strikes ──
+    for (idx, f) in frames.iter().enumerate() {
+        let part_size = colossus_part_size(idx as u32);
+
+        // The head opens a large gravity well during its wind-up and beam, so it
+        // drags the player toward the head — and FORCES an untether so the
+        // player is dragged in freely instead of just swinging on their rope.
+        if f.id == "head" {
+            let gx = bcx + f.offset.0;
+            let gy = bcy + f.offset.1;
+            if f.alive && f.zone_visible {
+                // The pull is STRONGEST far from the head (it drags you in from
+                // across the arena) and weakens toward the core, so you aren't
+                // flung once you're close — you just get dragged in. It is
+                // applied to the STATE velocity (not the object's momentum) so
+                // the momentum write-back can't wipe it, and it's strong enough
+                // at the outer edge to haul you in after you're untethered.
+                let dx = px - gx;
+                let dy = py - gy;
+                let d = (dx * dx + dy * dy).sqrt().max(1.0);
+                // Steeper ramp than linear: the pull stays strong across most of
+                // the well and only falls off in a small region at the core, so
+                // it reliably drags you in from the outer edge.
+                let strength = COLOSSUS_GRAVITY_STRENGTH * (d / COLOSSUS_GRAVITY_RANGE).clamp(0.0, 1.0).powf(0.35);
+                let mut unhooked = false;
+                {
+                    let mut s = st.lock().unwrap();
+                    if strength > 0.01 {
+                        s.vx -= dx / d * strength;
+                        s.vy -= dy / d * strength;
+                    }
+                    // Force the untether only for the first ~0.5s of the well, so
+                    // the player can re-tether and save themselves from the beam
+                    // rather than being sucked to a guaranteed hit.
+                    if !f.zone_solid && f.state_ticks < 30 {
+                        if s.hooked {
+                            s.hooked = false;
+                            s.active_hook = String::new();
+                            unhooked = true;
+                        }
+                    }
+                }
+                if unhooked {
+                    c.run(Action::Hide { target: Target::name("rope") });
+                }
+                // While the well is active, flatten the player's own gravity so
+                // the pull wins and they can't free-fall to their doom.
+                if let Some(obj) = c.get_game_object_mut("player") {
+                    let sign = if obj.gravity < 0.0 { -1.0 } else { 1.0 };
+                    obj.gravity = GRAVITY * 0.02 * sign;
+                }
+                // Gravity well visual.
+                if let Some(obj) = c.get_game_object_mut("colossus_well") {
+                    obj.position = (gx - COLOSSUS_GRAVITY_RANGE, gy - COLOSSUS_GRAVITY_RANGE);
+                    obj.visible = true;
+                }
+            } else {
+                if let Some(obj) = c.get_game_object_mut("colossus_well") {
+                    obj.visible = false;
+                }
+                // The well is over: restore the arena's (reduced) gravity so the
+                // player plays normally again.
+                if let Some(obj) = c.get_game_object_mut("player") {
+                    let sign = if obj.gravity < 0.0 { -1.0 } else { 1.0 };
+                    obj.gravity = GRAVITY * BOSS_GRAVITY_SCALE * sign;
+                }
+            }
+
+            // Charge-up orb: grows at the head while it winds up, so the gaze
+            // clearly reads as "about to fire".
+            if f.alive && f.zone_visible && !f.zone_solid {
+                let charge = (f.state_ticks as f32 / COLOSSUS_TELEGRAPH_TICKS as f32).clamp(0.0, 1.0);
+                let r = 70.0 + charge * 120.0;
+                if let Some(obj) = c.get_game_object_mut("colossus_charge") {
+                    obj.size = (r * 2.0, r * 2.0);
+                    obj.position = (gx - r, gy - r);
+                    obj.visible = true;
+                }
+            } else if let Some(obj) = c.get_game_object_mut("colossus_charge") {
+                obj.visible = false;
+            }
+
+            // Bright beam core: travels from the head to the front as it fires.
+            if f.alive && f.zone_solid {
+                let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
+                let front = lerp2(f.path_start, f.zone_pos, t);
+                let (ax, ay) = f.path_start;
+                let dx = front.0 - ax;
+                let dy = front.1 - ay;
+                let len = (dx * dx + dy * dy).sqrt().max(1.0);
+                let deg = dy.atan2(dx).to_degrees();
+                let th = 28.0;
+                let mid = ((ax + front.0) * 0.5, (ay + front.1) * 0.5);
+                if let Some(obj) = c.get_game_object_mut("colossus_beam_core") {
+                    obj.size = (len, th);
+                    obj.rotation = deg;
+                    obj.position = (mid.0 - len * 0.5, mid.1 - th * 0.5);
+                    obj.visible = true;
+                }
+
+                // Little contact explosions: as the beam sweeps the path, pops
+                // appear at the beam front and quickly grow a few sizes, so it
+                // reads as the beam detonating along the telegraphed line.
+                {
+                    let mut updates: Vec<(String, f32, f32, f32, bool)> = Vec::new();
+                    let mut new_pop: Option<(String, f32, f32, u32)> = None;
+                    {
+                        let mut s = st.lock().unwrap();
+                        let mut i = 0;
+                        while i < s.beam_explode_live.len() {
+                            let (id, x, y, ttl) = s.beam_explode_live[i].clone();
+                            let nttl = ttl.saturating_sub(1);
+                            if nttl == 0 {
+                                s.beam_explode_live.remove(i);
+                                updates.push((id, x, y, 0.0, false));
+                                continue;
+                            }
+                            s.beam_explode_live[i].3 = nttl;
+                            let growth = (COLOSSUS_BEAM_EXPLODE_TTL as f32 - nttl as f32)
+                                / COLOSSUS_BEAM_EXPLODE_TTL as f32;
+                            let r = 30.0 + growth * 150.0;
+                            updates.push((id, x, y, r, true));
+                            i += 1;
+                        }
+                        // Spawn a new pop at the beam front every few ticks.
+                        if f.state_ticks % 4 == 0 {
+                            let live_ids: Vec<&String> =
+                                s.beam_explode_live.iter().map(|(id, _, _, _)| id).collect();
+                            let free = (0..8)
+                                .map(|i| format!("colossus_beam_explode_{i}"))
+                                .find(|id| !live_ids.contains(&id));
+                            if let Some(id) = free {
+                                s.beam_explode_live.push((id.clone(), front.0, front.1, COLOSSUS_BEAM_EXPLODE_TTL));
+                                new_pop = Some((id, front.0, front.1, COLOSSUS_BEAM_EXPLODE_TTL));
+                            }
+                        }
+                    }
+                    for (id, x, y, r, vis) in updates {
+                        if let Some(obj) = c.get_game_object_mut(&id) {
+                            obj.size = (r * 2.0, r * 2.0);
+                            obj.position = (x - r, y - r);
+                            obj.visible = vis;
+                        }
+                    }
+                    if let Some((id, x, y, _ttl)) = new_pop {
+                        if let Some(obj) = c.get_game_object_mut(&id) {
+                            let r = 30.0;
+                            obj.size = (r * 2.0, r * 2.0);
+                            obj.position = (x - r, y - r);
+                            obj.visible = true;
+                        }
+                    }
+                }
+            } else if let Some(obj) = c.get_game_object_mut("colossus_beam_core") {
+                obj.visible = false;
+            }
+            // When the beam is not firing, also stop the explosion trail.
+            if !(f.alive && f.zone_visible) {
+                let mut s = st.lock().unwrap();
+                for (id, _, _, _) in s.beam_explode_live.drain(..) {
+                    if let Some(obj) = c.get_game_object_mut(&id) {
+                        obj.visible = false;
+                    }
+                }
+            }
+        }
+
+        // Buffed hit on an exposed (unshielded, weakpoint-open) part damages it.
+        // The boss has a short invulnerability window after a part is destroyed,
+        // so two parts can't be killed back-to-back within the same second.
+        if f.alive && !f.shielded && f.weak_open && buffed {
+            let sx = bcx + f.offset.0;
+            let sy = bcy + f.offset.1;
+            let hit_r = colossus_part_hit_r(idx as u32);
+            if (px - sx).powi(2) + (py - sy).powi(2) < (PLAYER_R + hit_r).powi(2) {
+                let mut s = st.lock().unwrap();
+                if s.boss_part_invuln_ticks == 0 {
+                    if let Some(p) = s.boss_parts.iter_mut().find(|p| p.id == f.id && p.alive) {
+                        p.hp -= 1;
+                        if p.hp <= 0 {
+                            p.alive = false;
+                            s.boss_part_invuln_ticks = COLOSSUS_PART_INVULN_TICKS;
+                        }
+                        s.buff_hit_flash = 20;
+                    }
+                }
+            }
+        }
+
+        // Part body (composite silhouette, sized to the part).
+        if let Some(obj) = c.get_game_object_mut(&format!("colossus_part_{idx}")) {            if f.alive {
+                let (sx, sy) = (bcx + f.offset.0, bcy + f.offset.1);
+                let half = part_size * 0.5;
+                obj.size = (part_size, part_size);
+                obj.position = (sx - half, sy - half);
+                obj.visible = true;
+                if f.shielded {
+                    obj.set_glow(GlowConfig { color: Color(120, 220, 255, 90), width: 22.0 });
+                } else if f.weak_open {
+                    // VULNERABLE: a bright, pulsing gold glow — the "hit me now"
+                    // cue. Takes priority so the strike window is unmistakable.
+                    let pulse = 170 + (((f.zone_pos.0 as i32 / 4) + (f.zone_pos.1 as i32 / 4)).rem_euclid(6) as u8) * 14;
+                    obj.set_glow(GlowConfig { color: Color(255, 224, 70, pulse), width: 42.0 });
+                } else if f.zone_visible {
+                    // Wind-up glow: pulsing red-orange while it commits to the strike.
+                    let wide = if f.strike_unhook || f.strike_heart || f.strike_kick.0 != 0.0 || f.strike_kick.1 != 0.0 { 190 } else { 110 };
+                    obj.set_glow(GlowConfig { color: Color(255, 80, 30, wide), width: 30.0 });
+                } else {
+                    obj.clear_glow();
+                }
+            } else {
+                obj.visible = false;
+            }
+        }
+
+        // Attack-path telegraph: a translucent red strip from where the part
+        // started winding up to where it will strike. For the head's gaze beam
+        // this strip grows from the head toward a travelling front during the
+        // attack, so the player sees the sweep coming and can be off the line.
+        if let Some(obj) = c.get_game_object_mut(&format!("colossus_path_{idx}")) {
+            if f.alive && f.path_visible {
+                let (ax, ay) = f.path_start;
+                let (bx, by) = if f.id == "head" && f.zone_solid {
+                    let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
+                    lerp2(f.path_start, f.zone_pos, t)
+                } else {
+                    f.zone_pos
+                };
+                let dx = bx - ax;
+                let dy = by - ay;
+                let len = (dx * dx + dy * dy).sqrt().max(1.0);
+                let deg = dy.atan2(dx).to_degrees();
+                let th = COLOSSUS_PATH_THICKNESS;
+                let mid = ((ax + bx) * 0.5, (ay + by) * 0.5);
+                // `rotation_adjusted_offset` keeps the rendered centre locked at
+                // `position + size/2`, so positioning by the strip's centre is
+                // enough — the engine handles the rotated AABB compensation.
+                obj.size = (len, th);
+                obj.rotation = deg;
+                obj.position = (mid.0 - len * 0.5, mid.1 - th * 0.5);
+                obj.visible = true;
+            } else {
+                obj.visible = false;
+            }
+        }
+
+        // Traveling gaze beam hit: the beam front sweeps the path and, when it
+        // reaches the player, costs a heart ALWAYS (the buff does not shield the
+        // gaze) and throws them hard.
+        if f.id == "head" && f.alive && f.zone_solid {
+            let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
+            let front = lerp2(f.path_start, f.zone_pos, t);
+            let hit_done = {
+                let s = st.lock().unwrap();
+                s.boss_parts.iter().find(|p| p.id == "head").map(|p| p.beam_hit_done).unwrap_or(true)
+            };
+            if !hit_done
+                && point_segment_dist((px, py), f.path_start, front) < COLOSSUS_PATH_THICKNESS + PLAYER_R
+            {
+                {
+                    let mut s = st.lock().unwrap();
+                    if let Some(p) = s.boss_parts.iter_mut().find(|p| p.id == "head" && p.alive) {
+                        p.beam_hit_done = true;
+                    }
+                }
+                // The gaze always costs a heart.
+                let dead = { let s = st.lock().unwrap(); s.dead };
+                if !dead { super::hearts::lose_heart(c, st); }
+                // And throws the player away from the beam front.
+                let dx = px - front.0;
+                let dy = py - front.1;
+                let d = (dx * dx + dy * dy).sqrt().max(1.0);
+                let power = 78.0;
+                let push = (dx / d * power, dy / d * power);
+                let mut s = st.lock().unwrap();
+                s.vx = push.0;
+                s.vy = push.1;
+                drop(s);
+                if let Some(obj) = c.get_game_object_mut("player") {
+                    obj.momentum = push;
+                }
+                c.set_var("boss_knockback_ticks", Value::I32(20));
+            }
+        }
+
+        // Vulnerability ring: pulsing gold outline around a hittable part.
+        if let Some(obj) = c.get_game_object_mut(&format!("colossus_vuln_{idx}")) {
+            if f.alive && !f.shielded && f.weak_open {
+                let r = part_size * 0.55;
+                let (sx, sy) = (bcx + f.offset.0, bcy + f.offset.1);
+                obj.position = (sx - r, sy - r);
+                // Pulse the ring's visibility/scale so it throbs.
+                let on = ((f.zone_pos.0 as i32 / 3) + (f.zone_pos.1 as i32 / 3)).rem_euclid(5) < 3;
+                obj.visible = on;
+            } else {
+                obj.visible = false;
+            }
+        }
+
+        // Danger-zone telegraph disc (only while a part telegraphs / strikes).
+        if let Some(obj) = c.get_game_object_mut(&format!("colossus_zone_{idx}")) {
+            if f.id == "head" {
+                // Head: a small targeting reticle that runs the course of the
+                // path line just ahead of the beam. During the telegraph the
+                // line IS the telegraph, so the reticle only appears as it
+                // fires (unlike the hands/torso landing circles).
+                if f.alive && f.zone_solid {
+                    let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
+                    let front = lerp2(f.path_start, f.zone_pos, t);
+                    let r = 44.0;
+                    obj.size = (r * 2.0, r * 2.0);
+                    obj.position = (front.0 - r, front.1 - r);
+                    obj.visible = true;
+                } else {
+                    obj.visible = false;
+                }
+            } else if f.alive && f.zone_visible {
+                obj.position = (f.zone_pos.0 - f.zone_r, f.zone_pos.1 - f.zone_r);
+                // Zone flickers during the telegraph, then goes solid for the strike.
+                let on = f.zone_solid
+                    || ((f.zone_pos.0 as i32 / 5) + (f.zone_pos.1 as i32 / 5)).rem_euclid(6) < 4;
+                obj.visible = on;
+            } else {
+                obj.visible = false;
+            }
+        }
+
+        // Strike effects (unhook / kick / heart) — resolved once per attack.
+        if f.strike_unhook {
+            let mut s = st.lock().unwrap();
+            s.hooked = false;
+            s.active_hook = String::new();
+            drop(s);
+            c.run(Action::Hide { target: Target::name("rope") });
+        }
+        if f.strike_kick.0 != 0.0 || f.strike_kick.1 != 0.0 {
+            let mut s = st.lock().unwrap();
+            s.vx = f.strike_kick.0;
+            s.vy = f.strike_kick.1;
+            drop(s);
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.momentum = f.strike_kick;
+            }
+            // A direct hit throws the player hard: briefly bypass the momentum
+            // cap so the throw actually flies rather than being clamped away.
+            if f.strike_big_throw {
+                c.set_var("boss_knockback_ticks", Value::I32(20));
+            }
+        }
+        if f.strike_heart {
+            let dead = { let s = st.lock().unwrap(); s.dead };
+            if !dead { super::hearts::lose_heart(c, st); }
+        }
+        if f.strike_consume_absorb {
+            // The buff ate the hit: spend one absorption. When it runs out the
+            // buff ends, so the shield is a limited resource.
+            let mut s = st.lock().unwrap();
+            if s.player_buff > 0 {
+                s.buff_absorbs = s.buff_absorbs.saturating_sub(1);
+                if s.buff_absorbs == 0 {
+                    s.player_buff = 0;
+                    s.buff_timer = 0;
+                }
+            }
+        }
+        // The torso's slam also calls down a burst of meteors (existing comet
+        // system), whether or not the slam itself connected.
+        if f.summon_meteors {
+            for _ in 0..3 {
+                super::spawning::spawn_debug_comet(c, st);
+            }
+        }
+    }
+
+    // Hide the visuals of any destroyed/leashed parts.
+    for idx in 0..frames.len() {
+        if let Some(obj) = c.get_game_object_mut(&format!("colossus_part_{idx}")) {
+            if !frames[idx].alive {
+                obj.visible = false;
+            }
+        }
+    }
+
+    // Phase gating: once a dependency is dead, the next part loses its shield.
+    // (Colossus: torso unshields when both hands die; head unshields when the
+    // torso dies. Serpent segments uncover as the one before dies.)
+    {
+        let mut s = st.lock().unwrap();
+        for i in 0..s.boss_parts.len() {
+            let prev_dead = i > 0 && s.boss_parts[..i].iter().all(|p| !p.alive);
+            if prev_dead {
+                let part = &mut s.boss_parts[i];
+                if part.alive && part.shielded {
+                    part.shielded = false;
+                }
+            }
+        }
+        s.boss_hp = boss_total_hp(&s);
+    }
+
+    // Simple shield dome glow while any part is still shielded (the full
+    // BIT_ENERGY_DOME shader is layered on later).
+    let any_shielded = { let s = st.lock().unwrap(); s.boss_parts.iter().any(|p| p.alive && p.shielded) };
+    if let Some(obj) = c.get_game_object_mut("boss") {
+        if any_shielded {
+            obj.set_glow(GlowConfig { color: Color(120, 220, 255, 90), width: 22.0 });
+        } else {
+            obj.clear_glow();
+        }
+    }
+
+    // Contact-rule inversion: touching a part you are NOT currently able to hit
+    // (it's shielded or idle/winding up) costs one heart — but not your whole
+    // life (the cooldown stops repeated contact from draining every heart in a
+    // couple of frames). With the buff it costs no heart, just tears you off.
+    // This is a light contact push; the attack STRIKE is the one that throws you
+    // hard.
+    {
+        let mut s = st.lock().unwrap();
+        if s.boss_contact_cooldown > 0 { s.boss_contact_cooldown -= 1; }
+        let touching = if s.boss_contact_cooldown == 0 && !s.dead {
+            frames.iter().enumerate().any(|(i, f)| {
+                f.alive && !f.weak_open && {
+                    let sx = bcx + f.offset.0;
+                    let sy = bcy + f.offset.1;
+                    let cr = colossus_part_hit_r(i as u32) + PLAYER_R;
+                    (px - sx).powi(2) + (py - sy).powi(2) < cr * cr
+                }
+            })
+        } else { false };
+        if touching { s.boss_contact_cooldown = 45; }
+        let dead = s.dead;
+        drop(s);
+        if touching && !dead {
+            let d = ((px - bcx).powi(2) + (py - bcy).powi(2)).sqrt().max(1.0);
+            let push = ((px - bcx) / d * 34.0, (py - bcy) / d * 34.0);
+            let mut s = st.lock().unwrap();
+            s.vx = push.0;
+            s.vy = push.1;
+            if !buffed {
+                // No buff: contact costs a heart (see the cooldown — one, not all).
+                drop(s);
+                super::hearts::lose_heart(c, st);
+            } else {
+                // Buff shields the heart, but contact still tears you off.
+                s.hooked = false;
+                s.active_hook = String::new();
+                drop(s);
+                c.run(Action::Hide { target: Target::name("rope") });
+            }
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.momentum = push;
+            }
+        }
+    }
+
+    // Win when no parts are alive.
+    if !any_alive {
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.visible = false;
+            obj.position = (-6000.0, -6000.0);
+        }
+        finish_boss(c, st);
+    }
+}
+
+// ── Flare Titan (reuses the solar-flare mechanic) ────────────────────────────
+
+/// Mark a few of the arena tether nodes as shielded so they are shelter during
+/// the Flare Titan's flares (timed-release, like the world's flare system).
+fn ensure_arena_shelter_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let ids: Vec<String> = st.lock().unwrap().live_hooks.clone();
+    for (i, id) in ids.iter().enumerate() {
+        if i % 4 == 0 {
+            if let Some(obj) = c.get_game_object_mut(id) {
+                obj.tags.retain(|t| t != SHIELD_HOOK_TAG);
+                obj.tags.push(SHIELD_HOOK_TAG.into());
+                obj.set_glow(GlowConfig { color: Color(255, 200, 80, 255), width: 14.0 });
+            }
+        }
+    }
+}
+
+/// The Flare Titan: a single-body boss whose fight is the flare loop. Telegraph
+/// → flare (tether a shielded node or lose a heart; tethering grants Solar
+/// Charge) → weakpoint window (core vents; only a buffed hit hurts it, for 4s)
+/// → repeat. Touching the body costs a heart.
+fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active { return; }
+    if s.dead { return; }
+    if s.boss_stasis_active { return; }
+
+    // Appearance (once).
+    if !s.boss_spawned {
+        s.boss_spawned = true;
+        let name = s.boss_kind.name();
+        drop(s);
+        let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
+        let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (spawn_x, spawn_y);
+            obj.visible = true;
+        }
+        if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+            let sc = c.virtual_scale();
+            if let Some(obj) = c.get_game_object_mut("boss_name_text") {
+                obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                    name, &font, 42.0 * sc, Color(255, 170, 60, 255), 1000.0 * sc,
+                )));
+            }
+        }
+        ensure_arena_shelter_nodes(c, st);
+        s = st.lock().unwrap();
+    }
+
+    let px = s.px;
+    let py = s.py;
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    drop(s);
+
+    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+
+    // ── Flare cycle ──
+    // idle → warning (flare_warn) → active (flare_active) → weakpoint window
+    // (boss_flare_window_ticks).
+    let mut unhook_flare = false;
+    {
+        let mut s = st.lock().unwrap();
+        if s.boss_flare_window_ticks > 0 {
+            s.boss_flare_window_ticks -= 1;
+        } else if s.flare_active {
+            s.flare_active_ticks = s.flare_active_ticks.saturating_sub(1);
+            s.flare_damage_timer = s.flare_damage_timer.saturating_sub(1);
+            let sheltered = super::solar::player_is_sheltered(c, &s);
+            // Tethering a shielded node grants / refreshes Solar Charge.
+            if sheltered {
+                s.player_buff = 1;
+                s.buff_timer = 600;
+                s.buff_absorbs = 3;
+            }
+            if s.flare_damage_timer == 0 {
+                s.flare_damage_timer = FLARE_TITAN_DAMAGE_INTERVAL;
+                if !sheltered {
+                    unhook_flare = s.hooked;
+                }
+            }
+            if s.flare_active_ticks == 0 {
+                s.flare_active = false;
+                s.boss_flare_window_ticks = FLARE_TITAN_WINDOW_TICKS;
+            }
+        } else if s.flare_warn > 0 {
+            s.flare_warn -= 1;
+            c.set_var("flare_warning", s.flare_warn > 0);
+            if s.flare_warn == 0 {
+                s.flare_active = true;
+                s.flare_active_ticks = FLARE_TITAN_ACTIVE_TICKS;
+                s.flare_damage_timer = FLARE_TITAN_DAMAGE_INTERVAL;
+                c.set_var("flare_active", true);
+                c.set_var("flare_warning", false);
+            }
+        } else if s.flare_cooldown == 0 {
+            s.flare_cooldown = FLARE_TITAN_INTERVAL;
+            s.flare_warn = FLARE_TITAN_TELEGRAPH_TICKS;
+        } else {
+            s.flare_cooldown -= 1;
+        }
+    }
+
+    if unhook_flare {
+        let mut s = st.lock().unwrap();
+        s.hooked = false;
+        s.active_hook = String::new();
+        drop(s);
+        c.run(Action::Hide { target: Target::name("rope") });
+        super::hearts::lose_heart(c, st);
+    }
+
+    // ── Weakpoint window: a buffed hit on the core damages the boss ──
+    let window_open = { let s = st.lock().unwrap(); s.boss_flare_window_ticks > 0 };
+    if window_open && buffed && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + 320.0).powi(2) {
+        let mut s = st.lock().unwrap();
+        s.boss_hp = (s.boss_hp - 4).max(0);
+        s.buff_hit_flash = 20;
+        let hp = s.boss_hp;
+        drop(s);
+        if hp <= 0 {
+            if let Some(obj) = c.get_game_object_mut("boss") {
+                obj.visible = false;
+                obj.position = (-6000.0, -6000.0);
+            }
+            finish_boss(c, st);
+        }
+    }
+
+    // ── Contact-rule inversion ──
+    {
+        let s = st.lock().unwrap();
+        let touching = !s.dead
+            && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + BOSS_SIZE * 0.5).powi(2);
+        drop(s);
+        if touching {
+            super::hearts::lose_heart(c, st);
+        }
+    }
+}
+
+// ── Gravity Weaver (uses the space_rift gravity inversion) ───────────────────
+
+/// The Gravity Weaver: a single-body boss that periodically INVERTS the world
+/// (flips `gravity_dir`, so the arena's ceiling becomes the floor). Tether nodes
+/// exist on both sides, so the player keeps swinging as the world turns over.
+/// The boss's core opens for a short window right after each flip; a buffed hit
+/// in that window damages it. Touching the body costs a heart.
+fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active { return; }
+    if s.dead { return; }
+    if s.boss_stasis_active { return; }
+
+    if !s.boss_spawned {
+        s.boss_spawned = true;
+        let name = s.boss_kind.name();
+        drop(s);
+        let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
+        let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (spawn_x, spawn_y);
+            obj.visible = true;
+        }
+        if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+            let sc = c.virtual_scale();
+            if let Some(obj) = c.get_game_object_mut("boss_name_text") {
+                obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                    name, &font, 42.0 * sc, Color(120, 210, 255, 255), 1000.0 * sc,
+                )));
+            }
+        }
+        s = st.lock().unwrap();
+    }
+
+    let px = s.px;
+    let py = s.py;
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    drop(s);
+
+    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+
+    // ── Flip cycle ──
+    // weakpoint window open (after a flip) → countdown → flip + open window.
+    let mut did_flip = false;
+    {
+        let mut s = st.lock().unwrap();
+        if s.boss_flare_window_ticks > 0 {
+            s.boss_flare_window_ticks -= 1;
+        } else if s.boss_gravity_flip_ticks > 0 {
+            s.boss_gravity_flip_ticks -= 1;
+        } else {
+            // Invert the world (like a space_rift).
+            s.gravity_dir = -s.gravity_dir;
+            s.boss_flare_window_ticks = GRAVITY_WEAVER_WINDOW_TICKS;
+            s.boss_gravity_flip_ticks = GRAVITY_WEAVER_FLIP_INTERVAL;
+            did_flip = true;
+            // Keep the arena nodes / player oriented: flip the player's gravity.
+            let gdir = s.gravity_dir;
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.gravity = GRAVITY * gdir;
+            }
+            drop(s);
+            if let Some(cam) = c.camera_mut() {
+                cam.flash_with(Color(120, 200, 255, 120), 0.35, FlashMode::Pulse, FlashEase::Sharp, 0.8, 0.0);
+            }
+            s = st.lock().unwrap();
+        }
+        let _ = did_flip;
+    }
+
+    // ── Weakpoint window: buffed hit on the core damages the boss ──
+    let window_open = { let s = st.lock().unwrap(); s.boss_flare_window_ticks > 0 };
+    if window_open && buffed && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + 320.0).powi(2) {
+        let mut s = st.lock().unwrap();
+        s.boss_hp = (s.boss_hp - 2).max(0);
+        s.buff_hit_flash = 20;
+        let hp = s.boss_hp;
+        drop(s);
+        if hp <= 0 {
+            if let Some(obj) = c.get_game_object_mut("boss") {
+                obj.visible = false;
+                obj.position = (-6000.0, -6000.0);
+            }
+            finish_boss(c, st);
+        }
+    }
+
+    // ── Contact-rule inversion ──
+    {
+        let s = st.lock().unwrap();
+        let touching = !s.dead
+            && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + BOSS_SIZE * 0.5).powi(2);
+        drop(s);
+        if touching {
+            super::hearts::lose_heart(c, st);
+        }
+    }
+}
+
+// ── Magnetar (uses the gravity-well / magnet pull) ───────────────────────────
+
+/// The Magnetar: a single-body boss that pulses a strong gravity attraction,
+/// dragging the player's rope toward it. The player resists by grabbing a
+/// shielded node or letting go and swinging against the pull. While over-charged
+/// (venting) the core is the weakpoint; a buffed hit damages it. Touching the
+/// body costs a heart.
+fn tick_magnetar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active { return; }
+    if s.dead { return; }
+    if s.boss_stasis_active { return; }
+
+    if !s.boss_spawned {
+        s.boss_spawned = true;
+        let name = s.boss_kind.name();
+        drop(s);
+        let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
+        let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (spawn_x, spawn_y);
+            obj.visible = true;
+        }
+        if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+            let sc = c.virtual_scale();
+            if let Some(obj) = c.get_game_object_mut("boss_name_text") {
+                obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                    name, &font, 42.0 * sc, Color(200, 120, 255, 255), 1000.0 * sc,
+                )));
+            }
+        }
+        s = st.lock().unwrap();
+    }
+
+    let px = s.px;
+    let py = s.py;
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    drop(s);
+
+    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+
+    // ── Charge cycle ──
+    // idle (flare_cooldown) → pull window (boss_pull_ticks) → weakpoint window.
+    let mut pulling = false;
+    {
+        let mut s = st.lock().unwrap();
+        if s.boss_flare_window_ticks > 0 {
+            s.boss_flare_window_ticks -= 1;
+        } else if s.boss_pull_ticks > 0 {
+            s.boss_pull_ticks -= 1;
+            pulling = true;
+            if s.boss_pull_ticks == 0 {
+                s.boss_flare_window_ticks = MAGNETAR_WINDOW_TICKS;
+            }
+        } else if s.flare_cooldown == 0 {
+            s.flare_cooldown = MAGNETAR_PULL_INTERVAL;
+            s.boss_pull_ticks = MAGNETAR_PULL_TICKS;
+        } else {
+            s.flare_cooldown -= 1;
+        }
+    }
+
+    // The pull: drag the player toward the boss's core.
+    if pulling {
+        let dx = px - bcx;
+        let dy = py - bcy;
+        let d = (dx * dx + dy * dy).sqrt().max(1.0);
+        let strength = 0.9 * (1.0 - (d / 2600.0).clamp(0.0, 1.0));
+        if strength > 0.01 {
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.momentum.0 -= dx / d * strength;
+                obj.momentum.1 -= dy / d * strength;
+            }
+        }
+    }
+
+    // ── Weakpoint window: buffed hit on the core damages the boss ──
+    let window_open = { let s = st.lock().unwrap(); s.boss_flare_window_ticks > 0 };
+    if window_open && buffed && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + 320.0).powi(2) {
+        let mut s = st.lock().unwrap();
+        s.boss_hp = (s.boss_hp - 2).max(0);
+        s.buff_hit_flash = 20;
+        let hp = s.boss_hp;
+        drop(s);
+        if hp <= 0 {
+            if let Some(obj) = c.get_game_object_mut("boss") {
+                obj.visible = false;
+                obj.position = (-6000.0, -6000.0);
+            }
+            finish_boss(c, st);
+        }
+    }
+
+    // ── Contact-rule inversion ──
+    {
+        let s = st.lock().unwrap();
+        let touching = !s.dead
+            && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + BOSS_SIZE * 0.5).powi(2);
+        drop(s);
+        if touching {
+            super::hearts::lose_heart(c, st);
+        }
+    }
+}
+
+// ── Conductor (rhythm / Resonance) ───────────────────────────────────────────
+
+/// The Conductor: a single-body boss fought to a beat. Releasing your tether
+/// within a few frames of a beat (the release window) earns one stack of
+/// Resonance; at three stacks the weakpoint arms and a buffed hit damages the
+/// boss. Missing a beat costs a stack. Touching the body costs a heart.
+fn tick_conductor(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active { return; }
+    if s.dead { return; }
+    if s.boss_stasis_active { return; }
+
+    if !s.boss_spawned {
+        s.boss_spawned = true;
+        let name = s.boss_kind.name();
+        drop(s);
+        let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
+        let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (spawn_x, spawn_y);
+            obj.visible = true;
+        }
+        if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+            let sc = c.virtual_scale();
+            if let Some(obj) = c.get_game_object_mut("boss_name_text") {
+                obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                    name, &font, 42.0 * sc, Color(90, 220, 200, 255), 1000.0 * sc,
+                )));
+            }
+        }
+        s = st.lock().unwrap();
+        s.boss_beat_ticks = s.boss_beat_interval;
+    }
+
+    let px = s.px;
+    let py = s.py;
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    drop(s);
+
+    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+
+    // Detect a release edge (hooked last tick, free now) and open the window.
+    let mut beat_hit = false;
+    {
+        let mut s = st.lock().unwrap();
+        let hooked = s.hooked;
+        if s.boss_was_hooked && !hooked {
+            s.boss_release_window = CONDUCTOR_RELEASE_WINDOW;
+        }
+        s.boss_was_hooked = hooked;
+        if s.boss_release_window > 0 {
+            s.boss_release_window -= 1;
+        }
+
+        // Advance the beat.
+        if s.boss_beat_ticks > 0 {
+            s.boss_beat_ticks -= 1;
+        }
+        if s.boss_beat_ticks == 0 {
+            // Beat landed. On-beat release → Resonance stack; otherwise lose one.
+            if s.boss_release_window > 0 {
+                s.boss_resonance = (s.boss_resonance + 1).min(CONDUCTOR_RESONANCE_REQUIRED);
+            } else if s.boss_resonance > 0 {
+                s.boss_resonance -= 1;
+            }
+            // Phase two: faster bar once below half HP.
+            let speedup = s.boss_hp <= BOSS_MAX_HP / 2;
+            s.boss_beat_interval = if speedup { 30 } else { 36 };
+            s.boss_beat_ticks = s.boss_beat_interval;
+            // At full Resonance, arm the weakpoint window.
+            if s.boss_resonance >= CONDUCTOR_RESONANCE_REQUIRED {
+                s.boss_flare_window_ticks = 180;
+            }
+            beat_hit = true;
+        }
+    }
+
+    // ── Weakpoint window (armed) → buffed hit damages the boss ──
+    let window_open = { let s = st.lock().unwrap(); s.boss_flare_window_ticks > 0 && s.boss_resonance >= CONDUCTOR_RESONANCE_REQUIRED };
+    if window_open && buffed && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + 320.0).powi(2) {
+        let mut s = st.lock().unwrap();
+        s.boss_hp = (s.boss_hp - 2).max(0);
+        s.buff_hit_flash = 20;
+        s.boss_resonance = 0; // spent: rebuild the stacks.
+        let hp = s.boss_hp;
+        drop(s);
+        if hp <= 0 {
+            if let Some(obj) = c.get_game_object_mut("boss") {
+                obj.visible = false;
+                obj.position = (-6000.0, -6000.0);
+            }
+            finish_boss(c, st);
+        }
+    }
+
+    // ── Contact-rule inversion ──
+    {
+        let s = st.lock().unwrap();
+        let touching = !s.dead
+            && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + BOSS_SIZE * 0.5).powi(2);
+        drop(s);
+        if touching {
+            super::hearts::lose_heart(c, st);
+        }
+    }
+}
+
+// ── Serpent (tetherable chain) ───────────────────────────────────────────────
+
+/// The Serpent: a multi-part boss whose body IS the level. Eight segments trail
+/// the head in a chain; a buffed hit destroys a segment, which shortens + speeds
+/// the body. The head is invulnerable until every segment is gone, then it
+/// detaches and is the only target. Touching a live segment or the head costs a
+/// heart.
+fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut s = st.lock().unwrap();
+    if !s.boss_active { return; }
+    if s.dead { return; }
+    if s.boss_stasis_active { return; }
+
+    if !s.boss_spawned {
+        s.boss_spawned = true;
+        let name = s.boss_kind.name();
+        drop(s);
+        let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
+        let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.position = (spawn_x, spawn_y);
+            obj.visible = true;
+        }
+        if let Ok(font) = Font::from_bytes(include_bytes!("../../../assets/font.ttf")) {
+            let sc = c.virtual_scale();
+            if let Some(obj) = c.get_game_object_mut("boss_name_text") {
+                obj.set_drawable(Box::new(crate::objects::ui_text_spec(
+                    name, &font, 42.0 * sc, Color(130, 255, 170, 255), 1000.0 * sc,
+                )));
+            }
+        }
+        s = st.lock().unwrap();
+    }
+
+    let px = s.px;
+    let py = s.py;
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
+    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    // Advance the serpent's undulation: the same phase drives both the visuals
+    // and the hit-boxes so a segment you see is exactly where it can be hit.
+    s.boss_phase += 0.035;
+    let phase = s.boss_phase;
+    drop(s);
+
+    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+
+    // Reveal the chain of segment visuals (each on its travelling-wave offset).
+    {
+        let s = st.lock().unwrap();
+        for i in 0..s.boss_parts.len() {
+            let alive = s.boss_parts[i].alive;
+            let (ox, oy) = serpent_part_offset(i as f32, phase);
+            let sx = bcx + ox;
+            let sy = bcy + oy;
+            if let Some(obj) = c.get_game_object_mut(&format!("serpent_part_{i}")) {
+                if alive {
+                    obj.position = (sx - 65.0, sy - 65.0);
+                    obj.visible = true;
+                } else {
+                    obj.visible = false;
+                }
+            }
+        }
+    }
+
+    // ── Destroy segments ──
+    let mut seg_positions = Vec::new();
+    let mut hit_seg = false;
+    {
+        let mut s = st.lock().unwrap();
+        for i in 0..s.boss_parts.len() {
+            if !s.boss_parts[i].alive { continue; }
+            // Segment trails behind the head on the same travelling wave.
+            let (ox, oy) = serpent_part_offset(i as f32, phase);
+            let sx = bcx + ox;
+            let sy = bcy + oy;
+            seg_positions.push((sx, sy));
+            // A buffed hit near an exposed segment damages it (the player swings
+            // at the near/exposed face).
+            if buffed && (px - sx).powi(2) + (py - sy).powi(2) < (PLAYER_R + 200.0).powi(2) {
+                let p = &mut s.boss_parts[i];
+                p.hp -= 1;
+                if p.hp <= 0 { p.alive = false; }
+                hit_seg = true;
+            }
+        }
+        if hit_seg {
+            s.buff_hit_flash = 20;
+        }
+    }
+
+    // ── Head is only hittable once every segment is destroyed ──
+    let all_dead = { let s = st.lock().unwrap(); s.boss_parts.iter().all(|p| !p.alive) };
+    if all_dead && buffed && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + 320.0).powi(2) {
+        let mut s = st.lock().unwrap();
+        s.boss_hp = (s.boss_hp - 1).max(0);
+        s.buff_hit_flash = 20;
+    }
+
+    // ── Contact-rule inversion ──
+    {
+        let s = st.lock().unwrap();
+        let mut touching = !s.dead
+            && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + BOSS_SIZE * 0.5).powi(2);
+        if !touching {
+            for (sx, sy) in &seg_positions {
+                if (px - *sx).powi(2) + (py - *sy).powi(2) < (PLAYER_R + 200.0).powi(2) {
+                    touching = true;
+                    break;
+                }
+            }
+        }
+        drop(s);
+        if touching {
+            super::hearts::lose_heart(c, st);
+        }
+    }
+
+    // ── Win when the head is destroyed ──
+    let head_dead = { let s = st.lock().unwrap(); s.boss_hp <= 0 };
+    if head_dead {
+        if let Some(obj) = c.get_game_object_mut("boss") {
+            obj.visible = false;
+            obj.position = (-6000.0, -6000.0);
+        }
+        finish_boss(c, st);
+    }
 }
 
 /// Push a small electricity effect over each buff tether node so they read as
@@ -211,7 +1822,15 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         place_arena(c, index);
         let mut s = st.lock().unwrap();
         s.boss_active = true;
-        s.boss_kind = crate::constants::boss_kind_for_index(index);
+        // A debug override lets the headless harness validate the existing
+        // Sun Devourer fight regardless of which roster slot is being warped to
+        // (once the new bosses land, index 0 is the Colossus).
+        s.boss_kind = if matches!(c.get_var("debug_boss_kind_sundev"), Some(Value::Bool(true))) {
+            crate::constants::BossKind::SunDevourer
+        } else {
+            crate::constants::boss_kind_for_index(index)
+        };
+        s.boss_parts = crate::constants::boss_parts_for_kind(s.boss_kind);
         s.boss_cleared = false;
         s.boss_entry_ticks = 0;
         s.boss_phase = 0.0;
@@ -361,8 +1980,11 @@ fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         spawn_arena_tether_nodes(c, st);
         // Warp the player into the arena with a wormhole-style flash.
         warp_player_into_arena(c, st);
-        // Last-boss set dressing: barrier + generators.
-        spawn_generators_and_barrier(c, st);
+        // Barrier + generators are the Sun Devourer's finale set-dressing only;
+        // no other roster boss gets them.
+        if st.lock().unwrap().boss_kind == crate::constants::BossKind::SunDevourer {
+            spawn_generators_and_barrier(c, st);
+        }
         // Hold the player in a stasis orbit around a safe tether node so they
         // can get their bearings before the battle starts. Tether to a node to
         // begin (see `tick_boss_stasis`).

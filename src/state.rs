@@ -371,6 +371,9 @@ pub struct State {
     pub boss_active: bool,
     /// Which boss the current (or next) fight is; selected from `boss_index`.
     pub boss_kind: crate::constants::BossKind,
+    /// Per-part HP/shield/weakpoint state for multi-part bosses (empty for the
+    /// single-body Sun Devourer, which uses the scalar `boss_hp` path).
+    pub boss_parts: Vec<crate::constants::BossPart>,
     pub boss_entry_ticks: u32,      // counts up after crossing threshold
     pub boss_spawned: bool,         // body object made visible
     pub boss_cleared: bool,         // arena cleared on entry (one-shot)
@@ -413,6 +416,40 @@ pub struct State {
     pub boss_lunge_ticks: u32,
     /// World position the boss is lunging toward.
     pub boss_lunge_target: (f32, f32),
+    /// Flare Titan: remaining ticks of the post-flare weakpoint window (core
+    /// vents; the only window the boss can be hurt, and only with Solar Charge).
+    pub boss_flare_window_ticks: u32,
+    /// Gravity Weaver: countdown to the next world-flip gravity inversion.
+    pub boss_gravity_flip_ticks: u32,
+    /// Magnetar: remaining ticks of the active gravity-pull window.
+    pub boss_pull_ticks: u32,
+    /// Conductor: frames to the next beat of the bar.
+    pub boss_beat_ticks: u32,
+    /// Conductor: frames per beat (BPM-derived).
+    pub boss_beat_interval: u32,
+    /// Conductor: Resonance stacks (release on-beat 3 times to arm the weakpoint).
+    pub boss_resonance: u32,
+    /// Conductor: was the player hooked last tick (release edge detection).
+    pub boss_was_hooked: bool,
+    /// Conductor: frames until a release stops counting as on-beat.
+    pub boss_release_window: u32,
+    /// Colossus pattern director: counted down each tick; while > 0 no part may
+    /// begin a new telegraph, so simultaneous attacks are spaced out.
+    pub boss_pattern_cooldown: u32,
+    /// Colossus: while > 0, the whole body is held still (no sway/bob) after the
+    /// torso summons a meteor burst, until the meteors have fired and cleared.
+    pub boss_meteor_lock_ticks: u32,
+    /// Contact-rule cooldown for the Colossus: after one body-contact heart loss,
+    /// the player gets a short grace before it can trigger again, so lingering on
+    /// the boss cannot drain every heart in a couple of frames.
+    pub boss_contact_cooldown: u32,
+    /// Colossus: after a part is destroyed the whole boss is briefly invulnerable,
+    /// so the player can't chain-kill two parts within the same second.
+    pub boss_part_invuln_ticks: u32,
+    /// Colossus gaze beam: live little explosion pops along the telegraphed path
+    /// (id, x, y, ticks remaining), which grow out of the path line as the beam
+    /// sweeps across it.
+    pub beam_explode_live: Vec<(String, f32, f32, u32)>,
 
     // ── Comets ────────────────────────────────────────────────────────────────
     /// Live comets: (id, vx, vy, ticks_remaining)

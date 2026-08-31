@@ -1181,6 +1181,177 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object("boss", boss_obj);
     }
 
+    // ── Multi-part boss parts (Colossus / Serpent) ───────────────────────
+    // Each multi-part boss has its OWN visual set so they never reuse parts.
+    // Circle visuals, positioned / revealed / tinted by the boss tick at the
+    // part offsets. Hidden so single-body bosses never show them.
+    {
+        // Colossus: 4 bodies (two hands, torso, head), each assembled from
+        // primitives into a single composite silhouette so they read as a hand,
+        // a torso and a head — not a slightly-large circle.
+        const COLOSSUS_COLORS: [(u8, u8, u8); 4] = [
+            (80, 100, 230),   // hand_l
+            (80, 140, 245),   // hand_r
+            (190, 75, 60),    // torso
+            (150, 80, 205),   // head
+        ];
+        for (i, col) in COLOSSUS_COLORS.iter().enumerate() {
+            let name = format!("colossus_part_{i}");
+            let s = colossus_part_size(i as u32);
+            let su = s.round().max(2.0) as u32;
+            let img = match i {
+                0 | 1 => crate::images::colossus_hand(su, *col),
+                2     => crate::images::colossus_torso(su, *col),
+                _     => crate::images::colossus_head(su, *col),
+            };
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (s, s), 0.0), image: img.into(), color: None }),
+                (s, s), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        // Serpent: 8 segments.
+        for i in 0..8 {
+            let name = format!("serpent_part_{i}");
+            let d = 130.0;
+            let img = circle_cached(d as u32, 70, 200, 130);
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: img.into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        // Colossus danger zones: translucent discs that show exactly where each
+        // part's attack will land, for ~1s before it fires. Sized to match the
+        // part's zone radius (hand / torso / head). Hidden until a telegraph.
+        const COLOSSUS_ZONE_RADII: [f32; 4] = [
+            COLOSSUS_HAND_ZONE_R,
+            COLOSSUS_HAND_ZONE_R,
+            COLOSSUS_TORSO_ZONE_R,
+            COLOSSUS_HEAD_ZONE_R,
+        ];
+        for (i, zr) in COLOSSUS_ZONE_RADII.iter().enumerate() {
+            let name = format!("colossus_zone_{i}");
+            let d = (zr * 2.0).round().max(2.0) as u32;
+            let img = crate::images::danger_zone(d / 2, 255, 90, 40);
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (d as f32, d as f32), 0.0), image: img.into(), color: None }),
+                (d as f32, d as f32), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        // Colossus attack paths: translucent red strips showing the trajectory a
+        // part will follow (from where it started the telegraph to its target),
+        // so the player can read and dodge the whole swing, not just the landing
+        // spot. Hidden until a telegraph; resized/rotated each frame in boss.rs.
+        for i in 0..4 {
+            let name = format!("colossus_path_{i}");
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, COLOSSUS_PATH_THICKNESS), 0.0), image: crate::images::solid(255, 40, 30, 90).into(), color: None }),
+                (100.0, COLOSSUS_PATH_THICKNESS), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 1; // behind the parts
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        // Colossus vulnerability rings: bright gold rings that pulse on a part
+        // only while its weakpoint is open, so "you can hit it now" reads at a
+        // glance. Sized per part; follow the part in boss.rs.
+        for i in 0..4 {
+            let name = format!("colossus_vuln_{i}");
+            let r = (colossus_part_size(i as u32) * 0.55).round().max(2.0);
+            let d = (r * 2.0).round().max(2.0) as u32;
+            let ring = gwell_ring_cached(r, 255, 220, 60, GWELL_RING_COUNT, 235.0);
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (d as f32, d as f32), 0.0), image: ring.clone(), color: None }),
+                (d as f32, d as f32), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = 30; // above parts/zones, below the player
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        // Colossus gravity well: a large translucent swirl centred on the head,
+        // shown while its gaze attack winds up/fires. The image is small and
+        // stretched to the object size so the raster stays cheap.
+        {
+            let name = "colossus_well";
+            let well_d = COLOSSUS_GRAVITY_RANGE * 2.0;
+            let img = crate::images::gravity_well_img(400, 140, 90, 220);
+            let mut obj = GameObject::new_rect(ctx, name.into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (well_d, well_d), 0.0), image: img.into(), color: None }),
+                (well_d, well_d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = 28; // under the parts, so the well reads as a ground zone
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(name, obj);
+        }
+        // Boss arena boundary walls: translucent barriers marking the left/right
+        // edges and floor of the fight so the player can see the play area
+        // limits. Positioned/sized per-tick in boss.rs.
+        {
+            let wall_th = 140.0;
+            let wall_h = 4800.0;
+            let wall_img = crate::images::solid(120, 170, 255, 90);
+            for name in ["arena_wall_l", "arena_wall_r"] {
+                let mut obj = GameObject::new_rect(ctx, name.into(),
+                    Some(Image { shape: ShapeType::Rectangle(0.0, (wall_th, wall_h), 0.0), image: wall_img.clone().into(), color: None }),
+                    (wall_th, wall_h), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = 19; // behind the boss parts / player
+                obj.gravity = 0.0;
+                obj.visible = false;
+                obj.set_glow(GlowConfig { color: Color(120, 170, 255, 120), width: 26.0 });
+                scene = scene.with_object(name, obj);
+            }
+        }
+        // Gaze-beam charge orb + bright core (the head attack). The charge orb
+        // grows at the head while it winds up; the bright core is the beam
+        // itself, travelling along the telegraphed path when it fires.
+        {
+            let cr = 120.0;
+            let img = circle_cached(cr as u32, 255, 240, 140);
+            let mut charge = GameObject::new_rect(ctx, "colossus_charge".into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (cr * 2.0, cr * 2.0), 0.0), image: img.into(), color: None }),
+                (cr * 2.0, cr * 2.0), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            charge.layer = 30;
+            charge.gravity = 0.0;
+            charge.visible = false;
+            charge.set_glow(GlowConfig { color: Color(255, 240, 140, 255), width: 40.0 });
+            scene = scene.with_object("colossus_charge", charge);
+
+            let core_th = 28.0;
+            let mut core = GameObject::new_rect(ctx, "colossus_beam_core".into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, core_th), 0.0), image: crate::images::solid(255, 250, 200, 235).into(), color: None }),
+                (100.0, core_th), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            core.layer = 31; // just above the path field
+            core.gravity = 0.0;
+            core.visible = false;
+            core.set_glow(GlowConfig { color: Color(255, 250, 200, 200), width: 30.0 });
+            scene = scene.with_object("colossus_beam_core", core);
+
+            // Little contact explosions along the beam's path: small bright
+            // circles that quickly grow a few sizes as the beam sweeps across.
+            for i in 0..8 {
+                let name = format!("colossus_beam_explode_{i}");
+                let er = 40.0;
+                let img = circle_cached(er as u32, 255, 160, 60);
+                let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                    Some(Image { shape: ShapeType::Ellipse(0.0, (er * 2.0, er * 2.0), 0.0), image: img.into(), color: None }),
+                    (er * 2.0, er * 2.0), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = 31;
+                obj.gravity = 0.0;
+                obj.visible = false;
+                obj.set_glow(GlowConfig { color: Color(255, 170, 70, 255), width: 26.0 });
+                scene = scene.with_object(&name, obj);
+            }
+        }
+    }
+
     // ── Boss weakpoint markers ────────────────────────────────────────────
     // Bright gold rings drawn on top of the purple body so weakpoints are
     // obvious during a playtest. Follow the boss in boss.rs.

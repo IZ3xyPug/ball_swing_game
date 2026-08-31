@@ -195,6 +195,7 @@ fn update_settings_text(c: &mut Canvas) {
 }
 
 fn hide_pause_ui(c: &mut Canvas) {
+    c.set_var("pause_menu_open", false);
     for name in ["pause_overlay", "pause_title",
                  "pause_resume_btn", "pause_restart_btn",
                  "pause_settings_btn", "pause_menu_btn",
@@ -705,6 +706,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // initialise them here to avoid a get_bool missing-key panic.
             canvas.set_var("pause_came_from_stasis", false);
             canvas.set_var("rope_visible_at_pause", false);
+            canvas.set_var("pause_menu_open", false);
             canvas.set_var("manual_flip_queued", false);
             canvas.set_var("mouse_grab_queued", false);
             canvas.set_var("mouse_release_queued", false);
@@ -915,6 +917,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 cannon_fast_travel_grace: 0,
                 boss_active:       false,
                 boss_kind:         crate::constants::boss_kind_for_index(0),
+                boss_parts:        Vec::new(),
                 boss_entry_ticks:  0, boss_spawned:      false,
                 boss_cleared:      false, boss_hp:           crate::constants::BOSS_MAX_HP,
                 boss_approach_nodes_spawned: false,
@@ -929,6 +932,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_barrier_up:    true, boss_final_phase: false,
                 boss_lunge_telegraph: BOSS_LUNGE_TELEGRAPH, boss_lunge_ticks: 0,
                 boss_lunge_target:  (0.0, 0.0),
+                boss_flare_window_ticks: 0,
+                boss_gravity_flip_ticks: 0,
+                boss_pull_ticks: 0,
+                boss_beat_ticks: 0, boss_beat_interval: 36, boss_resonance: 0,
+                boss_was_hooked: false, boss_release_window: 0,
+                boss_pattern_cooldown: 0,
+                boss_meteor_lock_ticks: 0,
+                boss_contact_cooldown: 0,
+                boss_part_invuln_ticks: 0,
+                beam_explode_live: Vec::new(),
 
                 comet_live:        Vec::new(), comet_free:        comet_free.clone(),
 
@@ -1425,7 +1438,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     canvas.on_mouse_move({
                         move |c, pos| {
                             if !c.is_scene("game") { return; }
-                            if !c.get_bool("game_paused") {
+                            // Only the full pause menu is clickable; a soft-pause
+                            // stasis (boss orbit, respawn, hold-space) must not
+                            // let you hit invisible buttons.
+                            if !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) {
                                 return;
                             }
 
@@ -1504,7 +1520,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     canvas.on_mouse_press(move |c, btn, pos| {
                         if btn != MouseButton::Left { return; }
                         if !c.is_scene("game") { return; }
-                        if !c.get_bool("game_paused") {
+                        // Only the full pause menu is clickable; a soft-pause
+                        // stasis must not let you hit invisible buttons.
+                        if !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) {
                             return;
                         }
 
@@ -1738,6 +1756,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 }
                                 c.set_var("pause_animating", false);
                                 c.set_var("game_paused", true);
+                                c.set_var("pause_menu_open", true);
                                 // The pause menu must not be dimmed by a boss
                                 // darkness phase; restore full brightness.
                                 if c.has_lighting() {
