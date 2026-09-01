@@ -208,11 +208,42 @@ pub(crate) fn beam_point(start: (f32, f32), end: (f32, f32), curve: f32, t: f32)
 
 /// Sample the beam from the head out to `t_max` as a polyline.
 pub(crate) fn beam_polyline(start: (f32, f32), end: (f32, f32), curve: f32, t_max: f32) -> Vec<(f32, f32)> {
+    beam_polyline_range(start, end, curve, 0.0, t_max)
+}
+
+/// The beam between two parameters along it. `t0 == 0.0` is the head, `t1 ==
+/// 1.0` the far end.
+///
+/// The telegraph uses this to draw only the stretch AHEAD of the sweep: the
+/// part already passed is covered by the bright core, so drawing the full ray
+/// under it was a second full-length translucent quad for nothing. It also
+/// reads better — the telegraph is "where this is about to reach", and it is
+/// consumed as the beam travels.
+pub(crate) fn beam_polyline_range(
+    start: (f32, f32),
+    end: (f32, f32),
+    curve: f32,
+    t0: f32,
+    t1: f32,
+) -> Vec<(f32, f32)> {
+    let (t0, t1) = (t0.clamp(0.0, 1.0), t1.clamp(0.0, 1.0));
+    if t1 <= t0 {
+        return Vec::new();
+    }
+    // A straight beam is exactly one quad, whatever range of it is drawn.
+    if curve.abs() < 0.0001 {
+        return vec![
+            beam_point(start, end, 0.0, t0),
+            beam_point(start, end, 0.0, t1),
+        ];
+    }
     let n = COLOSSUS_BEAM_SEGMENTS;
     (0..=n)
-        .map(|i| beam_point(start, end, curve, t_max * i as f32 / n as f32))
+        .map(|i| beam_point(start, end, curve, t0 + (t1 - t0) * i as f32 / n as f32))
         .collect()
 }
+
+
 
 /// Distance from `p` to the beam, as drawn. Segment-wise against the same
 /// polyline the renderer uses, so a curved beam damages where it looks like it
@@ -700,6 +731,9 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 s.boss_parts[i].weakpoint_open = false;
                 s.boss_parts[i].state = PartState::Idle;
                 s.boss_parts[i].state_ticks = 0;
+                // Cleared here as well as on the next telegraph: the frame a
+                // shield drops is exactly the frame this must not be set.
+                s.boss_parts[i].post_attack = false;
                 frames.push(PartFrame {
                     id: pid, alive: true, shielded: true, weak_open: false,
                     offset: home, state_ticks: 0, zone_visible: false, zone_solid: false,
@@ -768,6 +802,7 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         if cooldown_ok && p.state_ticks >= colossus_idle_len(i) {
                             p.state = PartState::Telegraph;
                             p.state_ticks = 0;
+                            p.post_attack = false;
                             // Commit the torso to its next attack here, not at
                             // the strike: the wind-up, the pose, the hit and the
                             // vulnerability window all have to agree about which
@@ -855,6 +890,8 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         if p.state_ticks >= duration {
                             p.state = PartState::Recover;
                             p.state_ticks = 0;
+                            // The window that follows belongs to THIS attack.
+                            p.post_attack = true;
                         }
                     }
                     PartState::Recover => {
@@ -1003,7 +1040,9 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             PartState::Attack => p.state_ticks >= COLOSSUS_VENT_VULN_DELAY,
                             PartState::Recover => p.state_ticks < COLOSSUS_VENT_VULN_AFTER,
                             PartState::Idle => {
-                                COLOSSUS_RECOVER_TICKS + p.state_ticks < COLOSSUS_VENT_VULN_AFTER
+                                p.post_attack
+                                    && COLOSSUS_RECOVER_TICKS + p.state_ticks
+                                        < COLOSSUS_VENT_VULN_AFTER
                             }
                             _ => false,
                         }
@@ -1015,12 +1054,14 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         // the reward for reading a clap should be a clean window
                         // at a known place, not a scramble to the middle of the
                         // arena with everything else still live.
-                        p.state == PartState::Idle && p.state_ticks < COLOSSUS_CLAP_VULN_AFTER
+                        p.post_attack
+                            && p.state == PartState::Idle
+                            && p.state_ticks < COLOSSUS_CLAP_VULN_AFTER
                     } else {
                         match p.state {
                             PartState::Attack => p.state_ticks >= arrival + COLOSSUS_ATTACK_VULN_DELAY,
                             PartState::Recover => true,
-                            PartState::Idle => p.state_ticks < vuln_after,
+                            PartState::Idle => p.post_attack && p.state_ticks < vuln_after,
                             _ => false,
                         }
                     }
@@ -1031,7 +1072,12 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                                 && p.state_ticks >= arrival + COLOSSUS_ATTACK_VULN_DELAY
                         }
                         PartState::Recover => true,
-                        PartState::Idle => p.state_ticks < vuln_after,
+                        // `post_attack` is what stops a part being wide open the
+                        // instant its shield drops. The head unshields when the
+                        // torso dies and lands in Idle at tick 0, which matched
+                        // this window exactly — so it could be killed on the
+                        // spot without ever attacking.
+                        PartState::Idle => p.post_attack && p.state_ticks < vuln_after,
                         _ => false,
                     }
                 };
@@ -1113,12 +1159,18 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // from where it started the telegraph to where it will strike.
             let (path_visible, path_start) = {
                 let p = &s.boss_parts[i];
-                // The head's beam stays visible through the whole wind-up AND
-                // while it fires (so you can read the full path). Hands + torso
-                // only show the path during the wind-up.
+                // The head shows its path through the wind-up and while a beam
+                // is actually sweeping — but NOT in the gap between beams of a
+                // burst. During the gap the path still describes the PREVIOUS
+                // shot (the next one is re-aimed when it starts), so leaving it
+                // up both lies about where the next beam goes and keeps a
+                // full-length translucent quad on screen for half a second per
+                // shot. The charge orb covers the "recharging" read.
+                let head_showing = p.id == "head"
+                    && (p.state == PartState::Telegraph || beam_t.is_some());
                 (!torso_frame
-                 && (p.state == PartState::Telegraph
-                     || (p.id == "head" && p.state == PartState::Attack)),
+                 && (head_showing
+                     || (p.id != "head" && p.state == PartState::Telegraph)),
                  p.path_start)
             };
             let mut strike_unhook = false;
@@ -1292,10 +1344,13 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             i += 1;
                         }
                         // Spawn a new pop at the beam front every few ticks.
-                        if f.state_ticks % 3 == 0 {
+                        // Every 3 kept up to 8 large glowing circles alive at
+                        // once over the beam, which is a lot of overdraw on top
+                        // of an already-large beam.
+                        if f.state_ticks % 6 == 0 {
                             let live_ids: Vec<&String> =
                                 s.beam_explode_live.iter().map(|(id, _, _, _)| id).collect();
-                            let free = (0..8)
+                            let free = (0..COLOSSUS_BEAM_EXPLODE_MAX_LIVE)
                                 .map(|i| format!("colossus_beam_explode_{i}"))
                                 .find(|id| !live_ids.contains(&id));
                             if let Some(id) = free {
@@ -1407,8 +1462,19 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // the whole wind-up and while the beam sweeps, so the player can
             // read the full arc before it is dangerous.
             if f.alive && f.path_visible {
-                let pts = beam_polyline(f.path_start, f.zone_pos, f.beam_curve, 1.0);
-                draw_beam_strip(c, "colossus_beam_tel", &pts, COLOSSUS_BEAM_THICKNESS);
+                // Only the stretch still AHEAD of the sweep. Behind the front
+                // the bright core already covers the same ground, so drawing
+                // the full ray underneath was a second full-length translucent
+                // quad buying nothing.
+                let ahead_from = f.beam_t.unwrap_or(0.0);
+                let pts = beam_polyline_range(
+                    f.path_start, f.zone_pos, f.beam_curve, ahead_from, 1.0,
+                );
+                if pts.len() >= 2 {
+                    draw_beam_strip(c, "colossus_beam_tel", &pts, COLOSSUS_BEAM_THICKNESS);
+                } else {
+                    hide_beam_strip(c, "colossus_beam_tel");
+                }
             } else {
                 hide_beam_strip(c, "colossus_beam_tel");
             }
@@ -2306,10 +2372,8 @@ fn tick_buff_node_elec(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for id in &candidates {
         let Some(obj) = c.get_game_object(id) else { continue; };
         if !obj.visible || !obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) { continue; }
-        let cx = obj.position.0 + obj.size.0 * 0.5;
-        let cy = obj.position.1 + obj.size.1 * 0.5;
         super::fx::attach_electric_fx(
-            c, id, (cx, cy),
+            c, id,
             (HOOK_R * 2.6, HOOK_R * 2.6),
             (0.6, 0.95, 1.0, 0.7),
         );

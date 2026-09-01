@@ -271,11 +271,39 @@ fn tick_flare_state(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// able to plan a route toward shelter two nodes ahead, which they cannot do if
 /// the shelter only announces itself once the telegraph starts.
 fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (phase, hooks, px, py, sheltered, ticks) = {
+    // Release first, and unconditionally.
+    //
+    // An attached effect lives on its object until something clears it, and
+    // this function returns early in three states — space mode, a boss fight,
+    // death. Releasing only on the normal path meant any node still wearing a
+    // dome when a fight started kept it forever; the node then went back to the
+    // pool, was recycled somewhere else, and drew a shelter dome around
+    // whatever it had become. That is the ghost ring: a pooled object carrying
+    // state from a previous life, which is the failure this pool has produced
+    // before.
+    let bail = {
         let s = st.lock().unwrap();
-        if s.in_space_mode || s.boss_active || s.dead {
-            return;
+        s.in_space_mode || s.boss_active || s.dead
+    };
+    if bail {
+        let (stale, had_player) = {
+            let mut s = st.lock().unwrap();
+            (std::mem::take(&mut s.shield_fx_attached), std::mem::take(&mut s.shield_player_fx))
+        };
+        for id in stale {
+            fx::clear_object_fx(c, &id);
         }
+        // Only if the shelter dome was the one using it. The buff aura shares
+        // the player's single slot, and a boss fight is exactly when the buff
+        // is up — clearing unconditionally here would erase it every frame.
+        if had_player {
+            fx::clear_object_fx(c, "player");
+        }
+        return;
+    }
+
+    let (phase, hooks, px, py, sheltered, ticks, previously_shielded, buffed) = {
+        let s = st.lock().unwrap();
         (
             flare_phase(&s),
             s.live_hooks.clone(),
@@ -283,11 +311,16 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.py,
             player_is_sheltered(c, &s),
             s.ticks,
+            s.shield_fx_attached.clone(),
+            s.player_buff > 0,
         )
     };
+    let mut shielded_now: Vec<String> = Vec::new();
 
     // Domes brighten as the threat rises so the same object carries "shelter is
     // here" and "shelter is needed now" without a second visual language.
+    // Idle still draws the faint "this is shelter" marker, so domes stay
+    // attached; the release below is what handles nodes that stop qualifying.
     let (base_a, pulse_a) = match phase {
         FlarePhase::Idle => (0.16, 0.05),
         FlarePhase::Warning => (0.42, 0.22),
@@ -310,15 +343,29 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             continue;
         }
         let d = FLARE_SHIELD_RADIUS * 2.0;
-        fx::push_mega_fx(
+        // Attached rather than pushed so the dome takes the NODE's depth and
+        // is occluded by what occludes the node. The coordinates are converted
+        // exactly as before.
+        let _ = (hx, hy); // only used for the cull above
+        fx::attach_mega_fx(
             c,
+            id,
             crate::images::shield_dome_img(),
-            (hx, hy),
             (d, d),
             (1.0, 0.86, 0.42, alpha),
+            [0; 4],
             0,
         );
+        shielded_now.push(id.clone());
     }
+    // Attached sprites persist until cleared, so a node that stopped being a
+    // shelter has to be released explicitly.
+    for id in previously_shielded {
+        if !shielded_now.contains(&id) {
+            fx::clear_object_fx(c, &id);
+        }
+    }
+    st.lock().unwrap().shield_fx_attached = shielded_now;
 
     // The player's own shield while tethered to shelter: a full bubble, drawn
     // by the dedicated energy-dome effect rather than the forward-facing
@@ -326,12 +373,22 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // protection).
     if sheltered {
         let d = PLAYER_R * 2.0 * 2.6;
-        fx::push_energy_dome_fx(
+        fx::attach_mega_fx(
             c,
-            (px, py),
+            "player",
+            fx::flat_white(),
             (d, d),
             (0.55, 0.85, 1.0, 0.85),
+            [MEGA_BIT_ENERGY_DOME, 0, 0, 0],
+            1,
         );
+        st.lock().unwrap().shield_player_fx = true;
+    } else {
+        // The buff aura shares this slot, so only release what we attached.
+        let had_player = std::mem::take(&mut st.lock().unwrap().shield_player_fx);
+        if had_player && !buffed {
+            fx::clear_object_fx(c, "player");
+        }
     }
 }
 

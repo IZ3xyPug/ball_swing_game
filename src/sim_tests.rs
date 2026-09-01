@@ -1464,3 +1464,132 @@ fn a_lone_hand_never_claps() {
     // With both hands present the alternation is untouched.
     assert!((1..=8).any(|n| chosen(n, true) == HandAttack::Clap));
 }
+
+// ── Beam cost ────────────────────────────────────────────────────────────────
+
+#[test]
+fn a_straight_beam_is_drawn_as_one_quad() {
+    use crate::scenes::game::boss::beam_polyline;
+    // Half of all beams are straight, and subdividing one into
+    // COLOSSUS_BEAM_SEGMENTS produced that many large alpha-blended rectangles
+    // where one has the identical shape. The gaze attack's frame cost was fill,
+    // not CPU, so this is the difference that matters.
+    let a = (0.0, 0.0);
+    let b = (COLOSSUS_BEAM_LENGTH, 0.0);
+
+    let straight = beam_polyline(a, b, 0.0, 1.0);
+    assert_eq!(straight.len(), 2, "a straight beam should need one segment");
+    assert!((straight[1].0 - b.0).abs() < 0.01, "and still reach its endpoint");
+
+    // A partial sweep still ends at the front, not at the full length.
+    let half = beam_polyline(a, b, 0.0, 0.5);
+    assert_eq!(half.len(), 2);
+    assert!((half[1].0 - COLOSSUS_BEAM_LENGTH * 0.5).abs() < 0.01);
+
+    // A curved beam still gets the subdivision it actually needs.
+    let curved = beam_polyline(a, b, COLOSSUS_BEAM_CURVE_MAX, 1.0);
+    assert_eq!(curved.len(), COLOSSUS_BEAM_SEGMENTS + 1);
+}
+
+#[test]
+fn the_telegraph_only_draws_what_is_still_ahead() {
+    use crate::scenes::game::boss::beam_polyline_range;
+    let a = (0.0, 0.0);
+    let b = (COLOSSUS_BEAM_LENGTH, 0.0);
+
+    // Before the beam fires, the whole ray is ahead.
+    let full = beam_polyline_range(a, b, 0.0, 0.0, 1.0);
+    assert!((full[0].0 - 0.0).abs() < 0.01 && (full[1].0 - b.0).abs() < 0.01);
+
+    // Half way through the sweep, only the far half is drawn — the near half is
+    // already covered by the bright core, so drawing it again is pure overdraw.
+    let ahead = beam_polyline_range(a, b, 0.0, 0.5, 1.0);
+    assert_eq!(ahead.len(), 2);
+    assert!(
+        (ahead[0].0 - COLOSSUS_BEAM_LENGTH * 0.5).abs() < 0.01,
+        "the telegraph should start at the beam front, not at the head"
+    );
+    assert!((ahead[1].0 - b.0).abs() < 0.01, "and still run to the far end");
+
+    // Fully swept: nothing left to telegraph.
+    assert!(beam_polyline_range(a, b, 0.0, 1.0, 1.0).is_empty());
+    assert!(beam_polyline_range(a, b, 0.0, 0.8, 0.3).is_empty(), "an inverted range draws nothing");
+
+    // A curved beam keeps its subdivision, and still starts at the front.
+    let curved = beam_polyline_range(a, b, COLOSSUS_BEAM_CURVE_MAX, 0.5, 1.0);
+    assert_eq!(curved.len(), COLOSSUS_BEAM_SEGMENTS + 1);
+    assert!(curved[0].0 > COLOSSUS_BEAM_LENGTH * 0.3, "curved telegraph starts at the front too");
+}
+
+#[test]
+fn beam_explosions_stay_smaller_than_the_beam() {
+    // Pops larger than the beam, eight at a time, over an already-translucent
+    // beam, is most of a frame's fill spent on decoration.
+    assert!(
+        COLOSSUS_BEAM_EXPLODE_R1 * 2.0 < COLOSSUS_BEAM_THICKNESS * 2.5,
+        "a contact explosion is far wider than the beam it belongs to"
+    );
+    assert!(COLOSSUS_BEAM_EXPLODE_R0 < COLOSSUS_BEAM_EXPLODE_R1, "pops should grow");
+    assert!(
+        COLOSSUS_BEAM_EXPLODE_MAX_LIVE <= 4,
+        "too many concurrent pops; this is the fill-heaviest part of the attack"
+    );
+}
+
+// ── Phase gating ─────────────────────────────────────────────────────────────
+
+#[test]
+fn a_part_is_not_vulnerable_the_moment_its_shield_drops() {
+    // Every post-attack window is "Idle, and fewer than N ticks in". A shielded
+    // part is pinned to Idle at tick 0 every frame, so the instant its shield
+    // dropped — when the part it depended on was destroyed — it matched that
+    // condition exactly and was fully open without ever having attacked. The
+    // head died on arrival right after the torso; the torso did the same after
+    // the hands. `post_attack` is what separates the two cases.
+    let open = |post_attack: bool, state: &str, t: u32, window: u32| match state {
+        "idle" => post_attack && t < window,
+        "recover" => true,
+        _ => false,
+    };
+
+    for (name, window) in [
+        ("head", COLOSSUS_HEAD_VULN_AFTER),
+        ("hand", COLOSSUS_VULN_AFTER_TICKS),
+        ("clap", COLOSSUS_CLAP_VULN_AFTER),
+    ] {
+        // Freshly unshielded: Idle, tick 0, never attacked.
+        assert!(
+            !open(false, "idle", 0, window),
+            "{name} is hittable the instant it becomes active"
+        );
+        assert!(!open(false, "idle", window / 2, window), "{name} stays shut until it attacks");
+        // Having actually finished an attack, the window works as intended.
+        assert!(open(true, "idle", 0, window), "{name} should open after its own attack");
+        assert!(open(true, "idle", window - 1, window));
+        assert!(!open(true, "idle", window, window), "{name} window must still close");
+    }
+
+    // The vent's window is counted from the end of the vent, so it spans the
+    // recovery — the same gate has to apply to its idle tail.
+    let vent_idle = |post_attack: bool, t: u32| {
+        post_attack && COLOSSUS_RECOVER_TICKS + t < COLOSSUS_VENT_VULN_AFTER
+    };
+    assert!(!vent_idle(false, 0), "the torso is hittable the instant both hands die");
+    assert!(vent_idle(true, 0), "and open after a real vent");
+}
+
+#[test]
+fn a_new_part_still_gets_to_attack_before_it_can_be_hurt() {
+    // The gate must not make a part permanently invulnerable: it clears when an
+    // attack begins and is set when one ends, so the first window arrives one
+    // full attack cycle after the shield drops.
+    let idle_len = crate::scenes::game::boss::colossus_idle_len(3);
+    assert!(idle_len > 0, "a newly active part must still reach its telegraph");
+    // The head's cycle: idle -> telegraph -> burst -> recover, then the window.
+    let burst = COLOSSUS_BEAM_SHOTS_MIN * (COLOSSUS_BEAM_TICKS + COLOSSUS_BEAM_GAP_TICKS);
+    let to_first_window = idle_len + COLOSSUS_TELEGRAPH_TICKS + burst;
+    assert!(
+        to_first_window > COLOSSUS_PART_INVULN_TICKS,
+        "the shield-drop grace should be the FSM's own cycle, not just the kill cooldown"
+    );
+}

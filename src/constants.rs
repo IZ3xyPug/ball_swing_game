@@ -771,6 +771,20 @@ pub struct BossPart {
     /// Head gaze beam: lateral bow of the CURRENT beam, as a fraction of its
     /// length. Zero for a straight beam. Re-rolled per shot.
     pub beam_curve:     f32,
+    /// Whether this part has FINISHED an attack and is in the window that
+    /// follows it.
+    ///
+    /// Every part's post-attack window is expressed as "Idle, and fewer than N
+    /// ticks in". A shielded part is pinned to `Idle` with `state_ticks == 0`
+    /// every frame, so the instant its shield dropped — the moment the part it
+    /// depended on was destroyed — it matched that condition exactly and was
+    /// fully vulnerable without ever having attacked. The head could be killed
+    /// on arrival, straight after the torso, and the same was true of the torso
+    /// after the hands.
+    ///
+    /// Set when an attack ends, cleared when the next one begins and whenever
+    /// the part is shielded, so the window can only ever follow a real attack.
+    pub post_attack:    bool,
 }
 
 impl BossPart {
@@ -791,6 +805,7 @@ impl BossPart {
             beam_hit_done: false,
             beam_shots: COLOSSUS_BEAM_SHOTS_MIN,
             beam_curve: 0.0,
+            post_attack: false,
         }
     }
 
@@ -1079,8 +1094,15 @@ pub const COLOSSUS_BEAM_EXPLODE_TTL: u32 = 14;
 /// width. Pops sized for the old 60px strip looked like sparks beside a beam
 /// four times as wide; these are proportional, so the explosions read as the
 /// beam detonating rather than as unrelated debris.
-pub const COLOSSUS_BEAM_EXPLODE_R0: f32 = COLOSSUS_BEAM_THICKNESS * 0.42;
-pub const COLOSSUS_BEAM_EXPLODE_R1: f32 = COLOSSUS_BEAM_THICKNESS * 2.1;
+///
+/// Kept close to the beam's own width. At 2.1x the pops were each larger than
+/// the beam and there were eight of them alive at once, so most of the frame's
+/// fill was spent on translucent circles over an already-translucent beam —
+/// which is where the gaze attack's frame cost was going.
+pub const COLOSSUS_BEAM_EXPLODE_R0: f32 = COLOSSUS_BEAM_THICKNESS * 0.32;
+pub const COLOSSUS_BEAM_EXPLODE_R1: f32 = COLOSSUS_BEAM_THICKNESS * 1.15;
+/// Concurrent contact explosions. The pool is 8; this caps how many are used.
+pub const COLOSSUS_BEAM_EXPLODE_MAX_LIVE: usize = 4;
 /// Danger-zone radii per part id (where the attack actually lands). The zone
 /// marker is drawn with exactly this radius during the telegraph. Sized to the
 /// doubled body parts.
@@ -1472,17 +1494,22 @@ pub const C_FLARE_ACTIVE: (u8, u8, u8, u8) = (255, 226, 150, 150);
 /// Matches `BIT_ENERGY_DOME` in `wgpu_canvas`'s `animated_vfx.wgsl`.
 pub const MEGA_BIT_ENERGY_DOME: u32 = 1 << 20;
 
-/// Depth key for a mega-shader sprite pushed through `push_mega_sprite`.
+/// Placeholder for `MegaShaderInstance::z_index`, which the RENDERER assigns.
 ///
-/// The mega pass runs after every other renderer, and `u16::MAX` is the "in
-/// front of the whole scene" key — correct for a screen-space overlay such as
-/// the player's own buff dome, which must never be hidden by scenery.
+/// The value set here never reaches the GPU: `Renderer::prepare` overwrites it
+/// with the sprite's index in the draw list, because culling makes that index
+/// unknowable from here. The field is not an author knob, and treating it as
+/// one is how the first attempt at this failed — the docs claimed the object's
+/// depth decided while nothing made that true, so the sprite carried `u16::MAX`
+/// and drew on top exactly as before.
 ///
-/// An effect that belongs to a WORLD object does not want this: it wants to be
-/// occluded by whatever is in front of that object. Use
-/// `fx::attach_electric_fx` for those, which hangs the sprite off the object so
-/// it inherits the object's layer and depth instead of this constant.
-pub const MEGA_Z_OVERLAY: u16 = u16::MAX;
+/// What DOES decide is where the item is emitted:
+///   * `fx::push_*`   -> after every object, i.e. an overlay on top of the
+///                       scene. Right for the player's own buff dome.
+///   * `fx::attach_*` -> from the object's own draw, i.e. at that object's
+///                       depth. Right for an aura that belongs to a node, so
+///                       anything in front of the node covers it too.
+pub const MEGA_Z_PLACEHOLDER: u16 = 0;
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 650;

@@ -15,23 +15,25 @@ pub fn register_mega_shader(c: &mut Canvas, id: &str, label: &str, wgsl: &str) {
     c.register_shader_source(id, label, wgsl);
 }
 
-/// Convert a world-space centre + size into the UV (0..1) screen space the mega
-/// shader renderer projects sprites in. The renderer's `prepare` uses a fixed
-/// `ortho(0,1)` camera, so sprites must be submitted in UV coordinates; this
-/// maps a world position through the active scene camera. Falls back to passing
-/// the values through when no camera is active.
+/// Convert a world-space centre + size into the UV (0..1) space the mega shader
+/// renderer projects sprites in.
+///
+/// Delegates to `Canvas::world_to_mega_uv`. This used to be done here, as
+/// `(world - cam.position) * cam.zoom / VW` — which is only correct when the
+/// window happens to be exactly VW x VH with no letterboxing. It dropped the
+/// virtual-resolution scale, the letterbox padding, the camera shake and the
+/// zoom punch, and normalised by the VIRTUAL size rather than the real
+/// framebuffer. The error is proportional to distance from the camera centre,
+/// so effects looked aligned in the middle of the screen and drifted off the
+/// objects they belonged to toward the edges.
+///
+/// The engine owns every one of those terms, so the conversion belongs there.
 pub fn world_to_mega_uv(
     c: &Canvas,
     pos: (f32, f32),
     scale: (f32, f32),
 ) -> ((f32, f32), (f32, f32)) {
-    if let Some(cam) = c.camera() {
-        let z = cam.zoom.max(0.01);
-        let (sx, sy) = cam.world_to_screen(pos);
-        ((sx / VW, sy / VH), (scale.0 * z / VW, scale.1 * z / VH))
-    } else {
-        (pos, scale)
-    }
+    c.world_to_mega_uv(pos, scale)
 }
 
 /// Queue a mega-shader sprite for this frame.
@@ -61,7 +63,7 @@ pub fn push_mega_fx(
             tint_color: tint,
             bitmask: [0; 4],
             velocity: (0.0, 0.0),
-            z_index: MEGA_Z_OVERLAY,
+            z_index: MEGA_Z_PLACEHOLDER,
         },
         shader_variant: variant,
     };
@@ -95,7 +97,7 @@ pub fn push_electric_fx(
             // BIT_ELECTRICITY = 1 << 2 (see animated_vfx.wgsl).
             bitmask: [1 << 2, 0, 0, 0],
             velocity: (0.0, 0.0),
-            z_index: MEGA_Z_OVERLAY,
+            z_index: MEGA_Z_PLACEHOLDER,
         },
         shader_variant: 1,
     };
@@ -124,7 +126,7 @@ pub fn push_energy_dome_fx(
             tint_color: tint,
             bitmask: [MEGA_BIT_ENERGY_DOME, 0, 0, 0],
             velocity: (0.0, 0.0),
-            z_index: MEGA_Z_OVERLAY,
+            z_index: MEGA_Z_PLACEHOLDER,
         },
         shader_variant: 1,
     };
@@ -146,6 +148,12 @@ pub fn push_energy_dome_fx(
 // after culling, with no index to guess. Anything on a higher layer occludes
 // it, exactly as it occludes the object itself.
 //
+// Both halves are needed and the first attempt shipped only one: the renderer
+// has to take the sprite's depth FROM the item's place in the draw list, and
+// pushed sprites have to be emitted after every child so they still land on
+// top. Without the first, the item's position is decorative and every effect
+// draws over the scene regardless of where it was emitted.
+//
 // Sprites attached this way persist until cleared, unlike pushed ones (which
 // are drained every frame), so a system that attaches must also detach.
 
@@ -155,28 +163,57 @@ pub fn push_energy_dome_fx(
 pub fn attach_electric_fx(
     c: &mut Canvas,
     object_id: &str,
-    pos: (f32, f32),
     scale: (f32, f32),
     tint: (f32, f32, f32, f32),
 ) {
-    let ((u, v), (su, sv)) = world_to_mega_uv(c, pos, scale);
+    // BIT_ELECTRICITY = 1 << 2 (see animated_vfx.wgsl).
+    attach_mega_fx(c, object_id, flat_white(), scale, tint, [1 << 2, 0, 0, 0], 1);
+}
+
+/// Attach any mega effect to `object_id`, drawn at that object's own depth and
+/// exactly on its rectangle.
+///
+/// `scale` is a WORLD size; the object converts it with its own transform.
+/// Prefer this over `push_*` for anything anchored to a world object — the
+/// pushed path has to reconstruct the world -> screen transform from outside
+/// the engine, and every version of that reconstruction so far has been subtly
+/// wrong in a way that only shows up away from the centre of the screen.
+pub fn attach_mega_fx(
+    c: &mut Canvas,
+    object_id: &str,
+    image: Arc<image::RgbaImage>,
+    scale: (f32, f32),
+    tint: (f32, f32, f32, f32),
+    bitmask: [u32; 4],
+    variant: u32,
+) {
+    // NO conversion here, and no position. `scale` is a WORLD size, and the
+    // engine resolves both the position and the scale every frame from the
+    // object's live centre, in the pass that computes the object's own draw
+    // offset.
+    //
+    // Converting at this point instead bakes the camera as it was during the
+    // game tick, one update before the frame is drawn: the effect then trails
+    // its object while the camera moves and settles back when it stops. And
+    // because an attached sprite persists, a frame on which this is not called
+    // keeps the stale value — which is how the player's buff aura ended up
+    // stranded to one side until the buff was refreshed.
     let sprite = MegaShaderSprite {
-        image: flat_white(),
+        image,
         instance: MegaShaderInstance {
-            world_position: (u, v),
-            scale: (su, sv),
+            // Both overwritten every frame by the engine.
+            world_position: (0.0, 0.0),
+            scale: (0.0, 0.0),
             rotation: 0.0,
             tint_color: tint,
-            // BIT_ELECTRICITY = 1 << 2 (see animated_vfx.wgsl).
-            bitmask: [1 << 2, 0, 0, 0],
+            bitmask,
             velocity: (0.0, 0.0),
-            // Ignored for an attached sprite: the object's own z decides.
-            z_index: MEGA_Z_OVERLAY,
+            z_index: MEGA_Z_PLACEHOLDER,
         },
-        shader_variant: 1,
+        shader_variant: variant,
     };
     if let Some(obj) = c.get_game_object_mut(object_id) {
-        obj.set_mega_fx(sprite);
+        obj.set_mega_fx(sprite, scale);
     }
 }
 

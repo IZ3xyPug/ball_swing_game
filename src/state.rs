@@ -465,6 +465,14 @@ pub struct State {
     /// Colossus: after a part is destroyed the whole boss is briefly invulnerable,
     /// so the player can't chain-kill two parts within the same second.
     pub boss_part_invuln_ticks: u32,
+    /// Whether the SOLAR system is the one currently using the player's single
+    /// attached-effect slot. The buff aura uses the same slot, so whichever
+    /// system did not attach must not clear.
+    pub shield_player_fx: bool,
+    /// Node ids currently wearing an attached solar-shelter dome. Same reason
+    /// as `buff_fx_attached`: an attached effect lives on the object until it
+    /// is cleared, so the set has to be remembered to release it.
+    pub shield_fx_attached: Vec<String>,
     /// Node ids currently wearing an attached buff aura. An attached mega
     /// sprite lives on the object until it is cleared, so the set that had one
     /// last frame has to be remembered in order to clear the ones that stopped

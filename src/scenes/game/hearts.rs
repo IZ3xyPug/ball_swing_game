@@ -49,17 +49,20 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(p) = c.get_game_object_mut("player") {
             p.clear_glow();
         }
+        // An attached effect lives on the object until released.
+        super::fx::clear_object_fx(c, "player");
         return;
     }
     // Buff is still active: render the "electricity ball" mega-shader effect over
     // the player while the boss-damage buff is in effect.
     if s.player_buff > 0 {
-        if let Some(p) = c.get_game_object("player") {
-            let cx = p.position.0 + p.size.0 * 0.5;
-            let cy = p.position.1 + p.size.1 * 0.5;
-            let d = p.size.0.max(p.size.1).max(PLAYER_R * 2.0);
-            super::fx::push_electric_fx(c, (cx, cy), (d * 1.6, d * 1.6), (0.75, 0.95, 1.0, 0.9));
-        }
+        // ATTACHED to the player rather than pushed, so it rides the player's
+        // own transform instead of a separately reconstructed one.
+        let d = c
+            .get_game_object("player")
+            .map(|p| p.size.0.max(p.size.1).max(PLAYER_R * 2.0))
+            .unwrap_or(PLAYER_R * 2.0);
+        super::fx::attach_electric_fx(c, "player", (d * 1.6, d * 1.6), (0.75, 0.95, 1.0, 0.9));
     }
     if s.buff_hit_flash > 0 {
         s.buff_hit_flash -= 1;

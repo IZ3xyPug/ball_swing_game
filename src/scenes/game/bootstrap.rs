@@ -1348,6 +1348,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
                 obj.layer = LAYER_SPACE_HOOK - 1; // behind the parts
                 obj.gravity = 0.0;
                 obj.visible = false;
+                // Deliberately NO glow: a glow is a second, larger drawable per
+                // object, and this strip is already the widest thing on screen.
+                // The bright core carries the read.
                 scene = scene.with_object(&name, obj);
 
                 let name = format!("colossus_beam_core_{i}");
