@@ -154,16 +154,56 @@ pub fn preload_comet_assets() {
     warn_img_light_explode();
 }
 
+/// Spawn one meteor arriving from `angle_deg`, measured on screen: 0 is from
+/// the right, 90 from directly overhead, 180 from the left.
+///
+/// The comet system already supported this and nothing used it. `h_offset` and
+/// `v_offset` are not a position — `warn_dir_and_center` normalises them into a
+/// direction and projects the warning onto the correct screen edge — but every
+/// caller passed a large positive `v_offset`, so every comet in the game came
+/// from overhead with a bit of lean. Feeding it a real angle makes the warning,
+/// the entry point and the travel direction all follow for free.
+///
+/// `v_offset` carries the gravity sign because `warn_dir_and_center` applies
+/// `-v_offset * gravity_dir`, which keeps comets falling from "away from the
+/// floor" under a gravity flip. Sampled here at spawn; a flip during the
+/// two-second warning mirrors the meteor vertically, which is the same rule the
+/// rest of the comet system follows.
+pub fn spawn_comet_from_angle(c: &mut Canvas, st: &Arc<Mutex<State>>, angle_deg: f32) -> bool {
+    let theta = angle_deg.to_radians();
+    let (dir_x, dir_y) = (theta.cos(), -theta.sin());
+    let gravity_dir = { let s = st.lock().unwrap(); s.gravity_dir };
+    let h = dir_x * COMET_SPAWN_SPREAD;
+    let v = -dir_y * gravity_dir * COMET_SPAWN_ABOVE;
+    spawn_comet_with_offsets(c, st, h, v)
+}
+
 pub fn spawn_debug_comet(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    let (h_offset, v_offset) = {
+        let mut s = st.lock().unwrap();
+        (
+            lcg_range(&mut s.seed, -COMET_SPAWN_SPREAD, COMET_SPAWN_SPREAD),
+            lcg_range(&mut s.seed, COMET_SPAWN_ABOVE, COMET_SPAWN_ABOVE + COMET_SPAWN_ABOVE_EXTRA),
+        )
+    };
+    spawn_comet_with_offsets(c, st, h_offset, v_offset)
+}
+
+/// Shared body: acquire a comet + warning from the pools and arm the warning.
+/// The offsets are an incoming DIRECTION, not a position — see
+/// `spawn_comet_from_angle`.
+fn spawn_comet_with_offsets(
+    c: &mut Canvas,
+    st: &Arc<Mutex<State>>,
+    h_offset: f32,
+    v_offset: f32,
+) -> bool {
     let mut s = st.lock().unwrap();
     let Some(comet_id) = s.comet_free.pop() else { return false; };
     let Some(warn_id) = s.warn_free.pop() else {
         s.comet_free.push(comet_id);
         return false;
     };
-
-    let h_offset = lcg_range(&mut s.seed, -COMET_SPAWN_SPREAD, COMET_SPAWN_SPREAD);
-    let v_offset = lcg_range(&mut s.seed, COMET_SPAWN_ABOVE, COMET_SPAWN_ABOVE + COMET_SPAWN_ABOVE_EXTRA);
 
     // Warning indicator: follows player each tick, centered on comet spawn offset.
     let init_warn_x = s.px + h_offset - COMET_WARN_W * 0.5;

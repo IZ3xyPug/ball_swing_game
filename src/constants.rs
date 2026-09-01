@@ -590,6 +590,27 @@ pub const BOSS_DARK_INTERVAL:    u32   = 600;  // 10 s
 pub const BOSS_DARK_DURATION:    u32   = 180;  // 3 s
 /// Ticks of warning before darkness strikes.
 pub const BOSS_DARK_TELEGRAPH:   u32   = 60;   // 1 s
+// ── The darkness attack's look ───────────────────────────────────────────────
+//
+// The same night-mode post pass the eclipse uses (`eclipse::NightPost`), tuned
+// for a three-second attack rather than a three-minute approach. Before this
+// the attack only dropped the ambient, which under a multiplicative lighting
+// model is not "moody", it is a black screen: with no light source in the world
+// there is nothing for the ambient to scale. The player's lamp chain comes with
+// the shared entry point, so the fight stays playable while it runs.
+//
+// Tighter and harsher than the eclipse on purpose: a shorter vignette radius
+// closes the visible circle in fast, and the higher aberration says "something
+// is being done to you" rather than "night is falling".
+pub const BOSS_DARK_BLOOM_THRESHOLD:      f32 = 0.42;
+pub const BOSS_DARK_BLOOM_STRENGTH:       f32 = 0.85;
+pub const BOSS_DARK_VIGNETTE_STRENGTH:    f32 = 0.72;
+pub const BOSS_DARK_VIGNETTE_RADIUS:      f32 = 0.34;
+pub const BOSS_DARK_VIGNETTE_SOFTNESS:    f32 = 0.30;
+pub const BOSS_DARK_CHROMATIC_ABERRATION: f32 = 3.0;
+/// Ambient during the attack. Matches the eclipse's floor so the two events
+/// bottom out at the same darkness and only the framing differs.
+pub const BOSS_DARK_AMBIENT:              f32 = 0.06;
 
 // ── Last-boss barrier / generators / bait-and-bail ───────────────────────────
 /// How many generators power the protective barrier.
@@ -740,9 +761,16 @@ pub struct BossPart {
     /// World position the part's attack path starts from (recorded when it
     /// begins a Telegraph), so the path telegraph can show the actual trajectory.
     pub path_start:     (f32, f32),
-    /// Head gaze beam: has the beam already hit the player this attack? Reset
-    /// when the beam fires, so a traveling beam only costs one heart per sweep.
+    /// Head gaze beam: has the beam already hit the player this SHOT? Reset at
+    /// the start of every beam in a burst, so each of the two or three beams
+    /// can land once — but one sweep cannot cost several hearts.
     pub beam_hit_done:  bool,
+    /// Head gaze beam: how many beams this attack fires (2-3), rolled when the
+    /// attack begins so the whole attack knows its own length.
+    pub beam_shots:     u32,
+    /// Head gaze beam: lateral bow of the CURRENT beam, as a fraction of its
+    /// length. Zero for a straight beam. Re-rolled per shot.
+    pub beam_curve:     f32,
 }
 
 impl BossPart {
@@ -761,6 +789,8 @@ impl BossPart {
             attack_start: (0.0, 0.0),
             path_start: (0.0, 0.0),
             beam_hit_done: false,
+            beam_shots: COLOSSUS_BEAM_SHOTS_MIN,
+            beam_curve: 0.0,
         }
     }
 
@@ -797,16 +827,17 @@ pub fn boss_parts_for_kind(kind: BossKind) -> Vec<BossPart> {
 /// Wind-up length (ticks): the danger zone is shown and the part glows/pulls
 /// back, but no hit happens. ~1.0 s at 60 fps.
 pub const COLOSSUS_TELEGRAPH_TICKS: u32 = 60;
-/// The head's gaze attack lasts this long in the Attack state (beam fire + a
-/// short hold before it recovers).
-pub const COLOSSUS_HEAD_ATTACK_TICKS: u32 = 100;
+// REMOVED: COLOSSUS_HEAD_ATTACK_TICKS. The head's attack was one fixed-length
+// beam; it now fires a burst, so the length is derived from the number of shots
+// (`beam_shots * (COLOSSUS_BEAM_TICKS + COLOSSUS_BEAM_GAP_TICKS)`) and a single
+// authored constant would silently disagree with it.
 /// Ticks a part holds at the telegraphed target after it arrives, before it
 /// starts retracting (~1 s). The first half is a non-vulnerable beat; the second
 /// half it is already vulnerable while waiting to retract.
 pub const COLOSSUS_HOLD_TICKS: u32 = 60;
-/// The torso holds at the slam point even longer, so the body stays put while
-/// the summoned meteors fire and clear the screen (~3 s).
-pub const COLOSSUS_TORSO_HOLD_TICKS: u32 = 170;
+// REMOVED: COLOSSUS_TORSO_HOLD_TICKS. The torso does not lunge any more — both
+// of its attacks are performed from where it stands — so there is no arrival to
+// hold at. See COLOSSUS_VENT_TICKS and COLOSSUS_STORM_TICKS.
 /// Ticks after a part arrives at its target before its weakpoint opens (0.5 s).
 pub const COLOSSUS_ATTACK_VULN_DELAY: u32 = 30;
 /// Recovery length (ticks): the part retracts to its idle orbit, slowly, and is
@@ -818,9 +849,12 @@ pub const COLOSSUS_IDLE_TICKS: u32 = 220;
 /// How long (ticks) a part stays vulnerable AFTER it has returned to the body,
 /// so the counter window is generous and readable (~1 s at 60 fps).
 pub const COLOSSUS_VULN_AFTER_TICKS: u32 = 60;
-/// The head's post-well vulnerability window is a couple of seconds longer
-/// (~3 s), so the player has time to counter after the gaze attack.
-pub const COLOSSUS_HEAD_VULN_AFTER: u32 = 180;
+/// The head's post-well vulnerability window. Longer than the other parts by
+/// design — the gaze attack ends with the player scattered and untethered, so a
+/// short window would mostly be spent travelling back rather than attacking.
+/// Extended again after play (180 -> 280, ~4.7 s) on the same reasoning: the
+/// burst of beams throws the player further than the single beam did.
+pub const COLOSSUS_HEAD_VULN_AFTER: u32 = 280;
 /// How far (px) a part visibly pulls back from its target while winding up.
 pub const COLOSSUS_TELEGRAPH_PULL: f32 = 260.0;
 /// Leash radius: a part may drift this far from its home orbit to strike, but no
@@ -839,6 +873,53 @@ pub const COLOSSUS_ATTACK_LEAD: f32 = 0.35;
 /// The head's gaze beam travels along its telegraphed path over this many ticks,
 /// so the player sees the sweep coming and can be off the line when it passes.
 pub const COLOSSUS_BEAM_TICKS: u32 = 40;
+
+// ── The head's gaze beam ─────────────────────────────────────────────────────
+//
+// One narrow straight beam per gravity well was too easy to sit out: the well
+// hauls you to a known place, one line is drawn, you leave the line, and the
+// whole attack is over. The rework makes it an exchange the player has to keep
+// working through.
+//
+//   WIDER    the damaging area was `PATH_THICKNESS + PLAYER_R` around a 60px
+//            strip — a hit box wider than the art, which is its own problem.
+//            The beam is now genuinely wide and the hit box matches what is
+//            drawn, so it is bigger AND honest.
+//   LONGER   the beam used to stop at the aim point (the player). It is a ray
+//            of fixed length now, so it sweeps past and keeps going, and the
+//            far half of the arena is not automatically safe.
+//   CURVED   half the shots bow to one side. A straight line from a known
+//            origin is solved once; a bowed one has to be read each time.
+//   BURSTS   two or three back to back, half a second apart, each re-aimed at
+//            wherever the player has just moved to. Dodging the first beam is
+//            no longer the end of the attack — it is the start of it.
+//
+/// Visual thickness of the beam. The hit test uses HALF this plus `PLAYER_R`,
+/// so the damaging area is what the player can see rather than a hidden margin.
+pub const COLOSSUS_BEAM_THICKNESS: f32 = 260.0;
+/// Length of the beam ray. Fixed rather than "as far as the player", so the
+/// beam sweeps past them and threatens the ground beyond.
+pub const COLOSSUS_BEAM_LENGTH: f32 = 6200.0;
+/// Beams per gaze attack, inclusive.
+pub const COLOSSUS_BEAM_SHOTS_MIN: u32 = 2;
+pub const COLOSSUS_BEAM_SHOTS_MAX: u32 = 3;
+/// Ticks between the end of one beam and the start of the next (~0.5 s). Short
+/// enough that the burst reads as one attack, long enough to reposition.
+pub const COLOSSUS_BEAM_GAP_TICKS: u32 = 30;
+/// Chance a given beam curves rather than running straight.
+pub const COLOSSUS_BEAM_CURVE_CHANCE: f32 = 0.5;
+/// Maximum lateral bow of a curved beam, as a fraction of its length. Applied
+/// to the control point of a quadratic bezier, so the beam's own midpoint moves
+/// half this far.
+pub const COLOSSUS_BEAM_CURVE_MAX: f32 = 0.30;
+/// Straight segments a beam is drawn and hit-tested with. Eight is smooth
+/// enough that the seams do not read at this thickness, and cheap enough to
+/// keep as two small pools of pre-made objects.
+pub const COLOSSUS_BEAM_SEGMENTS: usize = 8;
+/// Ticks between the head's vulnerability window closing and its next gravity
+/// well opening (~1 s), so the counter-attack has a clean end rather than being
+/// cut short by the next attack starting on top of it.
+pub const COLOSSUS_HEAD_REARM_GAP: u32 = 60;
 /// Radius (px) of the head's gravity well visual, and how far its pull reaches.
 pub const COLOSSUS_GRAVITY_RANGE: f32 = 6400.0;
 /// Peak pull strength of the head's gravity well. It is STRONGEST far from the
@@ -849,12 +930,157 @@ pub const COLOSSUS_GRAVITY_STRENGTH: f32 = 4.0;
 /// How many ticks (1 s) the boss is invulnerable after one part is destroyed,
 /// so two parts cannot be destroyed back-to-back in the same second.
 pub const COLOSSUS_PART_INVULN_TICKS: u32 = 60;
-/// Ticks the body stays still after the torso summons its meteors, so it doesn't
-/// start moving again until they've fired and cleared the screen (~3 s).
-pub const COLOSSUS_METEOR_LOCK_TICKS: u32 = 180;
+// REMOVED: COLOSSUS_METEOR_LOCK_TICKS. Meteors were a rider on the torso's slam
+// and the body froze for a fixed spell afterwards. The storm is its own attack
+// now, so the freeze is the storm's own length plus one warning
+// (`COLOSSUS_STORM_TICKS + COMET_WARN_TOTAL`) and cannot drift from it.
+
+// ── The torso's rhythm ───────────────────────────────────────────────────────
+//
+// The torso used to have one attack — a slam — that ALSO called down three
+// meteors at once, every single time. Two problems: the meteors arrived as a
+// single simultaneous burst from roughly the same place, which is one dodge
+// rather than a sequence; and because the slam was the only attack, the torso's
+// vulnerability window was tied to the same beat as the meteors, so the moment
+// you were meant to counter-attack was the moment the screen was full of rocks.
+//
+// It is two attacks now, alternating:
+//
+//   SLAM         lunge to a telegraphed point, radial AoE, then hold and
+//                retract slowly — VULNERABLE through the retract and after.
+//   METEOR STORM the torso stays put and calls meteors down one at a time from
+//                different sides — NEVER vulnerable, start to finish.
+//
+// So the storm is a pure dodge phase and the slam is the phase you punish. The
+// player learns to read which one is starting and knows immediately whether
+// this is a beat to survive or a beat to attack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TorsoAttack {
+    /// Chest plates crack open and vent plasma in rotating spokes. The torso is
+    /// DANGEROUS AND VULNERABLE AT THE SAME TIME here — see `CoreVent` timings.
+    CoreVent,
+    /// Sequential meteors from random sides. Opens nothing.
+    MeteorStorm,
+}
+
+/// Which attack the torso's `n`th commitment is. Strict alternation rather than
+/// a random pick: a run of two storms would be a long stretch with no window to
+/// damage the torso at all, and a run of two slams wastes the contrast.
+pub fn torso_attack_for(n: u32) -> TorsoAttack {
+    if n % 2 == 1 { TorsoAttack::CoreVent } else { TorsoAttack::MeteorStorm }
+}
+
+// ── Core vent ────────────────────────────────────────────────────────────────
+//
+// The chest opens and vents plasma in spokes that rotate around the torso like
+// a lighthouse. It is the torso's only vulnerable beat, and the window opens
+// while the vent is STILL RUNNING — so the counter-attack is taken under fire
+// rather than after it. That is the point: the hands and the head both give the
+// player a safe window after a danger has passed, and the torso gives one that
+// has to be fought for.
+//
+//   0.0s        plates crack open (telegraph)
+//   +1.0s       spokes ignite and begin to rotate
+//   +1.5s       WEAKPOINT OPENS - dangerous and vulnerable together
+//   +~4.3s      spokes cut out
+//   +~5.3s      window closes (about a second after the danger passes)
+//
+/// Spokes vented at once, evenly spaced around the torso.
+pub const COLOSSUS_VENT_SPOKES: usize = 4;
+/// How long the vent runs, in ticks.
+pub const COLOSSUS_VENT_TICKS: u32 = 200;
+/// Degrees the spoke array rotates per tick. With 4 spokes, 90 degrees sweeps
+/// every angle once — 0.9/tick over 200 ticks is two full sweeps, so the player
+/// weaves through twice rather than being chased indefinitely.
+pub const COLOSSUS_VENT_SPIN: f32 = 0.9;
+/// Reach of a spoke from the torso centre.
+pub const COLOSSUS_VENT_LENGTH: f32 = 3400.0;
+/// Drawn thickness of a spoke. Hit test uses half this plus `PLAYER_R`, as the
+/// gaze beam does, so the damaging area is what is on screen.
+pub const COLOSSUS_VENT_THICKNESS: f32 = 150.0;
+/// Ticks into the vent before the weakpoint opens (~0.5 s), so the wind-up is
+/// clean and the window is not free.
+pub const COLOSSUS_VENT_VULN_DELAY: u32 = 30;
+/// Ticks the window stays open after the spokes cut out (~2.5 s).
+///
+/// Measured from the end of the VENT, so it spans the whole recovery and runs
+/// on into the idle. One second was not enough in play: the vent ends with the
+/// player thrown clear and untethered, so a short window was mostly spent
+/// swinging back and the counter-attack rarely landed. This is the torso's only
+/// hittable beat — if it is hard to reach, the torso is effectively immortal.
+///
+/// Still closes well before the torso's next commitment
+/// (`colossus_idle_len(2)`), so it never runs into the following attack.
+pub const COLOSSUS_VENT_VULN_AFTER: u32 = 150;
+/// Ticks of immunity after a spoke connects. A rotating beam would otherwise
+/// drain every heart in the second the player is caught in one.
+pub const COLOSSUS_VENT_HIT_COOLDOWN: u32 = 45;
+
+// ── The clap ─────────────────────────────────────────────────────────────────
+//
+// Both hands converge on the player from opposite sides at once — the only
+// attack where the two cooperate, and the one moment the fight suspends its own
+// one-part-at-a-time rule. It makes the pair read as a pair rather than as two
+// copies of the same hand.
+//
+// The clap itself throws the player hard whether or not it connects: a force
+// wave leaves the impact point and carries anyone near it. Being outside the
+// kill zone is not the same as being unaffected.
+//
+// The hands are vulnerable ONLY after they have returned to the body — not
+// while they are stuck together mid-arena. So the reward for reading a clap is
+// a clean window at a known place, rather than a scramble to the middle of the
+// arena while the other attacks are still live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandAttack {
+    /// One hand lunges to a telegraphed point. Vulnerable through the retract.
+    Lunge,
+    /// Both hands slam together on the player. Vulnerable only once home.
+    Clap,
+}
+
+/// Which attack the hands' `n`th commitment is. Alternates, so a clap is never
+/// back to back with another clap.
+pub fn hand_attack_for(n: u32) -> HandAttack {
+    if n % 2 == 1 { HandAttack::Clap } else { HandAttack::Lunge }
+}
+
+/// Radius of the clap's force wave. Well beyond the hands themselves — the
+/// wave is the attack's reach, the hands are its damage.
+pub const COLOSSUS_CLAP_WAVE_R: f32 = 2600.0;
+/// Peak speed the wave imparts at the impact point, falling off to zero at the
+/// edge. Large: being thrown across the arena IS the attack.
+pub const COLOSSUS_CLAP_WAVE_POWER: f32 = 96.0;
+/// Ticks the wave visual expands over.
+pub const COLOSSUS_CLAP_WAVE_TICKS: u32 = 26;
+/// Ticks the hands stay vulnerable once home after a clap (~1 s).
+pub const COLOSSUS_CLAP_VULN_AFTER: u32 = 60;
+
+/// Meteors in one storm.
+pub const COLOSSUS_METEOR_COUNT: u32 = 5;
+/// Ticks between consecutive meteor launches — 0.5 s to 1.0 s, so they arrive
+/// as a readable sequence you move through rather than a wall you either happen
+/// to be clear of or do not.
+pub const COLOSSUS_METEOR_GAP_MIN: u32 = 30;
+pub const COLOSSUS_METEOR_GAP_MAX: u32 = 60;
+/// How long the torso holds its storm pose. Long enough to launch every meteor
+/// at the widest gap (4 x 60) plus a beat, so the attack never ends with rocks
+/// still queued.
+pub const COLOSSUS_STORM_TICKS: u32 = 260;
+/// Angle band (degrees, 0 = from the right, 90 = from overhead) that storm
+/// meteors arrive from. Never from below: a meteor rising off the floor reads
+/// as a bug rather than as a hazard.
+pub const COLOSSUS_METEOR_ANGLE_MIN: f32 = 20.0;
+pub const COLOSSUS_METEOR_ANGLE_MAX: f32 = 160.0;
 /// Beam-explosion growth life (ticks) for each little pop at the beam's contact
 /// point.
 pub const COLOSSUS_BEAM_EXPLODE_TTL: u32 = 14;
+/// Start and end radius of a beam contact explosion, scaled to the beam's own
+/// width. Pops sized for the old 60px strip looked like sparks beside a beam
+/// four times as wide; these are proportional, so the explosions read as the
+/// beam detonating rather than as unrelated debris.
+pub const COLOSSUS_BEAM_EXPLODE_R0: f32 = COLOSSUS_BEAM_THICKNESS * 0.42;
+pub const COLOSSUS_BEAM_EXPLODE_R1: f32 = COLOSSUS_BEAM_THICKNESS * 2.1;
 /// Danger-zone radii per part id (where the attack actually lands). The zone
 /// marker is drawn with exactly this radius during the telegraph. Sized to the
 /// doubled body parts.
@@ -1005,8 +1231,19 @@ pub const ECLIPSE_TRAIL_LIGHTS: &[(f32, f32, f32)] = &[
 // cannot draw a glow on dark art; this post pass adds bloom, which spreads
 // bright pixels across the frame regardless of the art beneath, plus a vignette
 // that darkens the edges. Values from the build that worked.
-pub const ECLIPSE_BLOOM_THRESHOLD: f32 = 0.30;
-pub const ECLIPSE_BLOOM_STRENGTH: f32 = 1.2;
+///
+/// Bloom was dialled back after play: at strength 1.2 with a 0.30 threshold the
+/// spread swallowed the shapes it was supposed to reveal, and the eclipse read
+/// as a haze rather than as a dark world with a lamp in it. Raising the
+/// threshold means fewer pixels qualify as "bright" in the first place, so the
+/// bloom now picks out the lamp and the trail instead of most of the frame;
+/// lowering the strength keeps what does bloom from washing out.
+///
+/// This is the pair to move together. Threshold decides WHAT blooms, strength
+/// decides HOW FAR — dropping strength alone dims the effect without sharpening
+/// it, and raising threshold alone leaves the survivors as bright as before.
+pub const ECLIPSE_BLOOM_THRESHOLD: f32 = 0.42;
+pub const ECLIPSE_BLOOM_STRENGTH: f32 = 0.78;
 pub const ECLIPSE_VIGNETTE_STRENGTH: f32 = 0.55;
 pub const ECLIPSE_VIGNETTE_RADIUS: f32 = 0.45;
 pub const ECLIPSE_VIGNETTE_SOFTNESS: f32 = 0.35;
@@ -1234,6 +1471,18 @@ pub const C_FLARE_ACTIVE: (u8, u8, u8, u8) = (255, 226, 150, 150);
 /// Mega-shader bit for the player's protective dome while sheltered.
 /// Matches `BIT_ENERGY_DOME` in `wgpu_canvas`'s `animated_vfx.wgsl`.
 pub const MEGA_BIT_ENERGY_DOME: u32 = 1 << 20;
+
+/// Depth key for a mega-shader sprite pushed through `push_mega_sprite`.
+///
+/// The mega pass runs after every other renderer, and `u16::MAX` is the "in
+/// front of the whole scene" key — correct for a screen-space overlay such as
+/// the player's own buff dome, which must never be hidden by scenery.
+///
+/// An effect that belongs to a WORLD object does not want this: it wants to be
+/// occluded by whatever is in front of that object. Use
+/// `fx::attach_electric_fx` for those, which hangs the sprite off the object so
+/// it inherits the object's layer and depth instead of this constant.
+pub const MEGA_Z_OVERLAY: u16 = u16::MAX;
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 650;
@@ -1486,6 +1735,40 @@ pub const SPACE_ASTEROID_Y_NEAR_MIN:     f32 = -3400.0;  // small, mid-space
 pub const SPACE_ASTEROID_Y_NEAR_MAX:     f32 = -2600.0;
 pub const SPACE_ASTEROID_Y_FAR_MIN:      f32 = -4400.0; // large, highest (visible zoomed-out)
 pub const SPACE_ASTEROID_Y_FAR_MAX:      f32 = -2800.0;
+/// Size of arena asteroid `i`, weighted toward the small end.
+///
+/// The arena used to sweep the full 180..480 band uniformly (`MIN + i*83 %
+/// range`), so a third of every boss arena was full-size boulders. In play they
+/// dominated the space: they blocked sight lines to the parts the fight is
+/// about, they are the hardest things to swing around at speed, and having so
+/// many of them made every arena feel like the same cluttered room.
+///
+/// The classes are 50% small / 37.5% medium / 12.5% large — a couple of big
+/// ones for scale and silhouette, the rest small and medium so there is more to
+/// tether to and less to be walled in by. Deterministic in `i`, so an arena
+/// lays out the same way every time and the pool's collision radii can be fixed
+/// once at bootstrap.
+pub const BOSS_ASTEROID_SMALL_MAX:  f32 = 255.0;
+pub const BOSS_ASTEROID_MEDIUM_MAX: f32 = 350.0;
+
+pub fn boss_arena_asteroid_size(i: usize) -> f32 {
+    // 8-slot class pattern: 4 small, 3 medium, 1 large.
+    const CLASS: [u8; 8] = [0, 0, 1, 0, 1, 0, 1, 2];
+    // Bands do not touch, so a size names exactly one class. Sharing an edge
+    // put one asteroid per arena exactly on the small/medium boundary, which is
+    // fine to look at and impossible to assert about.
+    let (lo, hi) = match CLASS[i % CLASS.len()] {
+        0 => (SPACE_ASTEROID_SIZE_MIN, BOSS_ASTEROID_SMALL_MAX),
+        1 => (BOSS_ASTEROID_SMALL_MAX, BOSS_ASTEROID_MEDIUM_MAX),
+        _ => (BOSS_ASTEROID_MEDIUM_MAX, SPACE_ASTEROID_SIZE_MAX),
+    };
+    // Spread within the class so same-class asteroids are not identical.
+    // Divided by 11, not 10: `t` must stay BELOW 1.0 so a size never lands
+    // exactly on the next band's floor and read as that class.
+    let t = ((i * 37) % 11) as f32 / 11.0;
+    lo + (hi - lo) * t
+}
+
 pub const SPACE_ASTEROID_SIZE_MIN:       f32 = 180.0;
 pub const SPACE_ASTEROID_SIZE_MAX:       f32 = 480.0;
 /// Base outward knockback speed applied to player when hit by a space asteroid.

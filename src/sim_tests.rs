@@ -1090,3 +1090,377 @@ fn markers_are_separated_by_reach_not_by_brightness() {
     assert!(ECLIPSE_NODE_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.5);
     assert!(ECLIPSE_GWELL_LIGHT_R < ECLIPSE_PLAYER_LIGHT_R * 0.5);
 }
+
+// ── The Colossus torso's two-attack rhythm ───────────────────────────────────
+
+#[test]
+fn torso_alternates_slam_and_storm() {
+    // Strict alternation, not a random pick. Two storms in a row would be a
+    // long stretch with no window to damage the torso at all; two slams wastes
+    // the contrast the pair exists to create.
+    let seq: Vec<TorsoAttack> = (1..=8).map(torso_attack_for).collect();
+    for pair in seq.windows(2) {
+        assert_ne!(pair[0], pair[1], "two identical torso attacks in a row: {seq:?}");
+    }
+    let vents = seq.iter().filter(|a| **a == TorsoAttack::CoreVent).count();
+    assert_eq!(vents, seq.len() / 2, "the vulnerability-opening attack must be half the cycle");
+}
+
+#[test]
+fn meteor_storm_is_a_sequence_from_alternating_sides() {
+    let mut seed = 0xC0FFEE_u64;
+    let queue = crate::scenes::game::boss::meteor_storm_schedule(&mut seed);
+
+    assert_eq!(queue.len(), COLOSSUS_METEOR_COUNT as usize);
+
+    // SEQUENTIAL: every launch is 0.5-1.0 s after the one before it. A burst
+    // that lands together is one coin flip; a sequence is a series of dodges.
+    let delays: Vec<u32> = queue.iter().map(|(d, _)| *d).collect();
+    for w in delays.windows(2) {
+        let gap = w[1] - w[0];
+        assert!(
+            gap >= COLOSSUS_METEOR_GAP_MIN && gap <= COLOSSUS_METEOR_GAP_MAX,
+            "meteor gap {gap} ticks outside {COLOSSUS_METEOR_GAP_MIN}..{COLOSSUS_METEOR_GAP_MAX}"
+        );
+    }
+    assert!(delays.windows(2).all(|w| w[1] > w[0]), "launch times must be strictly increasing");
+
+    // Every meteor must finish launching inside the attack it belongs to,
+    // otherwise the storm ends with rocks still queued.
+    assert!(
+        *delays.last().unwrap() < COLOSSUS_STORM_TICKS,
+        "last meteor launches at {} but the storm ends at {COLOSSUS_STORM_TICKS}",
+        delays.last().unwrap()
+    );
+
+    // ALTERNATING SIDES: consecutive meteors come from opposite halves of the
+    // sky, so the player is moved rather than allowed to settle in one corner.
+    let mid = (COLOSSUS_METEOR_ANGLE_MIN + COLOSSUS_METEOR_ANGLE_MAX) * 0.5;
+    let sides: Vec<bool> = queue.iter().map(|(_, a)| *a >= mid).collect();
+    for w in sides.windows(2) {
+        assert_ne!(w[0], w[1], "two consecutive meteors from the same side: {sides:?}");
+    }
+
+    // Never from below — a meteor rising off the floor reads as a bug.
+    for (_, angle) in &queue {
+        assert!(
+            *angle >= COLOSSUS_METEOR_ANGLE_MIN && *angle <= COLOSSUS_METEOR_ANGLE_MAX,
+            "meteor angle {angle} outside the above-and-to-the-sides band"
+        );
+    }
+}
+
+// ── The head's gaze beam ─────────────────────────────────────────────────────
+
+#[test]
+fn beam_is_a_fixed_length_ray_past_the_player() {
+    // The beam used to stop AT the player, which made standing beyond the aim
+    // point unconditionally safe.
+    let head = (0.0, 0.0);
+    for aim in [(300.0, 0.0), (-120.0, 80.0), (0.0, 1500.0)] {
+        let end = crate::scenes::game::boss::beam_end(head, aim);
+        let len = (end.0 * end.0 + end.1 * end.1).sqrt();
+        assert!(
+            (len - COLOSSUS_BEAM_LENGTH).abs() < 1.0,
+            "beam to {aim:?} is {len:.0} px, not {COLOSSUS_BEAM_LENGTH}"
+        );
+        // and it still points through the aim point
+        let d = (aim.0 * aim.0 + aim.1 * aim.1).sqrt().max(1.0);
+        let dot = (end.0 / len) * (aim.0 / d) + (end.1 / len) * (aim.1 / d);
+        assert!(dot > 0.999, "beam to {aim:?} does not run through the aim point");
+    }
+}
+
+#[test]
+fn a_straight_beam_and_a_curved_one_use_the_same_path() {
+    use crate::scenes::game::boss::beam_point as bp;
+    let a = (0.0, 0.0);
+    let b = (1000.0, 0.0);
+
+    // curve 0 collapses to the straight line, so there is one code path rather
+    // than a straight case and a curved case that can disagree.
+    for i in 0..=10 {
+        let t = i as f32 / 10.0;
+        let p = bp(a, b, 0.0, t);
+        assert!((p.0 - t * 1000.0).abs() < 0.01 && p.1.abs() < 0.01, "curve 0 bent at t={t}");
+    }
+
+    // A curved beam bows to one side and still starts and ends where it says.
+    let curve = COLOSSUS_BEAM_CURVE_MAX;
+    assert!((bp(a, b, curve, 0.0).0 - a.0).abs() < 0.01);
+    assert!((bp(a, b, curve, 1.0).0 - b.0).abs() < 0.01);
+    let mid = bp(a, b, curve, 0.5);
+    // Control point sits `curve * len` off the chord, so the curve itself
+    // reaches half that.
+    let expected_bow = curve * 1000.0 * 0.5;
+    assert!(
+        (mid.1.abs() - expected_bow).abs() < 1.0,
+        "curved beam bows {:.0} px at its midpoint, expected {:.0}",
+        mid.1.abs(), expected_bow
+    );
+    assert!(mid.1.abs() > 100.0, "the bow has to be big enough to have to be read");
+}
+
+#[test]
+fn beam_damage_area_matches_what_is_drawn() {
+    // The old test was `point_segment_dist < PATH_THICKNESS + PLAYER_R` against
+    // a strip drawn PATH_THICKNESS tall — a hit box twice as wide as the art.
+    // The damaging half-width is now half the drawn thickness plus the player.
+    let hit_r = crate::scenes::game::boss::beam_hit_radius();
+    assert!(
+        (hit_r - (COLOSSUS_BEAM_THICKNESS * 0.5 + PLAYER_R)).abs() < 0.01,
+        "hit radius {hit_r} does not match the drawn beam"
+    );
+    // and it is genuinely wider than the beam it replaces
+    assert!(
+        hit_r > COLOSSUS_PATH_THICKNESS + PLAYER_R,
+        "the reworked beam must damage a WIDER area than the one it replaces"
+    );
+}
+
+#[test]
+fn a_gaze_attack_is_two_or_three_beams_back_to_back() {
+    let shot = COLOSSUS_BEAM_TICKS + COLOSSUS_BEAM_GAP_TICKS;
+    assert_eq!(COLOSSUS_BEAM_GAP_TICKS, 30, "the gap between beams should be ~0.5 s");
+    assert!(COLOSSUS_BEAM_SHOTS_MIN >= 2 && COLOSSUS_BEAM_SHOTS_MAX <= 3);
+
+    // The burst has to fit inside the attack, and the attack has to be long
+    // enough that the longest burst is not cut off.
+    for shots in COLOSSUS_BEAM_SHOTS_MIN..=COLOSSUS_BEAM_SHOTS_MAX {
+        let duration = shots * shot;
+        assert!(duration >= 2 * shot);
+        // every beam gets its full sweep
+        for n in 0..shots {
+            assert!(n * shot + COLOSSUS_BEAM_TICKS <= duration);
+        }
+    }
+}
+
+#[test]
+fn the_head_rearms_about_a_second_after_its_window_closes() {
+    // The window has to end cleanly rather than being cut short by the next
+    // gravity well opening on top of it.
+    let idle = crate::scenes::game::boss::colossus_idle_len(3);
+    assert_eq!(idle, COLOSSUS_HEAD_VULN_AFTER + COLOSSUS_HEAD_REARM_GAP);
+    let gap = idle - COLOSSUS_HEAD_VULN_AFTER;
+    assert!((45..=90).contains(&gap), "re-arm gap is {gap} ticks, wanted ~1 s");
+    // and the window itself is a second or two longer than the other parts'
+    assert!(COLOSSUS_HEAD_VULN_AFTER >= COLOSSUS_VULN_AFTER_TICKS + 120);
+}
+
+// ── Arena dressing ───────────────────────────────────────────────────────────
+
+#[test]
+fn boss_arenas_are_mostly_small_and_medium_asteroids() {
+    let sizes: Vec<f32> = (0..BOSS_ASTEROID_COUNT).map(boss_arena_asteroid_size).collect();
+    let large = sizes.iter().filter(|s| **s >= BOSS_ASTEROID_MEDIUM_MAX).count();
+    let small = sizes.iter().filter(|s| **s < BOSS_ASTEROID_SMALL_MAX).count();
+
+    assert!(
+        large * 8 <= sizes.len(),
+        "{large}/{} arena asteroids are large; big ones block sight lines to the fight",
+        sizes.len()
+    );
+    assert!(
+        small * 2 >= sizes.len(),
+        "only {small}/{} are small; the arena needs things to swing around, not walls",
+        sizes.len()
+    );
+    for s in &sizes {
+        assert!(
+            *s >= SPACE_ASTEROID_SIZE_MIN && *s <= SPACE_ASTEROID_SIZE_MAX,
+            "asteroid size {s} outside the authored band"
+        );
+    }
+}
+
+// ── Night mode ───────────────────────────────────────────────────────────────
+
+#[test]
+fn the_darkness_attack_and_the_eclipse_share_one_look() {
+    // The attack used to drop the ambient and nothing else, which under a
+    // multiplicative lighting model is a blank screen rather than a dark room.
+    // Both events now bottom out at the same ambient and differ only in framing.
+    assert!((BOSS_DARK_AMBIENT - ECLIPSE_MIN_AMBIENT).abs() < 0.001);
+
+    // The attack closes in tighter and faster than the slow approach does.
+    assert!(BOSS_DARK_VIGNETTE_RADIUS < ECLIPSE_VIGNETTE_RADIUS);
+    assert!(BOSS_DARK_VIGNETTE_STRENGTH > ECLIPSE_VIGNETTE_STRENGTH);
+
+    // Bloom is what makes the lamp visible at all on dark art, so both presets
+    // must sit below what the lamp actually produces.
+    for (name, threshold) in [
+        ("eclipse", ECLIPSE_BLOOM_THRESHOLD),
+        ("boss darkness", BOSS_DARK_BLOOM_THRESHOLD),
+    ] {
+        assert!(
+            threshold < ECLIPSE_PLAYER_LIGHT_INTENSITY * LIGHT_NDL_2D,
+            "{name} bloom threshold {threshold} is above what the lamp reaches, so nothing blooms"
+        );
+    }
+}
+
+#[test]
+fn eclipse_bloom_was_dialled_back() {
+    // Tuned down after play: at 1.2 / 0.30 the spread swallowed the shapes it
+    // was supposed to reveal. Threshold decides WHAT blooms and strength decides
+    // HOW FAR, so both move — dropping strength alone dims without sharpening.
+    assert!(ECLIPSE_BLOOM_STRENGTH < 1.2, "bloom strength was not reduced");
+    assert!(ECLIPSE_BLOOM_THRESHOLD > 0.30, "fewer pixels should qualify as bright");
+    // but not so far that the effect stops working
+    assert!(ECLIPSE_BLOOM_STRENGTH > 0.4);
+}
+
+// ── The core vent: dangerous and vulnerable at the same time ─────────────────
+
+/// Is the torso hittable `t` ticks into a given FSM state during a core vent?
+/// Mirrors the rule in `tick_multi_part_boss` so the timing can be asserted
+/// without standing up a whole fight.
+fn vent_open(state: &str, t: u32) -> bool {
+    match state {
+        "attack" => t >= COLOSSUS_VENT_VULN_DELAY,
+        "recover" => t < COLOSSUS_VENT_VULN_AFTER,
+        // The after-window outlasts the recovery, so it carries on into the
+        // idle. Counted from the end of the vent, not from the start of a state.
+        "idle" => COLOSSUS_RECOVER_TICKS + t < COLOSSUS_VENT_VULN_AFTER,
+        _ => false,
+    }
+}
+
+#[test]
+fn the_vent_window_opens_during_the_attack_not_after_it() {
+    // The whole point of this attack: unlike the hands and the head, which give
+    // a safe window once a danger has passed, the torso's window is open WHILE
+    // the spokes are still turning. The counter-attack has to be taken under
+    // fire.
+    assert!(!vent_open("attack", 0), "the wind-up must not be free");
+    assert!(!vent_open("attack", COLOSSUS_VENT_VULN_DELAY - 1));
+    assert!(vent_open("attack", COLOSSUS_VENT_VULN_DELAY), "window opens ~0.5s in");
+    assert!(vent_open("attack", COLOSSUS_VENT_TICKS - 1), "and stays open to the end of the vent");
+
+    // ~0.5 s of wind-up before it opens.
+    assert!((25..=40).contains(&COLOSSUS_VENT_VULN_DELAY), "wind-up should be about half a second");
+
+    // Most of the vent is a window, or the attack is not worth approaching.
+    let open_ticks = COLOSSUS_VENT_TICKS - COLOSSUS_VENT_VULN_DELAY;
+    assert!(
+        open_ticks * 2 > COLOSSUS_VENT_TICKS,
+        "only {open_ticks}/{COLOSSUS_VENT_TICKS} ticks of the vent are hittable"
+    );
+}
+
+#[test]
+fn the_vent_window_outlasts_the_danger_by_a_couple_of_seconds() {
+    // The vent ends with the player thrown clear and untethered. A one-second
+    // window was mostly spent swinging back, so the counter-attack rarely
+    // landed — and this is the torso's ONLY hittable beat, so a window that is
+    // hard to reach makes the torso effectively immortal.
+    assert!(vent_open("recover", 0), "still hittable the moment the spokes cut out");
+    assert!(
+        (120..=210).contains(&COLOSSUS_VENT_VULN_AFTER),
+        "after-window is {COLOSSUS_VENT_VULN_AFTER} ticks; wanted 2-3.5 s"
+    );
+
+    // It has to actually survive the recovery and reach into the idle, or the
+    // extra length would be silently capped at the recovery's length.
+    assert!(
+        COLOSSUS_VENT_VULN_AFTER > COLOSSUS_RECOVER_TICKS,
+        "the window ends inside the recovery, so lengthening it changed nothing"
+    );
+    assert!(vent_open("recover", COLOSSUS_RECOVER_TICKS - 1), "open through the whole recovery");
+    assert!(vent_open("idle", 0), "and on into the lull after it");
+
+    // ...but it must still close, and close well before the torso acts again.
+    let idle_open = COLOSSUS_VENT_VULN_AFTER - COLOSSUS_RECOVER_TICKS;
+    assert!(!vent_open("idle", idle_open), "window must close");
+    let next_attack_at = crate::scenes::game::boss::colossus_idle_len(2);
+    assert!(
+        idle_open < next_attack_at,
+        "the window ({idle_open} into the idle) runs into the next attack (at {next_attack_at})"
+    );
+}
+
+#[test]
+fn the_spokes_sweep_the_whole_circle_a_couple_of_times() {
+    // Four spokes 90 degrees apart, so 90 degrees of rotation sweeps every
+    // angle once. The vent should be a couple of passes to weave through, not
+    // an endless chase.
+    let swept = COLOSSUS_VENT_TICKS as f32 * COLOSSUS_VENT_SPIN;
+    let per_sweep = 360.0 / COLOSSUS_VENT_SPOKES as f32;
+    let sweeps = swept / per_sweep;
+    assert!(
+        (1.5..=3.0).contains(&sweeps),
+        "the vent sweeps every angle {sweeps:.1} times; wanted about two"
+    );
+    // and a spoke has to actually reach the player's playing space
+    assert!(COLOSSUS_VENT_LENGTH > COLOSSUS_TORSO_ZONE_R * 2.0);
+}
+
+// ── The clap ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn hands_alternate_lunge_and_clap() {
+    let seq: Vec<HandAttack> = (1..=8).map(hand_attack_for).collect();
+    for pair in seq.windows(2) {
+        assert_ne!(pair[0], pair[1], "two identical hand attacks in a row: {seq:?}");
+    }
+}
+
+#[test]
+fn the_clap_throws_you_whether_or_not_it_connects() {
+    // The wave reaches far beyond the hands themselves: being outside the kill
+    // zone is not the same as being unaffected.
+    assert!(
+        COLOSSUS_CLAP_WAVE_R > COLOSSUS_HAND_ZONE_R * 2.0,
+        "the wave barely reaches past the hands, so a dodged clap is a non-event"
+    );
+    // And it throws hard enough to matter — well past the normal speed cap.
+    assert!(
+        COLOSSUS_CLAP_WAVE_POWER > MOMENTUM_CAP,
+        "the clap's throw is inside the normal speed cap, so it would not read as a throw"
+    );
+
+    // Falls off to nothing at the edge, so the reach is readable rather than a
+    // hard boundary the player cannot see.
+    let at_edge = COLOSSUS_CLAP_WAVE_POWER * (1.0 - (COLOSSUS_CLAP_WAVE_R / COLOSSUS_CLAP_WAVE_R));
+    assert!(at_edge.abs() < 0.01, "the wave should fade out, not stop dead");
+}
+
+#[test]
+fn clapped_hands_are_only_hittable_once_they_are_home() {
+    // The reward for reading a clap is a clean window at a known place, not a
+    // scramble into the middle of the arena while everything else is live.
+    // Mirrors the rule in `tick_multi_part_boss`.
+    let open = |state: &str, t: u32| match state {
+        "idle" => t < COLOSSUS_CLAP_VULN_AFTER,
+        _ => false,
+    };
+    assert!(!open("attack", 999), "not while they are jammed together mid-arena");
+    assert!(!open("recover", 0), "not on the way back either");
+    assert!(open("idle", 0), "hittable the moment they are home");
+    assert!(open("idle", COLOSSUS_CLAP_VULN_AFTER - 1));
+    assert!(!open("idle", COLOSSUS_CLAP_VULN_AFTER), "about a second, then closed");
+    assert!((45..=90).contains(&COLOSSUS_CLAP_VULN_AFTER));
+}
+
+#[test]
+fn a_lone_hand_never_claps() {
+    // Mirrors the gate in `tick_multi_part_boss`: the attack is chosen from the
+    // pair's counter AND from both hands being in the fight. Gated on the
+    // counter alone, a surviving hand would keep committing to a clap it cannot
+    // complete — and would keep the clap's "only hittable once home" rule while
+    // doing it, so destroying one hand would have made the other HARDER to
+    // finish off.
+    let chosen = |n: u32, both_hands_ready: bool| {
+        if both_hands_ready { hand_attack_for(n) } else { HandAttack::Lunge }
+    };
+    for n in 1..=8 {
+        assert_eq!(
+            chosen(n, false),
+            HandAttack::Lunge,
+            "a single surviving hand committed to a clap at n={n}"
+        );
+    }
+    // With both hands present the alternation is untouched.
+    assert!((1..=8).any(|n| chosen(n, true) == HandAttack::Clap));
+}

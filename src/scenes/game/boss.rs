@@ -60,6 +60,9 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
+    tick_colossus_meteors(c, st);
+    tick_core_vent(c, st);
+    tick_clap_wave(c, st);
     tick_boss_hud(c, st);
     tick_boss_indicators(c, st);
     tick_boss_lights(c, st);
@@ -176,6 +179,116 @@ fn point_segment_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
 }
 
+// ── Beam geometry ────────────────────────────────────────────────────────────
+
+/// A point on the gaze beam at parameter `t` (0 = at the head, 1 = the far end).
+///
+/// A quadratic bezier whose control point is offset perpendicular to the chord,
+/// so `curve == 0.0` collapses to a straight line and every caller — drawing,
+/// hit testing, the travelling core — uses this one function for both. Keeping
+/// a straight beam as a special case would have let the drawn path and the
+/// damaging path disagree, which on a beam this wide is the difference between
+/// a fair attack and an unreadable one.
+pub(crate) fn beam_point(start: (f32, f32), end: (f32, f32), curve: f32, t: f32) -> (f32, f32) {
+    if curve.abs() < 0.0001 {
+        return lerp2(start, end, t);
+    }
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let len = (dx * dx + dy * dy).sqrt().max(1.0);
+    let (nx, ny) = (-dy / len, dx / len);
+    let mid = ((start.0 + end.0) * 0.5, (start.1 + end.1) * 0.5);
+    let ctrl = (mid.0 + nx * curve * len, mid.1 + ny * curve * len);
+    let u = 1.0 - t;
+    (
+        u * u * start.0 + 2.0 * u * t * ctrl.0 + t * t * end.0,
+        u * u * start.1 + 2.0 * u * t * ctrl.1 + t * t * end.1,
+    )
+}
+
+/// Sample the beam from the head out to `t_max` as a polyline.
+pub(crate) fn beam_polyline(start: (f32, f32), end: (f32, f32), curve: f32, t_max: f32) -> Vec<(f32, f32)> {
+    let n = COLOSSUS_BEAM_SEGMENTS;
+    (0..=n)
+        .map(|i| beam_point(start, end, curve, t_max * i as f32 / n as f32))
+        .collect()
+}
+
+/// Distance from `p` to the beam, as drawn. Segment-wise against the same
+/// polyline the renderer uses, so a curved beam damages where it looks like it
+/// does.
+pub(crate) fn beam_dist(p: (f32, f32), pts: &[(f32, f32)]) -> f32 {
+    pts.windows(2)
+        .map(|w| point_segment_dist(p, w[0], w[1]))
+        .fold(f32::MAX, f32::min)
+}
+
+/// Half-width of the beam's damaging area. The drawn thickness, not a hidden
+/// margin on top of it.
+pub(crate) fn beam_hit_radius() -> f32 {
+    COLOSSUS_BEAM_THICKNESS * 0.5 + PLAYER_R
+}
+
+/// The far end of a beam aimed from `start` through `aim`: a ray of fixed
+/// length, so the beam does not politely stop at the player.
+pub(crate) fn beam_end(start: (f32, f32), aim: (f32, f32)) -> (f32, f32) {
+    let dx = aim.0 - start.0;
+    let dy = aim.1 - start.1;
+    let d = (dx * dx + dy * dy).sqrt();
+    if d < 1.0 {
+        return (start.0 + COLOSSUS_BEAM_LENGTH, start.1);
+    }
+    (
+        start.0 + dx / d * COLOSSUS_BEAM_LENGTH,
+        start.1 + dy / d * COLOSSUS_BEAM_LENGTH,
+    )
+}
+
+/// Length of one beam in the burst: the sweep plus the pause after it.
+fn beam_shot_len() -> u32 {
+    COLOSSUS_BEAM_TICKS + COLOSSUS_BEAM_GAP_TICKS
+}
+
+/// Lay a pool of rectangles along `pts` so a curved beam reads as one
+/// continuous band.
+///
+/// `prefix` names a pool (`colossus_beam_tel_` / `colossus_beam_core_`) of
+/// `COLOSSUS_BEAM_SEGMENTS` objects. `rotation_adjusted_offset` keeps a rotated
+/// object's rendered centre at `position + size/2`, so positioning each segment
+/// by its own midpoint is enough.
+fn draw_beam_strip(c: &mut Canvas, prefix: &str, pts: &[(f32, f32)], thickness: f32) {
+    for i in 0..COLOSSUS_BEAM_SEGMENTS {
+        let name = format!("{prefix}_{i}");
+        let Some(seg) = pts.get(i).zip(pts.get(i + 1)) else {
+            if let Some(obj) = c.get_game_object_mut(&name) { obj.visible = false; }
+            continue;
+        };
+        let ((ax, ay), (bx, by)) = (*seg.0, *seg.1);
+        let dx = bx - ax;
+        let dy = by - ay;
+        // Overlap each segment slightly so the joints of a curve do not show as
+        // notches along the edge of the band.
+        let len = (dx * dx + dy * dy).sqrt().max(1.0) + thickness * 0.25;
+        let deg = dy.atan2(dx).to_degrees();
+        let mid = ((ax + bx) * 0.5, (ay + by) * 0.5);
+        if let Some(obj) = c.get_game_object_mut(&name) {
+            obj.size = (len, thickness);
+            obj.rotation = deg;
+            obj.position = (mid.0 - len * 0.5, mid.1 - thickness * 0.5);
+            obj.visible = true;
+        }
+    }
+}
+
+/// Hide every segment of a beam strip pool.
+fn hide_beam_strip(c: &mut Canvas, prefix: &str) {
+    for i in 0..COLOSSUS_BEAM_SEGMENTS {
+        if let Some(obj) = c.get_game_object_mut(&format!("{prefix}_{i}")) {
+            obj.visible = false;
+        }
+    }
+}
+
 /// Clamp `to` so it is at most `max` px from `from` — the leash that keeps a
 /// part loosely tethered to its home orbit even while attacking.
 fn leash_clamp(from: (f32, f32), to: (f32, f32), max: f32) -> (f32, f32) {
@@ -205,8 +318,228 @@ fn colossus_zone_r(id: &str) -> f32 {
 
 /// Idle length per part: a base plus a small per-part jitter so parts never
 /// attack in lockstep (the pattern director additionally spaces them out).
-fn colossus_idle_len(i: usize) -> u32 {
+pub(crate) fn colossus_idle_len(i: usize) -> u32 {
+    // The head is timed against its own vulnerability window rather than the
+    // shared idle: its next gravity well opens ~1 s after the window closes, so
+    // the counter-attack ends cleanly instead of the next attack starting on
+    // top of it. Index 3 is the head (see `boss_part_offset`).
+    if i == 3 {
+        return COLOSSUS_HEAD_VULN_AFTER + COLOSSUS_HEAD_REARM_GAP;
+    }
     COLOSSUS_IDLE_TICKS + (i as u32 % 2) * 26 + (i as u32 * 7) % 17
+}
+
+// ── The torso's meteor storm ─────────────────────────────────────────────────
+
+/// Build the launch schedule for one storm.
+///
+/// Two properties do the work, and both were missing from the burst this
+/// replaces:
+///
+///  * SEQUENTIAL. Meteors are 0.5-1.0 s apart, so the storm is a series of
+///    dodges the player moves through rather than one instant that they either
+///    happened to be clear of or did not. Three simultaneous rocks is a coin
+///    flip; five spaced rocks is a skill.
+///
+///  * ALTERNATING SIDES. The side flips every meteor, so consecutive rocks come
+///    from opposite halves of the sky and the player is pushed back and forth
+///    instead of settling into one safe corner. Picking each angle at random
+///    independently would cluster them — three from the left in a row is a
+///    likely draw, and it reads as the boss doing the same thing three times.
+///
+/// Angles stay in `COLOSSUS_METEOR_ANGLE_MIN..MAX` (above and to the sides),
+/// never from below.
+pub(crate) fn meteor_storm_schedule(seed: &mut u64) -> Vec<(u32, f32)> {
+    let mut out = Vec::with_capacity(COLOSSUS_METEOR_COUNT as usize);
+    let mid = (COLOSSUS_METEOR_ANGLE_MIN + COLOSSUS_METEOR_ANGLE_MAX) * 0.5;
+    // A short lead-in so the storm does not fire on the same frame the pose
+    // lands — the player needs to see the torso commit before the first rock.
+    let mut delay = COLOSSUS_METEOR_GAP_MIN;
+    for n in 0..COLOSSUS_METEOR_COUNT {
+        // Alternate halves, then jitter inside the half.
+        let (lo, hi) = if n % 2 == 0 {
+            (mid, COLOSSUS_METEOR_ANGLE_MAX)
+        } else {
+            (COLOSSUS_METEOR_ANGLE_MIN, mid)
+        };
+        let angle = lcg_range(seed, lo, hi);
+        out.push((delay, angle));
+        let gap = lcg_range(
+            seed,
+            COLOSSUS_METEOR_GAP_MIN as f32,
+            COLOSSUS_METEOR_GAP_MAX as f32,
+        );
+        delay += gap
+            .round()
+            .clamp(COLOSSUS_METEOR_GAP_MIN as f32, COLOSSUS_METEOR_GAP_MAX as f32)
+            as u32;
+    }
+    out
+}
+
+/// Launch any meteor whose delay has elapsed.
+///
+/// Runs unconditionally rather than only while the torso is attacking: a storm
+/// already committed should finish even if the torso is destroyed mid-way. The
+/// alternative — cancelling the queue on death — makes a kill silently delete
+/// hazards already telegraphed on screen, which reads as the warnings lying.
+fn tick_colossus_meteors(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let due: Vec<f32> = {
+        let mut s = st.lock().unwrap();
+        if s.boss_meteor_queue.is_empty() { return; }
+        if s.dead || !s.boss_active {
+            s.boss_meteor_queue.clear();
+            return;
+        }
+        let mut due = Vec::new();
+        for entry in s.boss_meteor_queue.iter_mut() {
+            entry.0 = entry.0.saturating_sub(1);
+        }
+        s.boss_meteor_queue.retain(|(ticks, angle)| {
+            if *ticks == 0 { due.push(*angle); false } else { true }
+        });
+        due
+    };
+    for angle in due {
+        super::spawning::spawn_comet_from_angle(c, st, angle);
+    }
+}
+
+// ── The torso's core vent ────────────────────────────────────────────────────
+
+/// Draw and resolve the rotating plasma spokes.
+///
+/// Kept out of the shared part loop: the vent is not a lunge with a landing
+/// circle, it is a rotating field around a stationary part, and threading that
+/// through the lunge machinery would have meant a special case in every branch
+/// of it. It reads the torso's FSM state and owns everything else.
+///
+/// The spokes damage on CONTACT with a cooldown rather than once per attack: a
+/// rotating beam you are standing in would otherwise take every heart in the
+/// second it takes to get out.
+fn tick_core_vent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (venting, ticks, buffed, px, py) = {
+        let mut s = st.lock().unwrap();
+        if s.boss_vent_hit_cooldown > 0 { s.boss_vent_hit_cooldown -= 1; }
+        let venting = s.boss_active
+            && !s.dead
+            && !s.boss_stasis_active
+            && torso_attack_for(s.boss_torso_attack) == TorsoAttack::CoreVent
+            && s.boss_parts.iter().any(|p| {
+                p.id == "torso" && p.alive && !p.shielded && p.state == PartState::Attack
+            });
+        let ticks = s.boss_parts.iter()
+            .find(|p| p.id == "torso")
+            .map(|p| p.state_ticks)
+            .unwrap_or(0);
+        (venting, ticks, s.player_buff > 0, s.px, s.py)
+    };
+
+    if !venting {
+        for i in 0..COLOSSUS_VENT_SPOKES {
+            if let Some(obj) = c.get_game_object_mut(&format!("colossus_vent_{i}")) {
+                obj.visible = false;
+            }
+        }
+        return;
+    }
+
+    // Where the torso is. The vent radiates from the chest, so the spokes are
+    // anchored to the part rather than to the body anchor.
+    let Some((tx, ty)) = c.get_game_object("colossus_part_2").map(|o| {
+        (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5)
+    }) else { return; };
+
+    let spin = ticks as f32 * COLOSSUS_VENT_SPIN;
+    let step = 360.0 / COLOSSUS_VENT_SPOKES as f32;
+    let half = COLOSSUS_VENT_LENGTH * 0.5;
+    let mut hit = false;
+
+    for i in 0..COLOSSUS_VENT_SPOKES {
+        let deg = spin + step * i as f32;
+        let rad = deg.to_radians();
+        let (dx, dy) = (rad.cos(), rad.sin());
+        let tip = (tx + dx * COLOSSUS_VENT_LENGTH, ty + dy * COLOSSUS_VENT_LENGTH);
+        let mid = (tx + dx * half, ty + dy * half);
+
+        if let Some(obj) = c.get_game_object_mut(&format!("colossus_vent_{i}")) {
+            obj.size = (COLOSSUS_VENT_LENGTH, COLOSSUS_VENT_THICKNESS);
+            obj.rotation = deg;
+            obj.position = (mid.0 - COLOSSUS_VENT_LENGTH * 0.5, mid.1 - COLOSSUS_VENT_THICKNESS * 0.5);
+            obj.visible = true;
+        }
+
+        // Half the drawn thickness plus the player, as the gaze beam uses — the
+        // damaging area is what is on screen.
+        if point_segment_dist((px, py), (tx, ty), tip)
+            < COLOSSUS_VENT_THICKNESS * 0.5 + PLAYER_R
+        {
+            hit = true;
+        }
+    }
+
+    if !hit { return; }
+    let on_cooldown = { st.lock().unwrap().boss_vent_hit_cooldown > 0 };
+    if on_cooldown { return; }
+    { st.lock().unwrap().boss_vent_hit_cooldown = COLOSSUS_VENT_HIT_COOLDOWN; }
+
+    // Thrown clear of the torso, so a hit also solves the problem of being
+    // inside the spokes — being hit twice in a row by the same rotation would
+    // be the attack punishing the player for its own knockback.
+    let dx = px - tx;
+    let dy = py - ty;
+    let d = (dx * dx + dy * dy).sqrt().max(1.0);
+    let push = (dx / d * 62.0, dy / d * 62.0);
+    {
+        let mut s = st.lock().unwrap();
+        s.vx = push.0;
+        s.vy = push.1;
+        s.hooked = false;
+        s.active_hook = String::new();
+    }
+    c.run(Action::Hide { target: Target::name("rope") });
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.momentum = push;
+    }
+    c.set_var("boss_knockback_ticks", Value::I32(18));
+
+    if buffed {
+        // The buff shields the heart and spends an absorption, as it does for
+        // every other Colossus attack.
+        let mut s = st.lock().unwrap();
+        if s.player_buff > 0 {
+            s.buff_absorbs = s.buff_absorbs.saturating_sub(1);
+            if s.buff_absorbs == 0 {
+                s.player_buff = 0;
+                s.buff_timer = 0;
+            }
+        }
+    } else {
+        let dead = { st.lock().unwrap().dead };
+        if !dead { super::hearts::lose_heart(c, st); }
+    }
+}
+
+/// Expand and fade the clap's force-wave ring.
+fn tick_clap_wave(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (ticks, at) = {
+        let mut s = st.lock().unwrap();
+        if s.boss_clap_wave == 0 {
+            if let Some(obj) = c.get_game_object_mut("colossus_clap_wave") {
+                obj.visible = false;
+            }
+            return;
+        }
+        s.boss_clap_wave -= 1;
+        (s.boss_clap_wave, s.boss_clap_at)
+    };
+    let t = 1.0 - ticks as f32 / COLOSSUS_CLAP_WAVE_TICKS as f32;
+    let r = COLOSSUS_CLAP_WAVE_R * t;
+    if let Some(obj) = c.get_game_object_mut("colossus_clap_wave") {
+        obj.size = (r * 2.0, r * 2.0);
+        obj.position = (at.0 - r, at.1 - r);
+        obj.visible = true;
+    }
 }
 
 // ── Multi-part boss (Colossus / Serpent) ─────────────────────────────────────
@@ -312,7 +645,17 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         strike_heart: bool,
         strike_consume_absorb: bool,
         strike_big_throw: bool,
-        summon_meteors: bool,
+        /// This part is the torso, mid meteor storm.
+        storm: bool,
+        /// This part is the torso, mid core vent.
+        vent: bool,
+        /// hand_l only: the pair completed a clap this tick.
+        clap_wave: bool,
+        /// Head only: how far the current beam has swept, 0..1. `None` when no
+        /// beam is firing this frame (winding up, or in the gap between shots).
+        beam_t: Option<f32>,
+        /// Head only: lateral bow of the current beam.
+        beam_curve: f32,
     }
 
     let frames: Vec<PartFrame> = {
@@ -330,13 +673,14 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.boss_parts[i].home_offset = home;
             let pid = s.boss_parts[i].id;
             let zone_r = colossus_zone_r(pid);
+            // The torso performs BOTH of its attacks from where it stands — a
+            // meteor storm calls rocks down, a core vent radiates from the chest
+            // — so it never displaces, and the head has nothing to ride. Kept as
+            // an explicit zero rather than deleted: the head's offset still adds
+            // it, and a silent removal would be a puzzle the next time the torso
+            // gains a moving attack.
             if pid == "torso" && s.boss_parts[i].alive {
-                // The torso's displacement from home, applied to the head so they
-                // move together during the slam.
-                let off = if s.boss_parts[i].state == PartState::Attack {
-                    capped_toward(s.boss_parts[i].attack_start, s.boss_parts[i].target, s.boss_parts[i].state_ticks, MOMENTUM_CAP)
-                } else { home };
-                torso_disp = (off.0 - home.0, off.1 - home.1);
+                torso_disp = (0.0, 0.0);
             }
             if !s.boss_parts[i].alive {
                 frames.push(PartFrame {
@@ -345,7 +689,7 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     zone_pos: (bcx + home.0, bcy + home.1), zone_r,
                     path_visible: false, path_start: (bcx + home.0, bcy + home.1),
                     strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
-                    strike_consume_absorb: false, strike_big_throw: false, summon_meteors: false,
+                    strike_consume_absorb: false, strike_big_throw: false, storm: false, vent: false, clap_wave: false, beam_t: None, beam_curve: 0.0,
                 });
                 continue;
             }
@@ -362,7 +706,7 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     zone_pos: (bcx + home.0, bcy + home.1), zone_r,
                     path_visible: false, path_start: (bcx + home.0, bcy + home.1),
                     strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
-                    strike_consume_absorb: false, strike_big_throw: false, summon_meteors: false,
+                    strike_consume_absorb: false, strike_big_throw: false, storm: false, vent: false, clap_wave: false, beam_t: None, beam_curve: 0.0,
                 });
                 continue;
             }
@@ -372,6 +716,50 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let vx = s.vx;
             let vy = s.vy;
             let mut began_attack = false;
+            // Which attack the torso is on. Read BEFORE the FSM may bump it, so
+            // the whole frame agrees; `next_torso_attack` applies the bump after.
+            let mut torso_storm = torso_attack_for(s.boss_torso_attack) == TorsoAttack::MeteorStorm;
+            // Both hands read ONE counter, so a clap is a decision the pair
+            // makes rather than two hands happening to agree.
+            //
+            // And it takes TWO hands. Gated on both being in the fight rather
+            // than on the counter alone, which means a hand destroyed mid-clap
+            // drops the survivor straight back to lunge rules on the next frame
+            // — including its vulnerability window. Left to the counter, a lone
+            // hand would keep performing a clap it cannot complete AND keep the
+            // clap's "only hittable once home" rule, so killing one hand would
+            // have made the other one harder to kill.
+            let both_hands_ready = s
+                .boss_parts
+                .iter()
+                .filter(|q| (q.id == "hand_l" || q.id == "hand_r") && q.alive && !q.shielded)
+                .count()
+                == 2;
+            let mut hand_clap =
+                both_hands_ready && hand_attack_for(s.boss_hand_attack) == HandAttack::Clap;
+            // Both hands lunge at the same speed cap from different distances,
+            // so they do not arrive together. The clap is the moment the LATER
+            // one lands — the nearer hand waits at the point and the second
+            // slams into it, which is what the impact should look like.
+            let clap_tick = {
+                let arr = |id: &str| {
+                    s.boss_parts
+                        .iter()
+                        .find(|q| q.id == id && q.alive && !q.shielded)
+                        .map(|q| colossus_arrival(q.attack_start, q.target))
+                };
+                match (arr("hand_l"), arr("hand_r")) {
+                    (Some(a), Some(b)) => a.max(b),
+                    (Some(a), None) | (None, Some(a)) => a,
+                    (None, None) => 0,
+                }
+            };
+            let mut next_torso_attack = false;
+            let mut next_hand_attack = false;
+            let mut begin_clap = false;
+            let mut start_storm = false;
+            let mut roll_beam_shot = false;
+            let mut roll_burst = false;
             {
                 let p = &mut s.boss_parts[i];
                 match p.state {
@@ -380,6 +768,17 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         if cooldown_ok && p.state_ticks >= colossus_idle_len(i) {
                             p.state = PartState::Telegraph;
                             p.state_ticks = 0;
+                            // Commit the torso to its next attack here, not at
+                            // the strike: the wind-up, the pose, the hit and the
+                            // vulnerability window all have to agree about which
+                            // attack this is, and the telegraph is the first of
+                            // them to be drawn.
+                            if p.id == "torso" { next_torso_attack = true; }
+                            // Same for the hands, except the decision is made
+                            // once for the pair — hand_l speaks for both, and a
+                            // clap drags hand_r into the same telegraph on the
+                            // same tick.
+                            if p.id == "hand_l" { next_hand_attack = true; }
                             // The hands aim at (a slight prediction ahead of) the
                             // player's position RIGHT NOW, then the path is locked
                             // — no homing. The lead makes it feel intelligent and,
@@ -388,14 +787,19 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             // The torso slams at the player (radial AoE), and the
                             // head aims its gaze beam at the player — both also
                             // lead slightly, and both paths are locked here.
-                            let world_target = match p.id {
-                                "hand_l" | "hand_r" => (px + vx * COLOSSUS_ATTACK_LEAD, py + vy * COLOSSUS_ATTACK_LEAD),
-                                "torso"             => (px + vx * COLOSSUS_ATTACK_LEAD, py + vy * COLOSSUS_ATTACK_LEAD),
-                                _                   => (px + vx * COLOSSUS_ATTACK_LEAD, py + vy * COLOSSUS_ATTACK_LEAD),
-                            };
+                            let aim = (px + vx * COLOSSUS_ATTACK_LEAD, py + vy * COLOSSUS_ATTACK_LEAD);
                             let home_world = (bcx + home.0, bcy + home.1);
-                            let clamped = leash_clamp(home_world, world_target, COLOSSUS_LEASH);
-                            p.target = (clamped.0 - bcx, clamped.1 - bcy);
+                            let world_target = if p.id == "head" {
+                                // The head fires a RAY of fixed length through
+                                // the aim point rather than stopping at it, so
+                                // the beam sweeps past the player and keeps
+                                // going. Stopping at the player made standing
+                                // beyond the aim point unconditionally safe.
+                                beam_end(home_world, aim)
+                            } else {
+                                leash_clamp(home_world, aim, COLOSSUS_LEASH)
+                            };
+                            p.target = (world_target.0 - bcx, world_target.1 - bcy);
                             p.path_start = home_world;
                             began_attack = true;
                         }
@@ -419,6 +823,8 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             );
                             // Re-arm the head's gaze beam so a new sweep can hit.
                             p.beam_hit_done = false;
+                            if p.id == "head" { roll_beam_shot = true; roll_burst = true; }
+                            if p.id == "torso" && torso_storm { start_storm = true; }
                         }
                     }
                     PartState::Attack => {
@@ -426,11 +832,25 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         // The head holds its beak while firing the gaze; the hands
                         // and torso hold at the lunge target after arriving (the
                         // torso for longer, so the meteors can clear).
+                        // Each beam in the burst re-aims at wherever the player
+                        // is NOW, so dodging the first one is the start of the
+                        // attack rather than the end of it.
+                        if p.id == "head"
+                            && p.state_ticks > 0
+                            && p.state_ticks % beam_shot_len() == 0
+                            && p.state_ticks / beam_shot_len() < p.beam_shots
+                        {
+                            roll_beam_shot = true;
+                        }
                         let duration = if p.id == "head" {
-                            COLOSSUS_HEAD_ATTACK_TICKS
+                            p.beam_shots * beam_shot_len()
+                        } else if p.id == "torso" {
+                            if torso_storm { COLOSSUS_STORM_TICKS } else { COLOSSUS_VENT_TICKS }
                         } else {
                             let arrival = colossus_arrival(p.attack_start, p.target);
-                            arrival + if p.id == "torso" { COLOSSUS_TORSO_HOLD_TICKS } else { COLOSSUS_HOLD_TICKS }
+                            // Only the hands reach this branch — the head and
+                            // the torso both attack from where they stand.
+                            arrival + COLOSSUS_HOLD_TICKS
                         };
                         if p.state_ticks >= duration {
                             p.state = PartState::Recover;
@@ -446,16 +866,83 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     }
                 }
             }
+            if roll_burst {
+                let n = lcg_range(
+                    &mut s.seed,
+                    COLOSSUS_BEAM_SHOTS_MIN as f32,
+                    COLOSSUS_BEAM_SHOTS_MAX as f32 + 0.999,
+                ) as u32;
+                s.boss_parts[i].beam_shots = n.clamp(COLOSSUS_BEAM_SHOTS_MIN, COLOSSUS_BEAM_SHOTS_MAX);
+            }
+            if roll_beam_shot {
+                // Re-aim at the player's CURRENT position, and roll a fresh
+                // curve, so no two beams in a burst are the same problem.
+                let straight = lcg_range(&mut s.seed, 0.0, 1.0) > COLOSSUS_BEAM_CURVE_CHANCE;
+                let curve = if straight {
+                    0.0
+                } else {
+                    lcg_range(&mut s.seed, -COLOSSUS_BEAM_CURVE_MAX, COLOSSUS_BEAM_CURVE_MAX)
+                };
+                let start = (bcx + s.boss_parts[i].home_offset.0, bcy + s.boss_parts[i].home_offset.1);
+                let end = beam_end(start, (px, py));
+                let p = &mut s.boss_parts[i];
+                p.beam_curve = curve;
+                p.path_start = start;
+                p.target = (end.0 - bcx, end.1 - bcy);
+                p.beam_hit_done = false;
+            }
+            if next_torso_attack {
+                s.boss_torso_attack = s.boss_torso_attack.wrapping_add(1);
+                // Refresh the frame's copy too. Without this the FIRST frame of
+                // a telegraph still describes the PREVIOUS attack — the glow,
+                // the landing circle and the vulnerability all disagree with the
+                // pose for one frame, which is exactly long enough to flicker.
+                torso_storm = torso_attack_for(s.boss_torso_attack) == TorsoAttack::MeteorStorm;
+            }
+            if next_hand_attack {
+                s.boss_hand_attack = s.boss_hand_attack.wrapping_add(1);
+                hand_clap = both_hands_ready
+                    && hand_attack_for(s.boss_hand_attack) == HandAttack::Clap;
+                begin_clap = hand_clap;
+            }
+            if begin_clap {
+                // A clap is the one moment the fight suspends its own
+                // one-part-at-a-time rule: hand_r is dragged into the same
+                // telegraph on the same tick, with the same target, so the two
+                // hands wind up on opposite sides of it and arrive together.
+                let (target, path_start) = {
+                    let l = &s.boss_parts[i];
+                    (l.target, l.path_start)
+                };
+                if let Some(j) = s.boss_parts.iter().position(|q| q.id == "hand_r" && q.alive && !q.shielded) {
+                    let r = &mut s.boss_parts[j];
+                    r.state = PartState::Telegraph;
+                    r.state_ticks = 0;
+                    r.target = target;
+                    // hand_r starts its wind-up from its OWN home, so the pull
+                    // back is mirrored rather than duplicated.
+                    r.path_start = (bcx + r.home_offset.0, bcy + r.home_offset.1);
+                    let _ = path_start;
+                }
+            }
             if began_attack {
                 s.boss_pattern_cooldown = COLOSSUS_PATTERN_COOLDOWN;
+            }
+            if start_storm {
+                s.boss_meteor_queue = meteor_storm_schedule(&mut s.seed);
+                // Hold the body still for the whole storm, so the only things
+                // moving on screen are the meteors the player has to read.
+                s.boss_meteor_lock_ticks = COLOSSUS_STORM_TICKS + COMET_WARN_TOTAL;
             }
 
             let (off, weak_open, strike) = {
                 let p = &s.boss_parts[i];
                 let target = p.target;
-                // The head never leaves its perch — it opens a gravity well and
-                // fires a gaze beam from where it is. The hands and torso lunge.
-                let head_stays = p.id == "head";
+                // Parts that attack from where they stand rather than lunging:
+                // the head (gravity well + gaze beam from its perch) and the
+                // torso while it is calling down a meteor storm. Everything
+                // else travels to a telegraphed point.
+                let head_stays = p.id == "head" || p.id == "torso";
                 let off = match p.state {
                     PartState::Idle => home,
                     PartState::Telegraph => {
@@ -488,14 +975,65 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 //    it opens after (Recover) and for a long post-well window.
                 let arrival = if p.id == "head" { 0 } else { colossus_arrival(p.attack_start, target) };
                 let vuln_after = if p.id == "head" { COLOSSUS_HEAD_VULN_AFTER } else { COLOSSUS_VULN_AFTER_TICKS };
-                let weak_open = match p.state {
-                    PartState::Attack => {
-                        p.id != "head"
-                            && p.state_ticks >= arrival + COLOSSUS_ATTACK_VULN_DELAY
+                // A meteor storm is a pure dodge phase: the torso is not
+                // hittable during it, through its recovery, or in the lull
+                // after. The window to damage the torso belongs to the SLAM, so
+                // the two beats stay distinct — survive one, punish the other.
+                let weak_open = if p.id == "torso" {
+                    if torso_storm {
+                        // A meteor storm is a pure dodge phase: not hittable
+                        // during it, through its recovery, or in the lull after.
+                        // The window belongs to the vent, so the two beats stay
+                        // distinct — survive one, punish the other.
+                        false
+                    } else {
+                        // The core vent is dangerous AND vulnerable at once.
+                        // Opens half a second into the rotation (so the wind-up
+                        // is not free) and stays open well past the end of the
+                        // vent.
+                        //
+                        // The after-window is measured in TICKS SINCE THE VENT
+                        // ENDED, not per FSM state, because it now outlasts the
+                        // recovery and runs on into the idle. Expressed per
+                        // state it would have been capped at the recovery's
+                        // length without anything saying so — the window would
+                        // have silently stopped growing when the constant went
+                        // past 70.
+                        match p.state {
+                            PartState::Attack => p.state_ticks >= COLOSSUS_VENT_VULN_DELAY,
+                            PartState::Recover => p.state_ticks < COLOSSUS_VENT_VULN_AFTER,
+                            PartState::Idle => {
+                                COLOSSUS_RECOVER_TICKS + p.state_ticks < COLOSSUS_VENT_VULN_AFTER
+                            }
+                            _ => false,
+                        }
                     }
-                    PartState::Recover => true,
-                    PartState::Idle => p.state_ticks < vuln_after,
-                    _ => false,
+                } else if p.id == "hand_l" || p.id == "hand_r" {
+                    if hand_clap {
+                        // After a clap the hands are only hittable once they are
+                        // HOME. Not while they are jammed together mid-arena:
+                        // the reward for reading a clap should be a clean window
+                        // at a known place, not a scramble to the middle of the
+                        // arena with everything else still live.
+                        p.state == PartState::Idle && p.state_ticks < COLOSSUS_CLAP_VULN_AFTER
+                    } else {
+                        match p.state {
+                            PartState::Attack => p.state_ticks >= arrival + COLOSSUS_ATTACK_VULN_DELAY,
+                            PartState::Recover => true,
+                            PartState::Idle => p.state_ticks < vuln_after,
+                            _ => false,
+                        }
+                    }
+                } else {
+                    match p.state {
+                        PartState::Attack => {
+                            p.id != "head"
+                                && p.state_ticks >= arrival + COLOSSUS_ATTACK_VULN_DELAY
+                        }
+                        PartState::Recover => true,
+                        PartState::Idle => p.state_ticks < vuln_after,
+                        _ => false,
+                    }
                 };
                 // Strike:
                 //  * Hands + torso: the moment the lunge physically reaches the
@@ -503,7 +1041,10 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 //  * Head: the gaze beam is a travelling sweep handled by the
                 //    application loop, so the FSM does not strike for it here.
                 let strike = if p.state == PartState::Attack {
-                    if head_stays {
+                    // During a clap both hands land on the SAME point, so
+                    // letting each resolve its own hit would cost two hearts
+                    // for one attack. hand_l resolves it for the pair.
+                    if head_stays || (hand_clap && p.id == "hand_r") {
                         false
                     } else {
                         let dist = ((target.0 - p.attack_start.0).powi(2)
@@ -525,10 +1066,48 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
 
             let zone_pos = (bcx + s.boss_parts[i].target.0, bcy + s.boss_parts[i].target.1);
+            // "Storm, and currently performing it". `torso_storm` alone is
+            // also true through the lull AFTER a storm (the counter is only
+            // bumped on the next telegraph), which is what keeps the weakpoint
+            // shut in that lull — but it must not keep the summoning glow lit.
+            let performing = matches!(s.boss_parts[i].state, PartState::Telegraph | PartState::Attack);
+            let storm_frame = pid == "torso" && torso_storm && performing;
+            let vent_frame = pid == "torso" && !torso_storm && performing;
+            // Neither torso attack travels, so neither gets a landing circle or
+            // a trajectory strip — both would promise an impact that never comes.
+            let torso_frame = storm_frame || vent_frame;
             let (zone_visible, zone_solid) = {
                 let p = &s.boss_parts[i];
-                (p.state == PartState::Telegraph || p.state == PartState::Attack,
-                 p.state == PartState::Attack)
+                // A meteor storm has no landing circle: nothing lunges, so a
+                // disc on the ground would promise an impact that never comes.
+                // Its telegraph is the torso's own summoning glow plus each
+                // meteor's two-second warning marker.
+                if torso_frame {
+                    (false, false)
+                } else if p.id == "head" {
+                    // The well stays open for the whole attack; the beam is
+                    // only "solid" while a shot is actually sweeping, so the
+                    // gaps between beams show the charge orb recharging.
+                    let firing = p.state == PartState::Attack
+                        && (p.state_ticks % beam_shot_len()) < COLOSSUS_BEAM_TICKS;
+                    (p.state == PartState::Telegraph || p.state == PartState::Attack, firing)
+                } else {
+                    (p.state == PartState::Telegraph || p.state == PartState::Attack,
+                     p.state == PartState::Attack)
+                }
+            };
+            let (beam_t, beam_curve) = {
+                let p = &s.boss_parts[i];
+                if p.id == "head" && p.state == PartState::Attack {
+                    let shot_t = p.state_ticks % beam_shot_len();
+                    if shot_t < COLOSSUS_BEAM_TICKS {
+                        (Some(shot_t as f32 / COLOSSUS_BEAM_TICKS as f32), p.beam_curve)
+                    } else {
+                        (None, p.beam_curve)
+                    }
+                } else {
+                    (None, p.beam_curve)
+                }
             };
             // The path telegraph (trajectory) is shown while the part winds up,
             // from where it started the telegraph to where it will strike.
@@ -537,8 +1116,9 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 // The head's beam stays visible through the whole wind-up AND
                 // while it fires (so you can read the full path). Hands + torso
                 // only show the path during the wind-up.
-                (p.state == PartState::Telegraph
-                 || (p.id == "head" && p.state == PartState::Attack),
+                (!torso_frame
+                 && (p.state == PartState::Telegraph
+                     || (p.id == "head" && p.state == PartState::Attack)),
                  p.path_start)
             };
             let mut strike_unhook = false;
@@ -546,7 +1126,6 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let mut strike_heart = false;
             let mut strike_consume_absorb = false;
             let mut strike_big_throw = false;
-            let mut summon_meteors = false;
             if strike {
                 // Hit detection:
                 //  * Hands/torso: the player is in the radial danger zone.
@@ -575,14 +1154,9 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         strike_heart = true;
                     }
                 }
-                // The torso's slam also calls down a burst of meteors (the
-                // existing comet system), whether or not the slam itself hit.
-                // It also holds the whole body still so the meteors can fire
-                // and clear before the body moves again.
-                if pid == "torso" {
-                    summon_meteors = true;
-                    s.boss_meteor_lock_ticks = COLOSSUS_METEOR_LOCK_TICKS;
-                }
+                // Meteors are the torso's OTHER attack now, queued when the
+                // storm begins — not a rider on every slam. See
+                // `queue_meteor_storm`.
             }
 
             frames.push(PartFrame {
@@ -590,7 +1164,12 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 state_ticks: s.boss_parts[i].state_ticks, zone_visible, zone_solid, zone_pos, zone_r,
                 path_visible, path_start,
                 strike_unhook, strike_kick, strike_heart, strike_consume_absorb,
-                strike_big_throw, summon_meteors,
+                strike_big_throw, storm: storm_frame, vent: vent_frame,
+                clap_wave: hand_clap
+                    && pid == "hand_l"
+                    && s.boss_parts[i].state == PartState::Attack
+                    && s.boss_parts[i].state_ticks == clap_tick,
+                beam_t, beam_curve,
             });
         }
         frames
@@ -678,23 +1257,14 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.visible = false;
             }
 
-            // Bright beam core: travels from the head to the front as it fires.
+            // Bright beam core: sweeps from the head out along the path as it
+            // fires. Drawn as a polyline so a curved beam is drawn by the same
+            // code as a straight one.
             if f.alive && f.zone_solid {
-                let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
-                let front = lerp2(f.path_start, f.zone_pos, t);
-                let (ax, ay) = f.path_start;
-                let dx = front.0 - ax;
-                let dy = front.1 - ay;
-                let len = (dx * dx + dy * dy).sqrt().max(1.0);
-                let deg = dy.atan2(dx).to_degrees();
-                let th = 28.0;
-                let mid = ((ax + front.0) * 0.5, (ay + front.1) * 0.5);
-                if let Some(obj) = c.get_game_object_mut("colossus_beam_core") {
-                    obj.size = (len, th);
-                    obj.rotation = deg;
-                    obj.position = (mid.0 - len * 0.5, mid.1 - th * 0.5);
-                    obj.visible = true;
-                }
+                let t = f.beam_t.unwrap_or(0.0);
+                let pts = beam_polyline(f.path_start, f.zone_pos, f.beam_curve, t.max(0.001));
+                draw_beam_strip(c, "colossus_beam_core", &pts, COLOSSUS_BEAM_THICKNESS * 0.46);
+                let front = *pts.last().unwrap_or(&f.path_start);
 
                 // Little contact explosions: as the beam sweeps the path, pops
                 // appear at the beam front and quickly grow a few sizes, so it
@@ -716,12 +1286,13 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             s.beam_explode_live[i].3 = nttl;
                             let growth = (COLOSSUS_BEAM_EXPLODE_TTL as f32 - nttl as f32)
                                 / COLOSSUS_BEAM_EXPLODE_TTL as f32;
-                            let r = 30.0 + growth * 150.0;
+                            let r = COLOSSUS_BEAM_EXPLODE_R0
+                                + growth * (COLOSSUS_BEAM_EXPLODE_R1 - COLOSSUS_BEAM_EXPLODE_R0);
                             updates.push((id, x, y, r, true));
                             i += 1;
                         }
                         // Spawn a new pop at the beam front every few ticks.
-                        if f.state_ticks % 4 == 0 {
+                        if f.state_ticks % 3 == 0 {
                             let live_ids: Vec<&String> =
                                 s.beam_explode_live.iter().map(|(id, _, _, _)| id).collect();
                             let free = (0..8)
@@ -742,15 +1313,15 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     }
                     if let Some((id, x, y, _ttl)) = new_pop {
                         if let Some(obj) = c.get_game_object_mut(&id) {
-                            let r = 30.0;
+                            let r = COLOSSUS_BEAM_EXPLODE_R0;
                             obj.size = (r * 2.0, r * 2.0);
                             obj.position = (x - r, y - r);
                             obj.visible = true;
                         }
                     }
                 }
-            } else if let Some(obj) = c.get_game_object_mut("colossus_beam_core") {
-                obj.visible = false;
+            } else {
+                hide_beam_strip(c, "colossus_beam_core");
             }
             // When the beam is not firing, also stop the explosion trail.
             if !(f.alive && f.zone_visible) {
@@ -799,6 +1370,21 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     // cue. Takes priority so the strike window is unmistakable.
                     let pulse = 170 + (((f.zone_pos.0 as i32 / 4) + (f.zone_pos.1 as i32 / 4)).rem_euclid(6) as u8) * 14;
                     obj.set_glow(GlowConfig { color: Color(255, 224, 70, pulse), width: 42.0 });
+                } else if f.vent {
+                    // Hot orange while the chest is open: the torso is
+                    // dangerous here, but it is ALSO the only moment it can be
+                    // hurt, so the cue has to say "come here" and "carefully"
+                    // at once — which is why it is neither the storm's cold
+                    // violet nor the plain strike red.
+                    obj.set_glow(GlowConfig { color: Color(255, 170, 80, 220), width: 52.0 });
+                } else if f.storm {
+                    // Summoning glow: cold violet-white, deliberately NOT the
+                    // red-orange of an incoming strike. The two torso attacks
+                    // have to be distinguishable during the wind-up, because
+                    // one is a beat to dodge and the other is the only beat
+                    // where the torso can be hurt — reading it late costs the
+                    // player the window entirely.
+                    obj.set_glow(GlowConfig { color: Color(190, 150, 255, 200), width: 46.0 });
                 } else if f.zone_visible {
                     // Wind-up glow: pulsing red-orange while it commits to the strike.
                     let wide = if f.strike_unhook || f.strike_heart || f.strike_kick.0 != 0.0 || f.strike_kick.1 != 0.0 { 190 } else { 110 };
@@ -815,15 +1401,22 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // started winding up to where it will strike. For the head's gaze beam
         // this strip grows from the head toward a travelling front during the
         // attack, so the player sees the sweep coming and can be off the line.
-        if let Some(obj) = c.get_game_object_mut(&format!("colossus_path_{idx}")) {
+        if f.id == "head" {
+            // The head's path is a curve, so it gets the polyline pool rather
+            // than the single rotated strip the lunging parts use. Shown for
+            // the whole wind-up and while the beam sweeps, so the player can
+            // read the full arc before it is dangerous.
             if f.alive && f.path_visible {
+                let pts = beam_polyline(f.path_start, f.zone_pos, f.beam_curve, 1.0);
+                draw_beam_strip(c, "colossus_beam_tel", &pts, COLOSSUS_BEAM_THICKNESS);
+            } else {
+                hide_beam_strip(c, "colossus_beam_tel");
+            }
+        }
+        if let Some(obj) = c.get_game_object_mut(&format!("colossus_path_{idx}")) {
+            if f.alive && f.path_visible && f.id != "head" {
                 let (ax, ay) = f.path_start;
-                let (bx, by) = if f.id == "head" && f.zone_solid {
-                    let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
-                    lerp2(f.path_start, f.zone_pos, t)
-                } else {
-                    f.zone_pos
-                };
+                let (bx, by) = f.zone_pos;
                 let dx = bx - ax;
                 let dy = by - ay;
                 let len = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -846,15 +1439,18 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // reaches the player, costs a heart ALWAYS (the buff does not shield the
         // gaze) and throws them hard.
         if f.id == "head" && f.alive && f.zone_solid {
-            let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
-            let front = lerp2(f.path_start, f.zone_pos, t);
+            let t = f.beam_t.unwrap_or(0.0);
+            let pts = beam_polyline(f.path_start, f.zone_pos, f.beam_curve, t.max(0.001));
+            let front = *pts.last().unwrap_or(&f.path_start);
             let hit_done = {
                 let s = st.lock().unwrap();
                 s.boss_parts.iter().find(|p| p.id == "head").map(|p| p.beam_hit_done).unwrap_or(true)
             };
-            if !hit_done
-                && point_segment_dist((px, py), f.path_start, front) < COLOSSUS_PATH_THICKNESS + PLAYER_R
-            {
+            // Against the swept polyline, at HALF the drawn thickness plus the
+            // player's radius — the damaging area is what is on screen. The old
+            // test used the full path thickness as a radius, so the beam hurt
+            // twice as far as it looked.
+            if !hit_done && beam_dist((px, py), &pts) < beam_hit_radius() {
                 {
                     let mut s = st.lock().unwrap();
                     if let Some(p) = s.boss_parts.iter_mut().find(|p| p.id == "head" && p.alive) {
@@ -903,9 +1499,9 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 // line IS the telegraph, so the reticle only appears as it
                 // fires (unlike the hands/torso landing circles).
                 if f.alive && f.zone_solid {
-                    let t = (f.state_ticks as f32 / COLOSSUS_BEAM_TICKS as f32).clamp(0.0, 1.0);
-                    let front = lerp2(f.path_start, f.zone_pos, t);
-                    let r = 44.0;
+                    let t = f.beam_t.unwrap_or(0.0);
+                    let front = beam_point(f.path_start, f.zone_pos, f.beam_curve, t);
+                    let r = COLOSSUS_BEAM_THICKNESS * 0.34;
                     obj.size = (r * 2.0, r * 2.0);
                     obj.position = (front.0 - r, front.1 - r);
                     obj.visible = true;
@@ -949,6 +1545,42 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let dead = { let s = st.lock().unwrap(); s.dead };
             if !dead { super::hearts::lose_heart(c, st); }
         }
+        if f.clap_wave {
+            // The wave leaves the impact point whether or not the hands caught
+            // anyone. Being outside the kill zone is not the same as being
+            // unaffected — the throw IS the attack, and it is what turns a
+            // dodged clap into a repositioning problem instead of a non-event.
+            let (cx, cy) = f.zone_pos;
+            let dx = px - cx;
+            let dy = py - cy;
+            let d = (dx * dx + dy * dy).sqrt().max(1.0);
+            {
+                let mut s = st.lock().unwrap();
+                s.boss_clap_wave = COLOSSUS_CLAP_WAVE_TICKS;
+                s.boss_clap_at = (cx, cy);
+            }
+            if d < COLOSSUS_CLAP_WAVE_R {
+                // Falls off to nothing at the edge, so the wave has a readable
+                // reach rather than a hard boundary you cannot see.
+                let fall = 1.0 - (d / COLOSSUS_CLAP_WAVE_R).clamp(0.0, 1.0);
+                let power = COLOSSUS_CLAP_WAVE_POWER * fall;
+                let push = (dx / d * power, dy / d * power);
+                {
+                    let mut s = st.lock().unwrap();
+                    s.vx = push.0;
+                    s.vy = push.1;
+                    s.hooked = false;
+                    s.active_hook = String::new();
+                }
+                c.run(Action::Hide { target: Target::name("rope") });
+                if let Some(obj) = c.get_game_object_mut("player") {
+                    obj.momentum = push;
+                }
+                // Briefly bypass the momentum cap so the throw actually flies
+                // rather than being clamped away on the next frame.
+                c.set_var("boss_knockback_ticks", Value::I32(22));
+            }
+        }
         if f.strike_consume_absorb {
             // The buff ate the hit: spend one absorption. When it runs out the
             // buff ends, so the shield is a limited resource.
@@ -959,13 +1591,6 @@ fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     s.player_buff = 0;
                     s.buff_timer = 0;
                 }
-            }
-        }
-        // The torso's slam also calls down a burst of meteors (existing comet
-        // system), whether or not the slam itself connected.
-        if f.summon_meteors {
-            for _ in 0..3 {
-                super::spawning::spawn_debug_comet(c, st);
             }
         }
     }
@@ -1655,22 +2280,49 @@ fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// Push a small electricity effect over each buff tether node so they read as
 /// distinct from the regular grab nodes (the same round electricity the player
 /// gets while buffed).
+/// The electric aura on a buff node.
+///
+/// ATTACHED to each node rather than pushed as a screen overlay. A pushed mega
+/// sprite is drawn in a pass that runs after every other renderer, so it sat in
+/// front of the arena asteroids even when an asteroid was between the camera
+/// and the node — the aura read as being in a different plane from the node it
+/// belongs to. Attaching it makes the sprite part of the node's own draw, so it
+/// takes the node's layer and depth and is occluded by exactly what occludes
+/// the node.
+///
+/// The player's own buff dome stays a pushed overlay (see `solar.rs`): that one
+/// genuinely must never be hidden by scenery.
+///
+/// Attached sprites persist until cleared, so every id touched last frame that
+/// is no longer a buff node has to be cleared explicitly — a recycled pool slot
+/// would otherwise keep wearing an aura for something it is no longer.
 fn tick_buff_node_elec(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let nodes: Vec<(f32, f32)> = {
+    let (candidates, previous) = {
         let s = st.lock().unwrap();
-        s.live_hooks.iter().filter_map(|id| {
-            let obj = c.get_game_object(id)?;
-            if obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) {
-                Some((obj.position.0 + obj.size.0 * 0.5, obj.position.1 + obj.size.1 * 0.5))
-            } else {
-                None
-            }
-        }).collect()
+        (s.live_hooks.clone(), s.buff_fx_attached.clone())
     };
-    if nodes.is_empty() { return; }
-    for (cx, cy) in nodes {
-        super::fx::push_electric_fx(c, (cx, cy), (HOOK_R * 2.6, HOOK_R * 2.6), (0.6, 0.95, 1.0, 0.7));
+
+    let mut attached: Vec<String> = Vec::new();
+    for id in &candidates {
+        let Some(obj) = c.get_game_object(id) else { continue; };
+        if !obj.visible || !obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) { continue; }
+        let cx = obj.position.0 + obj.size.0 * 0.5;
+        let cy = obj.position.1 + obj.size.1 * 0.5;
+        super::fx::attach_electric_fx(
+            c, id, (cx, cy),
+            (HOOK_R * 2.6, HOOK_R * 2.6),
+            (0.6, 0.95, 1.0, 0.7),
+        );
+        attached.push(id.clone());
     }
+
+    for id in &previous {
+        if !attached.contains(id) {
+            super::fx::clear_object_fx(c, id);
+        }
+    }
+
+    st.lock().unwrap().buff_fx_attached = attached;
 }
 
 /// Position the weakpoint marker rings on the boss body, visible only while the
@@ -1698,30 +2350,58 @@ fn tick_boss_weakpoints(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Boss darkness attack (uses the quartz lighting system) ───────────────────
 
+/// The Sun Eater's darkness attack.
+///
+/// Runs the SAME night-mode post pass and player lamp chain the eclipse
+/// approach uses (`eclipse::begin_night_mode`), at the `boss_dark` preset.
+/// Previously this only dropped the ambient — but quartz lighting is
+/// multiplicative, so an ambient of 0.06 with no light source in the world is
+/// not a dark room, it is a blank screen: there is nothing for the lamp to
+/// restore because there is no lamp. The attack was unreadable and unfair for
+/// exactly that reason.
+///
+/// With the shared entry point the player becomes the light source for three
+/// seconds, the node markers stay lit so the route is still findable, and the
+/// vignette closes in — the attack takes away the room, not the game.
 fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     if !s.boss_active || !s.boss_spawned || s.boss_hp <= 0 { return; }
 
     if s.boss_dark_active {
         s.boss_dark_ticks = s.boss_dark_ticks.saturating_sub(1);
-        if s.boss_dark_ticks == 0 {
+        let ending = s.boss_dark_ticks == 0;
+        if ending {
             s.boss_dark_active = false;
             s.boss_dark_cooldown = BOSS_DARK_INTERVAL;
-            drop(s);
+        }
+        drop(s);
+        if ending {
             c.set_var("boss_darkness", false);
+            super::eclipse::end_night_mode(c);
+            super::eclipse::kill_node_lights(c);
             if c.has_lighting() {
                 c.set_ambient(Color(255, 255, 255, 255), 1.0);
             }
+        } else {
+            // Hold the markers lit for the whole attack. They are attached
+            // per pool slot, so this only has to match `enabled` to `visible`.
+            super::eclipse::drive_node_lights(c, ECLIPSE_NODE_LIGHT_INTENSITY);
         }
     } else {
         s.boss_dark_cooldown = s.boss_dark_cooldown.saturating_sub(1);
-        if s.boss_dark_cooldown == 0 {
+        let starting = s.boss_dark_cooldown == 0;
+        if starting {
             s.boss_dark_active = true;
             s.boss_dark_ticks = BOSS_DARK_DURATION;
-            drop(s);
+        }
+        drop(s);
+        if starting {
             c.set_var("boss_darkness", true);
+            super::eclipse::ensure_node_lights(c);
+            super::eclipse::begin_night_mode(c, super::eclipse::NightPost::boss_dark());
+            super::eclipse::drive_node_lights(c, ECLIPSE_NODE_LIGHT_INTENSITY);
             if c.has_lighting() {
-                c.set_ambient(Color(10, 10, 25, 255), 0.06);
+                c.set_ambient(Color(10, 10, 25, 255), BOSS_DARK_AMBIENT);
             }
         }
     }
@@ -2729,7 +3409,20 @@ fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.boss_lunge_ticks = 0;
         s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH;
         s.boss_killed = true;
+        // A darkness attack in flight when the boss dies would otherwise leave
+        // the night-mode post pass, the lamp and the dark ambient running for
+        // the rest of the run — the post override is a single global slot and
+        // nothing else would ever clear it.
+        s.boss_dark_active = false;
+        s.boss_dark_ticks = 0;
+        s.boss_dark_cooldown = BOSS_DARK_INTERVAL;
         generator_ids = s.boss_generators.clone();
+    }
+    c.set_var("boss_darkness", false);
+    super::eclipse::end_night_mode(c);
+    super::eclipse::kill_node_lights(c);
+    if c.has_lighting() {
+        c.set_ambient(Color(255, 255, 255, 255), 1.0);
     }
 
     // Award meta currency for the permanent-roguelike upgrade pool, and coins

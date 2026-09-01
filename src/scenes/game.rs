@@ -12,7 +12,7 @@ mod background;
 mod gravity_wells;
 mod turrets;
 mod gravity_cannon;
-mod boss;
+pub(crate) mod boss;
 mod hearts;
 mod solar;
 mod eclipse;

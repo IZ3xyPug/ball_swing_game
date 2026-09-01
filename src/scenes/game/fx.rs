@@ -61,6 +61,7 @@ pub fn push_mega_fx(
             tint_color: tint,
             bitmask: [0; 4],
             velocity: (0.0, 0.0),
+            z_index: MEGA_Z_OVERLAY,
         },
         shader_variant: variant,
     };
@@ -94,6 +95,7 @@ pub fn push_electric_fx(
             // BIT_ELECTRICITY = 1 << 2 (see animated_vfx.wgsl).
             bitmask: [1 << 2, 0, 0, 0],
             velocity: (0.0, 0.0),
+            z_index: MEGA_Z_OVERLAY,
         },
         shader_variant: 1,
     };
@@ -122,8 +124,65 @@ pub fn push_energy_dome_fx(
             tint_color: tint,
             bitmask: [MEGA_BIT_ENERGY_DOME, 0, 0, 0],
             velocity: (0.0, 0.0),
+            z_index: MEGA_Z_OVERLAY,
         },
         shader_variant: 1,
     };
     c.push_mega_sprite(sprite);
+}
+
+// ── Object-attached effects ──────────────────────────────────────────────────
+//
+// `push_mega_sprite` queues into a renderer pass that runs after colour, image
+// and material — so a pushed effect is in front of the ENTIRE scene and there
+// is no z that puts it behind anything. That is right for an overlay on the
+// player and wrong for an aura that belongs to a world object: a buff node's
+// electricity drew over the asteroids in front of it, which reads as the
+// effect floating in a different plane from the thing it is attached to.
+//
+// `GameObject::set_mega_fx` hangs the sprite off the object instead. The item
+// is then emitted from that object's own `draw`, so it inherits the object's
+// layer, its culling, and its depth in the same list as every other sprite —
+// after culling, with no index to guess. Anything on a higher layer occludes
+// it, exactly as it occludes the object itself.
+//
+// Sprites attached this way persist until cleared, unlike pushed ones (which
+// are drained every frame), so a system that attaches must also detach.
+
+/// Attach an electricity effect to `object_id`, drawn at that object's own
+/// depth. Call every frame the effect should show; call `clear_object_fx` when
+/// it should stop.
+pub fn attach_electric_fx(
+    c: &mut Canvas,
+    object_id: &str,
+    pos: (f32, f32),
+    scale: (f32, f32),
+    tint: (f32, f32, f32, f32),
+) {
+    let ((u, v), (su, sv)) = world_to_mega_uv(c, pos, scale);
+    let sprite = MegaShaderSprite {
+        image: flat_white(),
+        instance: MegaShaderInstance {
+            world_position: (u, v),
+            scale: (su, sv),
+            rotation: 0.0,
+            tint_color: tint,
+            // BIT_ELECTRICITY = 1 << 2 (see animated_vfx.wgsl).
+            bitmask: [1 << 2, 0, 0, 0],
+            velocity: (0.0, 0.0),
+            // Ignored for an attached sprite: the object's own z decides.
+            z_index: MEGA_Z_OVERLAY,
+        },
+        shader_variant: 1,
+    };
+    if let Some(obj) = c.get_game_object_mut(object_id) {
+        obj.set_mega_fx(sprite);
+    }
+}
+
+/// Drop any effect attached to `object_id`. Safe to call when there is none.
+pub fn clear_object_fx(c: &mut Canvas, object_id: &str) {
+    if let Some(obj) = c.get_game_object_mut(object_id) {
+        obj.clear_mega_fx();
+    }
 }

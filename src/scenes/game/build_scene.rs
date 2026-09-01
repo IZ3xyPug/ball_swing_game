@@ -941,7 +941,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_meteor_lock_ticks: 0,
                 boss_contact_cooldown: 0,
                 boss_part_invuln_ticks: 0,
-                beam_explode_live: Vec::new(),
+                beam_explode_live: Vec::new(), buff_fx_attached:  Vec::new(),
+                boss_torso_attack: 0,             boss_meteor_queue: Vec::new(),
+                boss_hand_attack:  0,             boss_clap_wave:    0,
+                boss_clap_at:      (0.0, 0.0),    boss_vent_hit_cooldown: 0,
 
                 comet_live:        Vec::new(), comet_free:        comet_free.clone(),
 

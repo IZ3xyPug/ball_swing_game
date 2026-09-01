@@ -137,36 +137,77 @@ pub fn tick_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drive_banner(c, rise);
 }
 
-// ── Begin / end ──────────────────────────────────────────────────────────────
+// ── Shared night mode ────────────────────────────────────────────────────────
+//
+// The eclipse approach and the Sun Eater's darkness attack are the same effect
+// at two intensities, so they run the same code. Before this the boss attack
+// only dropped the ambient, which is a black screen with nothing to see by:
+// quartz lighting is multiplicative, so with no light source the world does not
+// get moody, it goes away. The eclipse solved that with a night-mode post pass
+// and a lamp chain on the player, and there was no reason the fight should have
+// a worse version of the same idea.
 
-fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    if !ECLIPSE_USE_POINT_LIGHTS {
-        return;
+/// The night-mode post pass parameters. Two presets, so the two callers differ
+/// in tuning rather than in implementation.
+#[derive(Clone, Copy, Debug)]
+pub struct NightPost {
+    pub bloom_threshold: f32,
+    pub bloom_strength: f32,
+    pub vignette_strength: f32,
+    pub vignette_radius: f32,
+    pub vignette_softness: f32,
+    pub chromatic_aberration: f32,
+}
+
+impl NightPost {
+    /// The long approach to a boss teleporter.
+    pub fn eclipse() -> Self {
+        NightPost {
+            bloom_threshold: ECLIPSE_BLOOM_THRESHOLD,
+            bloom_strength: ECLIPSE_BLOOM_STRENGTH,
+            vignette_strength: ECLIPSE_VIGNETTE_STRENGTH,
+            vignette_radius: ECLIPSE_VIGNETTE_RADIUS,
+            vignette_softness: ECLIPSE_VIGNETTE_SOFTNESS,
+            chromatic_aberration: ECLIPSE_CHROMATIC_ABERRATION,
+        }
     }
+
+    /// The Sun Eater's darkness attack: three seconds, so it hits harder and
+    /// closes in tighter than the eclipse's slow build.
+    pub fn boss_dark() -> Self {
+        NightPost {
+            bloom_threshold: BOSS_DARK_BLOOM_THRESHOLD,
+            bloom_strength: BOSS_DARK_BLOOM_STRENGTH,
+            vignette_strength: BOSS_DARK_VIGNETTE_STRENGTH,
+            vignette_radius: BOSS_DARK_VIGNETTE_RADIUS,
+            vignette_softness: BOSS_DARK_VIGNETTE_SOFTNESS,
+            chromatic_aberration: BOSS_DARK_CHROMATIC_ABERRATION,
+        }
+    }
+}
+
+/// Switch on the night-mode post pass, keep the HUD out of it, and light the
+/// player. Idempotent — safe to call on a frame where it is already running.
+pub fn begin_night_mode(c: &mut Canvas, post: NightPost) {
     if !c.has_lighting() {
-        // Lighting is enabled at scene entry, but never assume — without it the
-        // eclipse is a banner and nothing else, which is still better than a
-        // teleport out of nowhere.
+        // Without lighting this is a banner and nothing else, which is still
+        // better than the alternative. Never assume it is on.
         return;
     }
 
-    // ── The night-mode post shader ───────────────────────────────────────
-    // THE piece every earlier attempt was missing. Quartz lighting is
-    // multiplicative and so cannot draw a glow on dark art; the night-mode post
-    // pass adds BLOOM, which spreads bright pixels outward across the frame
-    // regardless of what the art underneath is. That is what turns a lit player
-    // into a visible pool of light, and no combination of radius and intensity
-    // gets there without it.
-    //
-    // Its vignette darkens the frame edges, which is the other half of the
-    // look. `clear_post_override` in `end_eclipse` puts it back.
+    // Quartz lighting is multiplicative and so cannot draw a glow on dark art;
+    // the night-mode post pass adds BLOOM, which spreads bright pixels outward
+    // across the frame regardless of the art underneath. That is what turns a
+    // lit player into a visible pool of light, and no combination of radius and
+    // intensity gets there without it. Its vignette darkens the frame edges,
+    // which is the other half of the look.
     c.enable_night_mode_shader(
-        ECLIPSE_BLOOM_THRESHOLD,
-        ECLIPSE_BLOOM_STRENGTH,
-        ECLIPSE_VIGNETTE_STRENGTH,
-        ECLIPSE_VIGNETTE_RADIUS,
-        ECLIPSE_VIGNETTE_SOFTNESS,
-        ECLIPSE_CHROMATIC_ABERRATION,
+        post.bloom_threshold,
+        post.bloom_strength,
+        post.vignette_strength,
+        post.vignette_radius,
+        post.vignette_softness,
+        post.chromatic_aberration,
     );
 
     // The HUD must not be darkened with the world.
@@ -176,7 +217,6 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    // ── The player's lights ──────────────────────────────────────────────
     // A CHAIN, not a single lamp. One big light leaves the trail dimming out
     // behind the player because `atten` falls off from a single origin; lights
     // spaced back along the trail keep it evenly lit, which is what the trail
@@ -211,15 +251,49 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     for i in 0..ECLIPSE_TRAIL_LIGHTS.len() {
         c.set_light_enabled(&format!("eclipse_trail_light_{i}"), true);
     }
+}
 
+/// Put the frame back. The post override is a single global slot, so leaving it
+/// on would tint the rest of the run.
+pub fn end_night_mode(c: &mut Canvas) {
+    c.clear_post_override();
+    for name in c.get_names_by_tag("hud") {
+        if let Some(obj) = c.get_game_object_mut(&name) {
+            obj.unlit = false;
+        }
+    }
+    if c.has_lighting() {
+        c.set_light_enabled(PLAYER_LIGHT, false);
+        for i in 0..ECLIPSE_TRAIL_LIGHTS.len() {
+            c.set_light_enabled(&format!("eclipse_trail_light_{i}"), false);
+        }
+    }
+}
 
-    // ONE LIGHT PER HOOK POOL SLOT, attached to that slot's object.
-    //
-    // Not a shared pool repositioned onto the nearest few: that has to re-rank
-    // as the player moves, and every re-rank switches lights on and off, which
-    // is what made nodes appear to light up and go dark as you passed them.
-    // Attached lights follow their object for free and never change identity,
-    // so all a frame has to do is match `enabled` to `visible`.
+/// Match every node marker light's `enabled` to its object's `visible`, and set
+/// its brightness. Shared with the boss darkness so a fight in the dark still
+/// shows the tether nodes.
+pub fn drive_node_lights(c: &mut Canvas, intensity: f32) {
+    for i in 0..HOOK_POOL_SIZE {
+        let vis = c
+            .get_game_object(&format!("hook_{i}"))
+            .map(|o| o.visible)
+            .unwrap_or(false);
+        let id = node_light_id(i);
+        c.set_light_enabled(&id, vis);
+        if vis {
+            if let Some(light) = c.get_light_mut(&id) {
+                light.intensity = intensity;
+            }
+        }
+    }
+}
+
+/// Create the per-pool-slot node marker lights if they do not exist yet.
+pub fn ensure_node_lights(c: &mut Canvas) {
+    if !c.has_lighting() {
+        return;
+    }
     for i in 0..HOOK_POOL_SIZE {
         let id = node_light_id(i);
         if c.get_light(&id).is_none() {
@@ -235,6 +309,41 @@ fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             c.attach_light(&id, &format!("hook_{i}"), (0.0, 0.0));
         }
     }
+}
+
+/// Switch every node marker light off. Used when the darkness ends.
+pub fn kill_node_lights(c: &mut Canvas) {
+    if !c.has_lighting() {
+        return;
+    }
+    for i in 0..HOOK_POOL_SIZE {
+        c.set_light_enabled(&node_light_id(i), false);
+    }
+}
+
+// ── Begin / end ──────────────────────────────────────────────────────────────
+
+fn begin_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    if !ECLIPSE_USE_POINT_LIGHTS {
+        return;
+    }
+    if !c.has_lighting() {
+        // Lighting is enabled at scene entry, but never assume — without it the
+        // eclipse is a banner and nothing else, which is still better than a
+        // teleport out of nowhere.
+        return;
+    }
+
+    begin_night_mode(c, NightPost::eclipse());
+
+    // ONE LIGHT PER HOOK POOL SLOT, attached to that slot's object.
+    //
+    // Not a shared pool repositioned onto the nearest few: that has to re-rank
+    // as the player moves, and every re-rank switches lights on and off, which
+    // is what made nodes appear to light up and go dark as you passed them.
+    // Attached lights follow their object for free and never change identity,
+    // so all a frame has to do is match `enabled` to `visible`.
+    ensure_node_lights(c);
 
     // Gravity wells light THEMSELVES. They are a hazard the player has to see
     // coming even when the lamp is nowhere near them, and a well-shaped hole in
@@ -272,22 +381,18 @@ pub fn end_eclipse(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     c.set_var("eclipse_active", false);
     c.set_var("eclipse_t", Value::F32(0.0));
 
-    // Put the frame back: the post override is global, so leaving it on would
-    // tint the rest of the run.
-    c.clear_post_override();
-    for name in c.get_names_by_tag("hud") {
-        if let Some(obj) = c.get_game_object_mut(&name) {
-            obj.unlit = false;
-        }
+    // Only clear the frame if the eclipse is what put it there. The Sun Eater's
+    // darkness attack drives the SAME global post slot, and `tick_boss` runs
+    // before `tick_eclipse`, so an unconditional clear here would wipe the boss
+    // attack on the frame it started.
+    let boss_owns_the_dark = { let s = st.lock().unwrap(); s.boss_dark_active };
+    if !boss_owns_the_dark {
+        end_night_mode(c);
     }
 
     if ECLIPSE_USE_POINT_LIGHTS && c.has_lighting() {
-        c.set_light_enabled(PLAYER_LIGHT, false);
-        for i in 0..ECLIPSE_TRAIL_LIGHTS.len() {
-            c.set_light_enabled(&format!("eclipse_trail_light_{i}"), false);
-        }
-        for i in 0..HOOK_POOL_SIZE {
-            c.set_light_enabled(&node_light_id(i), false);
+        if !boss_owns_the_dark {
+            kill_node_lights(c);
         }
         for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
             c.set_light_enabled(&gwell_light_id(i), false);
@@ -361,20 +466,7 @@ fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: 
     // Markers: every pool slot has its own attached light, so a frame only has
     // to match `enabled` to `visible` and set the brightness. No ranking, no
     // sort, no allocation — and nothing pops as the player moves.
-    let node_i = ECLIPSE_NODE_LIGHT_INTENSITY * fall;
-    for i in 0..HOOK_POOL_SIZE {
-        let vis = c
-            .get_game_object(&format!("hook_{i}"))
-            .map(|o| o.visible)
-            .unwrap_or(false);
-        let id = node_light_id(i);
-        c.set_light_enabled(&id, vis);
-        if vis {
-            if let Some(light) = c.get_light_mut(&id) {
-                light.intensity = node_i;
-            }
-        }
-    }
+    drive_node_lights(c, ECLIPSE_NODE_LIGHT_INTENSITY * fall);
     let well_i = ECLIPSE_GWELL_LIGHT_INTENSITY * fall;
     for i in 0..ECLIPSE_GWELL_LIGHT_COUNT {
         let vis = c

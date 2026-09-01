@@ -694,7 +694,16 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         prev_rope = o.hooked;
 
         // Boss progression detection.
-        if canvas.get_game_object("boss").map(|b| b.visible).unwrap_or(false) {
+        //
+        // Read the `boss_active` var, which `tick_boss` publishes every frame
+        // for exactly this. The old test — "is the `boss` object visible" — is
+        // blind to every MULTI-PART boss: for those the `boss` object is only an
+        // anchor for the off-screen arrow and is deliberately hidden, the part
+        // circles being the visible body. So the Colossus reported
+        // `boss_entries=0` on every run of `--boss-stasis-down`, which is the
+        // flag that exists to drive it, and the fight looked like it was never
+        // starting when in fact it was never being LOOKED AT.
+        if matches!(canvas.get_var("boss_active"), Some(Value::Bool(true))) {
             boss_entered = true;
         }
         if matches!(canvas.get_var("boss_defeated_this_fight"), Some(Value::Bool(true))) {

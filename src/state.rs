@@ -439,6 +439,25 @@ pub struct State {
     /// Colossus: while > 0, the whole body is held still (no sway/bob) after the
     /// torso summons a meteor burst, until the meteors have fired and cleared.
     pub boss_meteor_lock_ticks: u32,
+    /// Colossus hands: how many attacks the PAIR has committed to. Bumped once
+    /// per commitment, not once per hand, so both hands read the same attack.
+    pub boss_hand_attack: u32,
+    /// Colossus: ticks remaining on the clap's expanding force wave, and where
+    /// it came from. Zero when no wave is live.
+    pub boss_clap_wave: u32,
+    pub boss_clap_at: (f32, f32),
+    /// Colossus core vent: ticks of immunity left after a spoke connected.
+    pub boss_vent_hit_cooldown: u32,
+    /// Colossus torso: how many attacks it has committed to this fight. Decides
+    /// which attack comes next via `torso_attack_for`, and — because it is only
+    /// bumped when a new telegraph starts — it still names the attack that just
+    /// happened while the torso recovers, which is what gates the vulnerability
+    /// window.
+    pub boss_torso_attack: u32,
+    /// Colossus meteor storm: meteors waiting to launch, as (ticks remaining,
+    /// incoming angle in degrees). Drained one at a time so the storm is a
+    /// sequence rather than a simultaneous burst.
+    pub boss_meteor_queue: Vec<(u32, f32)>,
     /// Contact-rule cooldown for the Colossus: after one body-contact heart loss,
     /// the player gets a short grace before it can trigger again, so lingering on
     /// the boss cannot drain every heart in a couple of frames.
@@ -446,6 +465,12 @@ pub struct State {
     /// Colossus: after a part is destroyed the whole boss is briefly invulnerable,
     /// so the player can't chain-kill two parts within the same second.
     pub boss_part_invuln_ticks: u32,
+    /// Node ids currently wearing an attached buff aura. An attached mega
+    /// sprite lives on the object until it is cleared, so the set that had one
+    /// last frame has to be remembered in order to clear the ones that stopped
+    /// qualifying — otherwise a recycled pool slot keeps the aura of whatever it
+    /// used to be.
+    pub buff_fx_attached: Vec<String>,
     /// Colossus gaze beam: live little explosion pops along the telegraphed path
     /// (id, x, y, ticks remaining), which grow out of the path line as the beam
     /// sweeps across it.

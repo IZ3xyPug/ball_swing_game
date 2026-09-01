@@ -1334,11 +1334,68 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             core.set_glow(GlowConfig { color: Color(255, 250, 200, 200), width: 30.0 });
             scene = scene.with_object("colossus_beam_core", core);
 
+            // The beam is drawn as a POLYLINE, not one rotated strip: a curved
+            // beam cannot be a single rectangle, and the same pools draw a
+            // straight one with the segments simply collinear — so there is one
+            // code path rather than a straight case and a curved case.
+            // `..._tel_` is the dim telegraph field, `..._core_` the bright core
+            // that travels along it as the beam fires.
+            for i in 0..COLOSSUS_BEAM_SEGMENTS {
+                let name = format!("colossus_beam_tel_{i}");
+                let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                    Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, COLOSSUS_BEAM_THICKNESS), 0.0), image: crate::images::solid(255, 40, 30, 80).into(), color: None }),
+                    (100.0, COLOSSUS_BEAM_THICKNESS), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = LAYER_SPACE_HOOK - 1; // behind the parts
+                obj.gravity = 0.0;
+                obj.visible = false;
+                scene = scene.with_object(&name, obj);
+
+                let name = format!("colossus_beam_core_{i}");
+                let core_th = COLOSSUS_BEAM_THICKNESS * 0.46;
+                let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                    Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, core_th), 0.0), image: crate::images::solid(255, 250, 200, 235).into(), color: None }),
+                    (100.0, core_th), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = 31;
+                obj.gravity = 0.0;
+                obj.visible = false;
+                obj.set_glow(GlowConfig { color: Color(255, 250, 200, 200), width: 34.0 });
+                scene = scene.with_object(&name, obj);
+            }
+
+            // Core-vent spokes: plasma bars radiating from the torso, rotated
+            // around it while the vent runs. Positioned and rotated per tick in
+            // boss.rs; hidden whenever the torso is not venting.
+            for i in 0..COLOSSUS_VENT_SPOKES {
+                let name = format!("colossus_vent_{i}");
+                let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                    Some(Image { shape: ShapeType::Rectangle(0.0, (COLOSSUS_VENT_LENGTH, COLOSSUS_VENT_THICKNESS), 0.0), image: crate::images::solid(255, 170, 90, 210).into(), color: None }),
+                    (COLOSSUS_VENT_LENGTH, COLOSSUS_VENT_THICKNESS), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = 29; // under the parts, over the arena dressing
+                obj.gravity = 0.0;
+                obj.visible = false;
+                obj.set_glow(GlowConfig { color: Color(255, 190, 110, 220), width: 34.0 });
+                scene = scene.with_object(&name, obj);
+            }
+
+            // The clap's force wave: a ring that expands from the impact point.
+            {
+                let name = "colossus_clap_wave";
+                let r = COLOSSUS_CLAP_WAVE_R;
+                let ring = gwell_ring_cached(r, 190, 220, 255, GWELL_RING_COUNT, 200.0);
+                let mut obj = GameObject::new_rect(ctx, name.into(),
+                    Some(Image { shape: ShapeType::Ellipse(0.0, (r * 2.0, r * 2.0), 0.0), image: ring, color: None }),
+                    (r * 2.0, r * 2.0), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = 32; // over everything the fight draws
+                obj.gravity = 0.0;
+                obj.visible = false;
+                scene = scene.with_object(name, obj);
+            }
+
             // Little contact explosions along the beam's path: small bright
             // circles that quickly grow a few sizes as the beam sweeps across.
             for i in 0..8 {
                 let name = format!("colossus_beam_explode_{i}");
-                let er = 40.0;
+                let er = COLOSSUS_BEAM_EXPLODE_R1;
                 let img = circle_cached(er as u32, 255, 160, 60);
                 let mut obj = GameObject::new_rect(ctx, name.clone().into(),
                     Some(Image { shape: ShapeType::Ellipse(0.0, (er * 2.0, er * 2.0), 0.0), image: img.into(), color: None }),
@@ -1573,7 +1630,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut boss_asteroid_ids: Vec<String> = Vec::new();
     for i in 0..BOSS_ASTEROID_COUNT {
         let id = format!("boss_asteroid_{i}");
-        let size = SPACE_ASTEROID_SIZE_MIN + (i as f32 * 83.0) % (SPACE_ASTEROID_SIZE_MAX - SPACE_ASTEROID_SIZE_MIN);
+        let size = boss_arena_asteroid_size(i);
         let mut obj = GameObject::new_rect(ctx, id.clone(), None::<Image>,
             (size, size), (-8000.0, -8000.0),
             vec!["hook".into()], (0.0, 0.0), (0.95, 0.95), 0.0);
