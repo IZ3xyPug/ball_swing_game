@@ -1064,6 +1064,17 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                             shop::handle_shop_key(c, key);
                             return;
                         }
+                        // B key: the boss-order testing menu.
+                        //
+                        // Main menu only, deliberately. The roster is read at
+                        // arena entry once per fight, so an order set here
+                        // applies from the next teleport — it never needs to be
+                        // reachable mid-fight, and a modal opened during one is
+                        // the shape that caused the upgrade-node soft-lock.
+                        if *key == Key::Character("b".into()) {
+                            c.load_scene("boss_order");
+                            return;
+                        }
                         // L key: skip to the next menu track.
                         if *key == Key::Character("l".into()) {
                             let cur = c.get_i32("menu_bgm_track_index").max(0) as usize;
@@ -2105,5 +2116,278 @@ pub fn build_daily_reward_scene(ctx: &mut Context) -> Scene {
             }
 
             canvas.register_custom_event("daily_back".into(), |c| c.load_scene("menu"));
+        })
+}
+
+// ── Boss Order scene (testing) ───────────────────────────────────────────────
+//
+// Reconfigures which boss occupies which roster slot, so a fight can be reached
+// without playing the roster in order.
+//
+// WHY IT LIVES ON THE MAIN MENU. `boss_kind_for_index` is consulted at ARENA
+// ENTRY, once per fight, so an order set here applies from the next teleport
+// onward — nothing about it is too late, and it does not need to be reachable
+// mid-run. Against that, a modal opened during a fight is exactly the shape
+// that produced the upgrade-node soft-lock (the soft-pause block returns before
+// input handling), and that is not a risk worth taking for a test instrument.
+//
+// Left column: the roster, in shipped order, as pickable names.
+// Right column: the slots, filled in the order picked.
+// CLEAR empties the assignment, CONFIRM installs it, BACK leaves it untouched.
+
+/// Slots picked so far, as indices into `BOSS_ROSTER`. Menu-local, and only
+/// read into the real override by CONFIRM — so backing out changes nothing.
+static BOSS_ORDER_PICKS: std::sync::OnceLock<Mutex<Vec<usize>>> = std::sync::OnceLock::new();
+
+fn boss_order_picks() -> &'static Mutex<Vec<usize>> {
+    BOSS_ORDER_PICKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+const BOSS_ORDER_SLOTS: usize = BOSS_ROSTER.len();
+
+// Row geometry for the pickable roster.
+//
+// ONE TEXT OBJECT PER BUTTON, not one block of spans. A single `Text` with
+// seven spans lays them out at the FONT's line height, which has nothing to do
+// with the button spacing — so the names stacked tightly at the top of the
+// panel while the buttons ran down it. Nothing about that is fixable by
+// resizing the buttons; the labels have to belong to them.
+const BO_ROW_FONT: f32 = 46.0;
+const BO_ROW_H: f32 = 116.0;
+const BO_ROW_GAP: f32 = 12.0;
+const BO_COL_W: f32 = 1380.0;
+const BO_COL_X: f32 = 320.0;
+const BO_COL_Y: f32 = 400.0;
+
+/// Top of row `i`, and its height, in VIRTUAL units. Buttons and their labels
+/// both go through this, so they cannot drift apart.
+pub fn boss_order_row(i: usize) -> (f32, f32) {
+    (BO_COL_Y + i as f32 * BO_ROW_H, BO_ROW_H - BO_ROW_GAP)
+}
+
+fn boss_order_refresh(canvas: &mut Canvas) {
+    let Some(font) = ui_font() else { return; };
+    let sc = canvas.virtual_scale();
+    let picks = boss_order_picks().lock().unwrap().clone();
+
+    // Left: the roster, one label per button. A name already assigned is dimmed
+    // and shows which slot it went to.
+    for (i, kind) in BOSS_ROSTER.iter().enumerate() {
+        let slot = picks.iter().position(|p| *p == i);
+        let (label, colour) = match slot {
+            Some(n) => (format!("{}   ->  SLOT {}", kind.name(), n + 1), Color(125, 135, 158, 255)),
+            None    => (kind.name().to_string(), Color(235, 240, 255, 255)),
+        };
+        if let Some(obj) = canvas.get_game_object_mut(&format!("bo_pick_text_{i}")) {
+            obj.set_drawable(Box::new(ui_text_left_spec(
+                &label, &font, BO_ROW_FONT * sc, colour, BO_COL_W * sc,
+            )));
+        }
+    }
+
+    // Right: the slots, in fight order.
+    let mut slot_spans: Vec<Span> = Vec::new();
+    for n in 0..BOSS_ORDER_SLOTS {
+        let (label, colour) = match picks.get(n) {
+            Some(&i) => (format!("{}.  {}\n", n + 1, BOSS_ROSTER[i].name()), Color(255, 220, 90, 255)),
+            None => {
+                // Unassigned slots fall through to the shipped roster, so show
+                // what would actually load rather than an empty line — an
+                // "empty" slot still spawns a boss.
+                (format!("{}.  ({})\n", n + 1, boss_kind_for_index(n as u32).name()),
+                 Color(110, 118, 138, 255))
+            }
+        };
+        slot_spans.push(Span::new(label, BO_ROW_FONT * sc, Some(BO_ROW_H * sc),
+            std::sync::Arc::new(font.clone()), colour, 0.0));
+    }
+    if let Some(obj) = canvas.get_game_object_mut("bo_slot_col") {
+        obj.set_drawable(Box::new(Text::new(slot_spans, Some(1380.0 * sc), Align::Left, None)));
+    }
+
+    let status = if picks.is_empty() {
+        if boss_order_is_overridden() {
+            "An override is ACTIVE. Pick a new order, or CLEAR to restore the shipped one.".to_string()
+        } else {
+            "Shipped order. Click bosses in the order you want to fight them.".to_string()
+        }
+    } else {
+        format!("{} of {} slots assigned — CONFIRM to apply.", picks.len(), BOSS_ORDER_SLOTS)
+    };
+    if let Some(obj) = canvas.get_game_object_mut("bo_status_text") {
+        obj.set_drawable(Box::new(ui_text_spec(
+            &status, &font, 34.0 * sc, Color(200, 210, 235, 255), 3000.0 * sc,
+        )));
+    }
+}
+
+pub fn build_boss_order_scene(ctx: &mut Context) -> Scene {
+    let bg = GameObject::new_rect(ctx, "bo_bg".into(),
+        Some(bright_background_2(VW + 800.0, VH)),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+    let bg_tint = GameObject::new_rect(ctx, "bo_bg_tint".into(),
+        Some(tint_overlay(VW + 800.0, VH, Color(90, 40, 60, 170))),
+        (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+
+    let button = |ctx: &mut Context, id: &str, x: f32, y: f32, w: u32, h: u32, tint: [u8; 3]| {
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
+            img.put_pixel(px, py, image::Rgba([tint[0], tint[1], tint[2], if border { 255 } else { 200 }]));
+        }}
+        GameObject::new_rect(ctx, id.into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
+            (w as f32, h as f32), (x, y), vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
+    };
+
+    // One invisible hit box per roster entry, laid over the roster text.
+    let mut scene = Scene::new("boss_order")
+        .with_object("bo_bg", bg)
+        .with_object("bo_bg_tint", bg_tint);
+
+    for i in 0..BOSS_ROSTER.len() {
+        let id = format!("bo_pick_{i}");
+        let (y, h) = boss_order_row(i);
+        let mut hit = GameObject::new_rect(ctx, id.clone().into(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (BO_COL_W, h), 0.0),
+                image: solid(255, 255, 255, 22).into(), color: None,
+            }),
+            (BO_COL_W, h), (BO_COL_X, y), vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        hit.gravity = 0.0;
+        // The button's own label, sitting ON it. Inset and nudged down so the
+        // text sits inside the box rather than on its top edge.
+        let text = GameObject::build(&format!("bo_pick_text_{i}"))
+            .size(BO_COL_W - 60.0, h)
+            .position(BO_COL_X + 30.0, y + h * 0.22)
+            .tag("ui")
+            .build(ctx);
+        scene = scene.with_object(&format!("bo_pick_text_{i}"), text);
+        scene = scene.with_object(&id, hit).with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: format!("bo_pick_{i}") },
+                target: Target::name(&id),
+                button: Some(MouseButton::Left),
+            },
+            Target::name(&id),
+        );
+    }
+
+    let slot_col = GameObject::build("bo_slot_col")
+        .size(1380.0, 900.0).position(2100.0, BO_COL_Y).tag("ui").build(ctx);
+    let title = GameObject::build("bo_title_text")
+        .size(2400.0, 200.0).position(VW * 0.5 - 1200.0, VH * 0.04).tag("ui").build(ctx);
+    let status = GameObject::build("bo_status_text")
+        .size(3000.0, 120.0).position(VW * 0.5 - 1500.0, 250.0).tag("ui").build(ctx);
+    let roster_hdr = GameObject::build("bo_roster_hdr")
+        .size(1380.0, 90.0).position(320.0, 310.0).tag("ui").build(ctx);
+    let slot_hdr = GameObject::build("bo_slot_hdr")
+        .size(1380.0, 90.0).position(2100.0, 310.0).tag("ui").build(ctx);
+
+    let clear_btn   = button(ctx, "bo_clear_btn",   560.0, 1810.0, 640, 150, [90, 60, 60]);
+    let confirm_btn = button(ctx, "bo_confirm_btn", 1600.0, 1810.0, 640, 150, [50, 100, 70]);
+    let back_btn    = button(ctx, "bo_back_btn",    2640.0, 1810.0, 640, 150, [70, 70, 90]);
+    let clear_text   = GameObject::build("bo_clear_text").size(640.0, 150.0).position(560.0, 1810.0).tag("ui").build(ctx);
+    let confirm_text = GameObject::build("bo_confirm_text").size(640.0, 150.0).position(1600.0, 1810.0).tag("ui").build(ctx);
+    let back_text    = GameObject::build("bo_back_text").size(640.0, 150.0).position(2640.0, 1810.0).tag("ui").build(ctx);
+
+    scene
+        .with_object("bo_roster_hdr", roster_hdr)
+        .with_object("bo_slot_hdr", slot_hdr)
+        .with_object("bo_slot_col", slot_col)
+        .with_object("bo_title_text", title)
+        .with_object("bo_status_text", status)
+        .with_object("bo_clear_btn", clear_btn)
+        .with_object("bo_confirm_btn", confirm_btn)
+        .with_object("bo_back_btn", back_btn)
+        .with_object("bo_clear_text", clear_text)
+        .with_object("bo_confirm_text", confirm_text)
+        .with_object("bo_back_text", back_text)
+        .with_event(GameEvent::MousePress {
+            action: Action::Custom { name: "bo_clear".into() },
+            target: Target::name("bo_clear_btn"), button: Some(MouseButton::Left),
+        }, Target::name("bo_clear_btn"))
+        .with_event(GameEvent::MousePress {
+            action: Action::Custom { name: "bo_confirm".into() },
+            target: Target::name("bo_confirm_btn"), button: Some(MouseButton::Left),
+        }, Target::name("bo_confirm_btn"))
+        .with_event(GameEvent::MousePress {
+            action: Action::Custom { name: "bo_back".into() },
+            target: Target::name("bo_back_btn"), button: Some(MouseButton::Left),
+        }, Target::name("bo_back_btn"))
+        .on_enter(|canvas| {
+            let cam = Camera::new((VW, VH), (VW, VH));
+            canvas.set_camera(cam);
+
+            // Start from whatever is installed, so reopening shows the live
+            // order rather than a blank slate that implies nothing is set.
+            {
+                let mut picks = boss_order_picks().lock().unwrap();
+                picks.clear();
+                if let Some(order) = boss_order_override() {
+                    for kind in order {
+                        if let Some(i) = BOSS_ROSTER.iter().position(|k| *k == kind) {
+                            picks.push(i);
+                        }
+                    }
+                }
+            }
+
+            if let Some(font) = ui_font() {
+                let sc = canvas.virtual_scale();
+                let label = |canvas: &mut Canvas, id: &str, text: &str, size: f32, colour: Color, w: f32| {
+                    if let Some(obj) = canvas.get_game_object_mut(id) {
+                        obj.set_drawable(Box::new(ui_text_spec(text, &font, size * sc, colour, w * sc)));
+                    }
+                };
+                label(canvas, "bo_title_text", "BOSS ORDER  (TESTING)", 64.0, Color(255, 210, 120, 255), 2400.0);
+                label(canvas, "bo_clear_text", "CLEAR", 44.0, Color(255, 200, 200, 255), 640.0);
+                label(canvas, "bo_confirm_text", "CONFIRM", 44.0, Color(200, 255, 210, 255), 640.0);
+                label(canvas, "bo_back_text", "BACK", 44.0, Color(225, 225, 235, 255), 640.0);
+                if let Some(obj) = canvas.get_game_object_mut("bo_roster_hdr") {
+                    obj.set_drawable(Box::new(ui_text_left_spec(
+                        "PICK A BOSS", &font, 38.0 * sc, Color(160, 200, 255, 255), 1380.0 * sc)));
+                }
+                if let Some(obj) = canvas.get_game_object_mut("bo_slot_hdr") {
+                    obj.set_drawable(Box::new(ui_text_left_spec(
+                        "FIGHT ORDER", &font, 38.0 * sc, Color(160, 200, 255, 255), 1380.0 * sc)));
+                }
+            }
+
+            boss_order_refresh(canvas);
+
+            for i in 0..BOSS_ROSTER.len() {
+                canvas.register_custom_event(format!("bo_pick_{i}"), move |c| {
+                    {
+                        let mut picks = boss_order_picks().lock().unwrap();
+                        // Clicking an assigned boss un-assigns it, so a mistake
+                        // is undone by clicking the same name rather than by
+                        // clearing the whole list.
+                        if let Some(at) = picks.iter().position(|p| *p == i) {
+                            picks.remove(at);
+                        } else if picks.len() < BOSS_ORDER_SLOTS {
+                            picks.push(i);
+                        }
+                    }
+                    boss_order_refresh(c);
+                });
+            }
+            canvas.register_custom_event("bo_clear".into(), |c| {
+                boss_order_picks().lock().unwrap().clear();
+                set_boss_order_override(None);
+                boss_order_refresh(c);
+            });
+            canvas.register_custom_event("bo_confirm".into(), |c| {
+                let picks = boss_order_picks().lock().unwrap().clone();
+                if picks.is_empty() {
+                    set_boss_order_override(None);
+                } else {
+                    set_boss_order_override(Some(
+                        picks.iter().map(|&i| BOSS_ROSTER[i]).collect(),
+                    ));
+                }
+                c.load_scene("menu");
+            });
+            canvas.register_custom_event("bo_back".into(), |c| c.load_scene("menu"));
         })
 }

@@ -1212,18 +1212,68 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             obj.visible = false;
             scene = scene.with_object(&name, obj);
         }
-        // Serpent: 8 segments.
-        for i in 0..8 {
+        // ── Serpent ──────────────────────────────────────────────────
+        // One object per PART: segments, then the tail, then the head, matching
+        // `boss_parts_for_kind`. The image is swapped per frame in the fight
+        // (the seam animates), so the placeholder here only has to exist.
+        //
+        // Every piece is TETHERABLE — the "hook" tag is what makes this boss
+        // double as traversal, which is the mechanic the whole fight is built
+        // around: you ride the thing you are dismantling.
+        for i in 0..(SERPENT_SEGMENTS + 2) {
             let name = format!("serpent_part_{i}");
-            let d = 130.0;
-            let img = circle_cached(d as u32, 70, 200, 130);
+            let d = SERPENT_SEGMENT_SIZE;
             let mut obj = GameObject::new_rect(ctx, name.clone().into(),
-                Some(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: img.into(), color: None }),
-                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                Some(Image {
+                    shape: ShapeType::Rectangle(0.0, (d, d), 0.0),
+                    image: crate::images::serpent_segment_cached(d as u32, 0).into(),
+                    color: None,
+                }),
+                (d, d), (-9000.0, -9000.0),
+                vec!["boss".into(), "hook".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
             obj.layer = LAYER_SPACE_HOOK;
             obj.gravity = 0.0;
+            obj.collision_mode = CollisionMode::NonPlatform;
             obj.visible = false;
             scene = scene.with_object(&name, obj);
+        }
+        // Rift markers: shared by the rift-strike sequence and the wormhole
+        // gambit, since only one of the two is ever running.
+        {
+            let n = (SERPENT_RIFT_COUNT as usize).max(SERPENT_GAMBIT_HOLES);
+            for i in 0..n {
+                let name = format!("serpent_rift_{i}");
+                let d = SERPENT_RIFT_R.max(SERPENT_GAMBIT_HOLE_R) * 2.0;
+                let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                    Some(Image {
+                        shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                        image: crate::images::gravity_well_img(
+                            (d * 0.5) as u32, 120, 255, 190).into(),
+                        color: None,
+                    }),
+                    (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = 28; // under the body, so the serpent erupts THROUGH it
+                obj.gravity = 0.0;
+                obj.visible = false;
+                scene = scene.with_object(&name, obj);
+            }
+        }
+        // The exposed energy spine, drawn between head and tail once the body
+        // between them is gone.
+        {
+            let name = "serpent_spine";
+            let mut obj = GameObject::new_rect(ctx, name.into(),
+                Some(Image {
+                    shape: ShapeType::Rectangle(0.0, (100.0, SERPENT_LASH_THICKNESS), 0.0),
+                    image: crate::images::solid(255, 200, 90, 190).into(), color: None,
+                }),
+                (100.0, SERPENT_LASH_THICKNESS), (-9000.0, -9000.0),
+                vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = 29;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            obj.set_glow(GlowConfig { color: Color(255, 210, 110, 200), width: 34.0 });
+            scene = scene.with_object(name, obj);
         }
         // Colossus danger zones: translucent discs that show exactly where each
         // part's attack will land, for ~1s before it fires. Sized to match the

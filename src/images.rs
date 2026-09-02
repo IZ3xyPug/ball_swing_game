@@ -1310,3 +1310,151 @@ pub fn flare_overlay_img(r: u8, g: u8, b: u8, a: u8) -> Image {
         color: None,
     }
 }
+
+// ── Serpent ──────────────────────────────────────────────────────────────────
+//
+// Jade plating with amber seams. The palette is doing work, not decoration: the
+// Colossus is violet/blue, so jade separates the two fights at a glance, and
+// amber is the only warm colour on a blue-black starfield — which makes the
+// seams read as "target this" without a separate marker ring.
+//
+// The seam brightness IS the vulnerability cue. A segment whose plating is
+// closed shows a dim seam; an exposed one burns. That keeps the readable state
+// on the body itself rather than on an overlay that can drift out of alignment.
+
+/// One round body segment: a plated disc with a bright seam ring.
+///
+/// `seam` is 0.0 (armoured, dim) to 1.0 (exposed, burning), so the same builder
+/// covers both states and they cannot disagree about the silhouette.
+pub fn serpent_segment(size: u32, seam: f32) -> image::RgbaImage {
+    let s = size.max(2) as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let seam = seam.clamp(0.0, 1.0);
+    let cx = s * 0.5;
+    let cy = s * 0.5;
+
+    // Outer plate.
+    fill_circle(&mut img, cx, cy, s * 0.46, [34, 92, 74, 255]);
+    // Inner plate, slightly offset so the disc reads as domed rather than flat.
+    fill_circle(&mut img, cx, cy - s * 0.02, s * 0.36, [52, 130, 100, 255]);
+
+    // Amber seam ring: the joint between this segment and the next.
+    let a = (70.0 + 185.0 * seam) as u8;
+    let g = (120.0 + 80.0 * seam) as u8;
+    let ring_r = s * 0.30;
+    let ring_w = s * 0.05 + s * 0.03 * seam;
+    for py in 0..img.height() {
+        for px in 0..img.width() {
+            let dx = px as f32 + 0.5 - cx;
+            let dy = py as f32 + 0.5 - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            if (d - ring_r).abs() <= ring_w {
+                img.put_pixel(px, py, image::Rgba([255, g, 60, a]));
+            }
+        }
+    }
+    // Core light, brightest when exposed.
+    fill_circle(&mut img, cx, cy, s * 0.10, [255, (170.0 + 60.0 * seam) as u8, 70, a]);
+    img
+}
+
+/// The head: an armoured wedge with a split jaw and two amber eyes. Drawn
+/// pointing RIGHT (0 degrees) so the fight can rotate it along its heading.
+pub fn serpent_head(size: u32) -> image::RgbaImage {
+    let s = size.max(2) as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let cx = s * 0.5;
+    let cy = s * 0.5;
+
+    // Skull mass.
+    fill_circle(&mut img, cx - s * 0.04, cy, s * 0.40, [40, 104, 82, 255]);
+    // Snout wedge, pushed toward the facing edge.
+    fill_rounded_rect(&mut img, cx + s * 0.10, cy - s * 0.16, s * 0.36, s * 0.32, s * 0.10,
+        [52, 130, 100, 255]);
+    // Split jaw: two plates with a dark gap, so the mouth reads even when shut.
+    fill_rounded_rect(&mut img, cx + s * 0.16, cy - s * 0.19, s * 0.30, s * 0.11, s * 0.05,
+        [30, 82, 66, 255]);
+    fill_rounded_rect(&mut img, cx + s * 0.16, cy + s * 0.08, s * 0.30, s * 0.11, s * 0.05,
+        [30, 82, 66, 255]);
+    // Brow crests.
+    fill_rounded_rect(&mut img, cx - s * 0.30, cy - s * 0.34, s * 0.26, s * 0.10, s * 0.05,
+        [28, 76, 60, 255]);
+    fill_rounded_rect(&mut img, cx - s * 0.30, cy + s * 0.24, s * 0.26, s * 0.10, s * 0.05,
+        [28, 76, 60, 255]);
+    // Eyes.
+    fill_circle(&mut img, cx + s * 0.02, cy - s * 0.14, s * 0.055, [255, 190, 70, 255]);
+    fill_circle(&mut img, cx + s * 0.02, cy + s * 0.14, s * 0.055, [255, 190, 70, 255]);
+    img
+}
+
+/// The tail: a tapered segment with a thruster bell. The thruster is the reason
+/// the tail is the piece that launches itself, so it has to be legible as one.
+pub fn serpent_tail(size: u32, burn: f32) -> image::RgbaImage {
+    let s = size.max(2) as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let burn = burn.clamp(0.0, 1.0);
+    let cx = s * 0.5;
+    let cy = s * 0.5;
+
+    // Body taper: three shrinking discs toward the trailing edge.
+    fill_circle(&mut img, cx + s * 0.14, cy, s * 0.34, [40, 104, 82, 255]);
+    fill_circle(&mut img, cx - s * 0.06, cy, s * 0.26, [34, 92, 74, 255]);
+    fill_circle(&mut img, cx - s * 0.24, cy, s * 0.17, [28, 78, 62, 255]);
+    // Thruster bell at the trailing tip.
+    fill_rounded_rect(&mut img, s * 0.06, cy - s * 0.13, s * 0.16, s * 0.26, s * 0.06,
+        [24, 68, 56, 255]);
+    // Exhaust, bright while the launch is charging.
+    if burn > 0.01 {
+        let a = (90.0 + 165.0 * burn) as u8;
+        fill_circle(&mut img, s * 0.10, cy, s * 0.12 * (0.6 + 0.6 * burn), [255, 170, 60, a]);
+        fill_circle(&mut img, s * 0.03, cy, s * 0.07 * (0.5 + 0.9 * burn), [255, 235, 170, a]);
+    }
+    img
+}
+
+pub fn serpent_segment_cached(size: u32, seam_step: u32) -> Arc<image::RgbaImage> {
+    // Cached per quantised seam step: the seam animates continuously, and
+    // rasterising a fresh disc every frame for every segment is exactly the
+    // per-frame cost the gaze beam taught us to avoid.
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<(u32, u32), Arc<image::RgbaImage>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    CACHE.with(|m| {
+        m.borrow_mut()
+            .entry((size, seam_step))
+            .or_insert_with(|| Arc::new(serpent_segment(size, seam_step as f32 / SERPENT_SEAM_STEPS as f32)))
+            .clone()
+    })
+}
+
+/// Quantisation of the seam glow. Eight steps is smooth enough that the pulse
+/// reads as continuous and small enough that the cache stays tiny.
+pub const SERPENT_SEAM_STEPS: u32 = 8;
+
+pub fn serpent_head_cached(size: u32) -> Arc<image::RgbaImage> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<Option<(u32, Arc<image::RgbaImage>)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    CACHE.with(|m| {
+        let mut m = m.borrow_mut();
+        if let Some((sz, img)) = m.as_ref() { if *sz == size { return img.clone(); } }
+        let img = Arc::new(serpent_head(size));
+        *m = Some((size, img.clone()));
+        img
+    })
+}
+
+pub fn serpent_tail_cached(size: u32, burn_step: u32) -> Arc<image::RgbaImage> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<(u32, u32), Arc<image::RgbaImage>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    CACHE.with(|m| {
+        m.borrow_mut()
+            .entry((size, burn_step))
+            .or_insert_with(|| Arc::new(serpent_tail(size, burn_step as f32 / SERPENT_SEAM_STEPS as f32)))
+            .clone()
+    })
+}

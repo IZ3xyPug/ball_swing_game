@@ -38,6 +38,7 @@ use menu::{
     build_achievements_scene,
     build_stats_scene,
     build_daily_reward_scene,
+    build_boss_order_scene,
 };
 use scenes::game::build_game_scene;
 
@@ -57,6 +58,7 @@ impl App {
         canvas.add_scene(build_achievements_scene(ctx));
         canvas.add_scene(build_stats_scene(ctx));
         canvas.add_scene(build_daily_reward_scene(ctx));
+        canvas.add_scene(build_boss_order_scene(ctx));
         // Register the menu press handler at app start (not in the menu on_enter)
         // so it's on the live canvas that receives input. In the GUI the menu
         // on_enter registration didn't persist for mouse presses, so this is the

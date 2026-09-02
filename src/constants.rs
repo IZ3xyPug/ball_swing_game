@@ -703,7 +703,60 @@ impl BossKind {
 /// the Gravity Weaver and the Magnetar filling the two slots whose concepts were
 /// replaced. Any out-of-range index falls back to the finale so an old save /
 /// debug warp still fights something.
+/// The shipped roster, in the order fights appear. The testing override below
+/// permutes THIS list, so the menu can never offer a boss that does not exist.
+pub const BOSS_ROSTER: [BossKind; crate::mode::BOSS_ROSTER_SIZE as usize] = [
+    BossKind::Colossus,
+    BossKind::Conductor,
+    BossKind::GravityWeaver,
+    BossKind::FlareTitan,
+    BossKind::Magnetar,
+    BossKind::Serpent,
+    BossKind::SunDevourer,
+];
+
+/// A testing override for the roster order.
+///
+/// `boss_kind_for_index` is consulted at ARENA ENTRY, once per fight, so an
+/// override set at any point takes effect from the next teleport onward —
+/// nothing about it is "too late", including changing it mid-run. That is why
+/// the configuration UI lives on the main menu rather than being wedged into
+/// the pause menu: it does not need to be reachable mid-fight, and a modal
+/// opened during a fight is the failure class that produced the upgrade-node
+/// soft-lock (the soft-pause block returns before input handling).
+///
+/// In memory only. It is a test instrument, and one that silently survived a
+/// restart would eventually be mistaken for a bug in the roster.
+static BOSS_ORDER_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<BossKind>>>> =
+    std::sync::OnceLock::new();
+
+fn boss_order_slot() -> &'static std::sync::Mutex<Option<Vec<BossKind>>> {
+    BOSS_ORDER_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Install a testing roster order. `None` restores the shipped order.
+pub fn set_boss_order_override(order: Option<Vec<BossKind>>) {
+    *boss_order_slot().lock().unwrap() = order;
+}
+
+/// The active testing order, if any.
+pub fn boss_order_override() -> Option<Vec<BossKind>> {
+    boss_order_slot().lock().unwrap().clone()
+}
+
+/// Whether a testing order is currently installed (for the HUD/menu label).
+pub fn boss_order_is_overridden() -> bool {
+    boss_order_slot().lock().unwrap().is_some()
+}
+
 pub fn boss_kind_for_index(index: u32) -> BossKind {
+    if let Some(order) = boss_order_override() {
+        if let Some(kind) = order.get(index as usize) {
+            return *kind;
+        }
+        // Past the end of a short override, fall through to the shipped order
+        // rather than repeating the last pick — a run should still finish.
+    }
     match index {
         0 => BossKind::Colossus,
         1 => BossKind::Conductor,
@@ -829,11 +882,290 @@ pub fn boss_parts_for_kind(kind: BossKind) -> Vec<BossPart> {
         // Eight segments + an invulnerable head (the head is `boss_hp`, not a
         // part; it is only hittable once every segment is destroyed). Segments
         // start exposed (unshielded) so they can all be damaged.
-        BossKind::Serpent => (0..8).map(|i| BossPart::new(if i % 2 == 0 { "seg_a" } else { "seg_b" }, 3).unshielded()).collect(),
+        // ── The Serpent ────────────────────────────────────────────────
+        // Order IS the phase gating: the shared loop unshields part `i` once
+        // every part before it is dead, so listing the segments first, then the
+        // tail, then the head gives segments -> tail -> head for free.
+        //
+        // The head used to be the scalar `boss_hp` (BOSS_MAX_HP, 20 buffed
+        // hits) — far too long for a final phase, and outside the part model,
+        // so it missed the shielding, the `post_attack` gate and the weakpoint
+        // window that every other boss part gets. It is a real part now.
+        //
+        // 8 x 3 + 4 + 5 = 33 hits, against the Colossus's 34. Deliberately
+        // level: the difficulty is meant to come from the shield wave gating
+        // ACCESS to the segments, not from the pile of HP behind them.
+        BossKind::Serpent => {
+            let mut parts: Vec<BossPart> = (0..SERPENT_SEGMENTS)
+                .map(|_| BossPart::new("seg", SERPENT_SEGMENT_HP).unshielded())
+                .collect();
+            parts.push(BossPart::new("tail", SERPENT_TAIL_HP));
+            parts.push(BossPart::new("head", SERPENT_HEAD_HP));
+            parts
+        }
         // The remaining single-body bosses keep the scalar boss_hp path.
         _ => Vec::new(),
     }
 }
+
+// ── The Serpent ──────────────────────────────────────────────────────────────
+//
+// A segmented space-robot serpent: destructible body segments, then the tail,
+// then the head. Jade plating with amber seams (`images::serpent_*`).
+//
+// The distinguishing mechanic is that the SEGMENTS ARE TETHERABLE. It is the
+// only boss that doubles as traversal, which turns "the head is invulnerable
+// until the body is gone" from a checklist into a movement problem — you ride
+// the thing you are dismantling.
+/// Body segments between the head and the tail.
+pub const SERPENT_SEGMENTS: usize = 8;
+pub const SERPENT_SEGMENT_HP: i32 = 3;
+pub const SERPENT_TAIL_HP: i32 = 4;
+pub const SERPENT_HEAD_HP: i32 = 5;
+
+/// Visual size of each piece.
+pub const SERPENT_SEGMENT_SIZE: f32 = 420.0;
+pub const SERPENT_HEAD_SIZE: f32 = 620.0;
+pub const SERPENT_TAIL_SIZE: f32 = 480.0;
+
+/// Spacing along the body, in px of head-trail arc length.
+///
+/// WIDER than a segment, deliberately. Overlapping discs read as a continuous
+/// body, but they also make the coil a solid wall — and the coil's whole design
+/// is that the gaps between segments are the way through, with a destroyed
+/// segment leaving a permanent hole. A body with no gaps turns its signature
+/// attack into an unavoidable one.
+///
+/// The gap is `spacing - size` = 200px against a player 116px across, so it is
+/// passable but demands a line rather than being strolled through.
+pub const SERPENT_SEGMENT_SPACING: f32 = 620.0;
+
+/// How many past head positions to keep. The body samples the head's HISTORY
+/// rather than a sine formula, which is what makes it slither instead of wobble
+/// — every segment retraces the exact path the head took. Sized for the whole
+/// body at the widest spacing, with headroom for slow frames.
+pub const SERPENT_TRAIL_LEN: usize = 1400;
+
+// ── The shield wave ──────────────────────────────────────────────────────────
+//
+// Shields flow down the body as a BAND rather than blinking per segment.
+// Independent timers on eight segments is noise: nothing to read and nothing to
+// plan, so the fight degrades into waiting. A travelling band is legible at a
+// glance — you can see where the gap is and where it is going — and it turns a
+// 24-hit body into a timing problem instead of a damage sponge.
+//
+// Raising HP makes a sponge; gating access makes a skill test.
+/// Segments covered by the energised band at once.
+pub const SERPENT_SHIELD_BAND: f32 = 3.5;
+/// Segments per second the band travels along the body.
+pub const SERPENT_SHIELD_SPEED: f32 = 1.6;
+
+/// What the Serpent is doing. Which attacks are available is decided by which
+/// PARTS survive, so removing a piece removes its attack — the tail launch goes
+/// when the tail does, and the last two are only reachable once the body is
+/// gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SerpentAct {
+    /// Cruising. The body sweeps space; nothing else is happening.
+    Prowl,
+    /// Ringing the arena and closing in. Body segments only.
+    Coil,
+    /// The tail whips a wide arc across the arena; dodge by elevation.
+    TailSweep,
+    /// Diving and erupting from telegraphed points in sequence.
+    RiftStrikes,
+    /// The tail detaches and rockets at the player. Needs a live tail.
+    TailLaunch,
+    /// Head and tail sweep the energy spine between them. Needs both, and no
+    /// segments — the spine is what the segments used to be.
+    SpineLash,
+    /// Rifts near the player; falling in delivers you to a winding-up bite.
+    /// Head alone.
+    WormholeGambit,
+}
+
+// ── Serpent movement and attacks ─────────────────────────────────────────────
+/// Head cruise speed (px/tick). Below the player's momentum cap so the serpent
+/// can always be out-run in a straight line — the threat is the body sweeping
+/// space behind the head, not the head catching you.
+pub const SERPENT_HEAD_SPEED: f32 = 22.0;
+/// How sharply the head can turn (degrees/tick). Low enough that its path is
+/// readable a second ahead, which is what makes the body predictable too.
+pub const SERPENT_TURN_RATE: f32 = 2.4;
+/// How close the head must get to its goal before picking a new one.
+pub const SERPENT_GOAL_REACHED: f32 = 700.0;
+/// How far ahead of the player the head aims when it is hunting.
+pub const SERPENT_LEAD: f32 = 0.6;
+
+/// Seconds of grace before the serpent notices the player.
+///
+/// Without it the fight opens with the serpent already hunting, so the player
+/// spends the first seconds running rather than reading the boss — and this is
+/// the one boss whose body you have to learn the shape of before you can plan
+/// around it.
+pub const SERPENT_NOTICE_TICKS: u32 = 210;
+
+/// Vertical band the head is allowed to occupy.
+///
+/// The body is tetherable, so a player riding a segment goes wherever the
+/// serpent goes. Left unclamped the head would wander toward the death floor
+/// and drag them into it — killed by the thing they were correctly using as
+/// traversal, with no counterplay. The bound is on the HEAD, and the body
+/// retraces the head's path, so clamping one clamps all of it.
+pub const SERPENT_Y_MIN: f32 = -6800.0;
+pub const SERPENT_Y_MAX: f32 = -1300.0;
+
+/// How far the seam must have opened before a segment is hittable.
+///
+/// The glow and the damage test read this SAME number, so the armour is
+/// visually open exactly when it can be hurt. Keyed to the raw shield boolean
+/// instead, the glow lit the instant the band's edge passed while the plating
+/// was still shut — telling the player to attack something that did not look
+/// open, and (with the invulnerability window) sometimes was not.
+pub const SERPENT_OPEN_AT: f32 = 0.9;
+
+/// Contact damage radius as a fraction of a piece's drawn size.
+pub const SERPENT_CONTACT_R: f32 = 0.42;
+/// Knockback speed from a body contact. Above the momentum cap so it reads as
+/// being struck by something enormous rather than bumping into it.
+pub const SERPENT_CONTACT_PUSH: f32 = 74.0;
+/// Ticks of momentum-cap bypass after a contact, so the throw actually flies.
+pub const SERPENT_KNOCKBACK_TICKS: i32 = 20;
+/// Grace between body contacts. A body this long would otherwise take every
+/// heart in the time it takes to slide off it.
+pub const SERPENT_CONTACT_COOLDOWN: u32 = 45;
+
+// ── Attacks ──────────────────────────────────────────────────────────────────
+/// Ticks between the serpent committing to attacks.
+pub const SERPENT_ATTACK_GAP: u32 = 300;
+/// Wind-up shown before any serpent attack lands.
+pub const SERPENT_TELEGRAPH_TICKS: u32 = 60;
+
+/// COIL — the serpent rings the arena and closes on the player. The gaps
+/// between segments are the way through, and a destroyed segment leaves a
+/// permanent hole, so dismantling the body is positional and not only damage.
+/// COIL — a wide circle that spirals inward, closing on where the player WAS
+/// when it began. Fixing the centre at the moment of commitment is what makes
+/// it a trap to escape rather than a chase: a coil that tracks the player never
+/// closes, and never reads as closing.
+pub const SERPENT_COIL_TICKS: u32 = 420;
+pub const SERPENT_COIL_RADIUS: f32 = 3200.0;
+pub const SERPENT_COIL_CLOSE: f32 = 900.0;
+/// Laps the head makes while spiralling in. More laps means a tighter spiral
+/// and a slower squeeze; the body has to keep up, so this is bounded by how far
+/// the head travels in `SERPENT_COIL_TICKS`.
+pub const SERPENT_COIL_LAPS: f32 = 2.0;
+
+/// RIFT STRIKES — the head dives into a rift and erupts from telegraphed points
+/// in sequence. The space version of a sand-worm burrow.
+/// Which stage of a burrow the serpent is in.
+///
+/// A STATE MACHINE, not a fixed tick cycle. On a cycle the entry hole stayed
+/// wherever the last emergence happened while the head steered away from it, so
+/// the dive never visually occurred — the serpent simply vanished and appeared
+/// somewhere else. Each stage now ends on the thing it is waiting for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RiftPhase {
+    /// A portal has opened ahead; the head is swimming into it.
+    Approach,
+    /// The head is in. The body slides after it, one piece at a time.
+    Swallow,
+    /// Fully gone. The entry has CLOSED and no exit exists yet — the arena is
+    /// empty for a beat.
+    ///
+    /// Without this the exit opened on the same frame the last piece went in,
+    /// so the serpent appeared to loop straight back out of the hole it had
+    /// just entered. The absence is what makes the two portals read as two
+    /// places rather than one.
+    Underground,
+    /// A portal has opened at the player; the body is climbing out of it.
+    Emerge,
+}
+
+/// Ticks the serpent stays completely absent between portals.
+pub const SERPENT_RIFT_HIDDEN: u32 = 60;
+
+/// How many times the serpent surfaces before the final emergence.
+pub const SERPENT_RIFT_COUNT: u32 = 3;
+/// How far ahead of the head the entry portal opens. Far enough that the swim
+/// into it is visible rather than the head starting on top of it.
+pub const SERPENT_RIFT_AHEAD: f32 = 1600.0;
+/// Ticks the head waits out of the ground after emerging, before the next
+/// portal opens ahead of it. This is the window the attack is dodged in.
+pub const SERPENT_RIFT_SURFACE: u32 = 90;
+pub const SERPENT_RIFT_WARN: u32 = 40;
+pub const SERPENT_RIFT_R: f32 = 520.0;
+/// A piece within this of the ACTIVE rift is inside it, and not drawn.
+///
+/// One rule covers both directions: diving, a piece enters the radius and
+/// vanishes; emerging, it leaves and reappears. That is what makes the body go
+/// in head-first one piece at a time and come back out the same way, without a
+/// separate animation for each.
+pub const SERPENT_RIFT_SWALLOW_R: f32 = 460.0;
+/// How fast the body slides into a rift once the head is in, in px/tick of
+/// trail arc. Slow enough to watch each segment go under.
+pub const SERPENT_RIFT_SWALLOW_SPEED: f32 = 26.0;
+// REMOVED: SERPENT_RIFT_EMERGE_TICKS. The burrow ran on a fixed clock; it runs
+// on a state machine now, and the emergence ends when the tail actually clears
+// the portal rather than after an authored number of ticks that could disagree
+// with how long that takes.
+
+/// TAIL SWEEP — the head anchors and the tail whips a wide arc through the play
+/// band. The only attack in the fight dodged by ELEVATION rather than by
+/// leaving a circle or getting off a line.
+pub const SERPENT_SWEEP_TICKS: u32 = 190;
+pub const SERPENT_SWEEP_RADIUS: f32 = 2400.0;
+pub const SERPENT_SWEEP_ARC: f32 = 2.2;
+pub const SERPENT_SWEEP_THICKNESS: f32 = 260.0;
+
+/// TAIL LAUNCH — the tail detaches, rockets at the player and reattaches. Lost
+/// once the tail is destroyed, so removing it removes an attack.
+pub const SERPENT_TAIL_LAUNCH_TICKS: u32 = 150;
+/// Speed of the launched tail.
+///
+/// It homes CONTINUOUSLY, so its speed is the whole of its difficulty: at 46
+/// against a player capped at 50 there was no manoeuvre that shook it, and the
+/// attack was unavoidable rather than hard. Roughly half the cap leaves the
+/// player able to out-run it in a straight line and out-turn it in an arc,
+/// which is what makes dodging a decision instead of a formality.
+pub const SERPENT_TAIL_LAUNCH_SPEED: f32 = 24.0;
+
+/// SPINE LASH — head and tail take opposite sides and the energy spine between
+/// them sweeps the arena. A moving LINE between two moving endpoints, which is
+/// a different dodge problem from a ray out of a fixed origin.
+pub const SERPENT_LASH_TICKS: u32 = 220;
+pub const SERPENT_LASH_THICKNESS: f32 = 190.0;
+/// How far the head swings out from the arena centre for the sweep.
+pub const SERPENT_LASH_RADIUS: f32 = 2900.0;
+/// The tail's radius as a fraction of the head's.
+///
+/// Deliberately NOT 1.0. Equal radii make the spine a diameter through the
+/// centre, which pivots — one fixed point, and the safe side is whichever half
+/// you are already in. Unequal radii put the pivot off-centre, so the line
+/// translates as well as rotates and the safe side moves while you stand in it.
+/// That difference is the entire reason this attack is not just another beam.
+pub const SERPENT_LASH_TAIL_RATIO: f32 = 0.62;
+/// Vertical squash. The arena is far wider than it is tall, so a circular swing
+/// would spend most of the sweep off the top and bottom of the play area.
+pub const SERPENT_LASH_Y: f32 = 0.55;
+/// How much of a turn the sweep covers. Half a turn takes the line across every
+/// angle exactly once — a full turn would repeat the same ground and let the
+/// player simply wait out the second half in the space they already cleared.
+pub const SERPENT_LASH_ARC: f32 = std::f32::consts::PI;
+
+/// WORMHOLE GAMBIT — the head opens rifts near the player; falling into one
+/// spits you out in front of the head, which is already winding up a dash bite.
+/// A tether inside the reaction window still saves you.
+pub const SERPENT_GAMBIT_HOLES: usize = 3;
+pub const SERPENT_GAMBIT_HOLE_R: f32 = 460.0;
+pub const SERPENT_GAMBIT_SPREAD: f32 = 1500.0;
+/// Ticks from being spat out to the bite landing. Deliberately tight, and the
+/// whole reason the attack is fair: it is a REACTION window, not a puzzle.
+pub const SERPENT_GAMBIT_REACT: u32 = 26;
+/// How far in front of the head the player is delivered.
+pub const SERPENT_GAMBIT_DROP: f32 = 900.0;
+pub const SERPENT_DASH_SPEED: f32 = 90.0;
+pub const SERPENT_DASH_TICKS: u32 = 40;
 
 // ── Colossus segmented-boss FSM ──────────────────────────────────────────────
 // Each part runs its own `Idle → Telegraph → Attack → Recover` machine. The
@@ -1493,6 +1825,11 @@ pub const C_FLARE_ACTIVE: (u8, u8, u8, u8) = (255, 226, 150, 150);
 /// Mega-shader bit for the player's protective dome while sheltered.
 /// Matches `BIT_ENERGY_DOME` in `wgpu_canvas`'s `animated_vfx.wgsl`.
 pub const MEGA_BIT_ENERGY_DOME: u32 = 1 << 20;
+/// Matches `BIT_SEGMENT_SHIELD` in `animated_vfx.wgsl`. A hard plated
+/// forcefield over one serpent segment; `tint.a` is the ENERGISE level, so the
+/// travelling band drives one sprite through both states rather than toggling
+/// visibility.
+pub const MEGA_BIT_SEGMENT_SHIELD: u32 = 1 << 21;
 
 /// Placeholder for `MegaShaderInstance::z_index`, which the RENDERER assigns.
 ///

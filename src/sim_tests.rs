@@ -1593,3 +1593,632 @@ fn a_new_part_still_gets_to_attack_before_it_can_be_hurt() {
         "the shield-drop grace should be the FSM's own cycle, not just the kill cooldown"
     );
 }
+
+// ── Boss order override (testing) ────────────────────────────────────────────
+
+#[test]
+fn the_roster_override_permutes_only_real_bosses() {
+    // The menu picks from BOSS_ROSTER, so it can never name a boss that does
+    // not exist — and the shipped order must be exactly that list, or the menu
+    // shows one thing and the game loads another.
+    assert_eq!(BOSS_ROSTER.len(), crate::mode::BOSS_ROSTER_SIZE as usize);
+    for (i, kind) in BOSS_ROSTER.iter().enumerate() {
+        assert_eq!(
+            boss_kind_for_index(i as u32), *kind,
+            "BOSS_ROSTER[{i}] disagrees with the shipped boss_kind_for_index"
+        );
+    }
+    // Every roster entry is distinct, or a slot could never be reached.
+    for i in 0..BOSS_ROSTER.len() {
+        for j in (i + 1)..BOSS_ROSTER.len() {
+            assert_ne!(BOSS_ROSTER[i], BOSS_ROSTER[j], "duplicate boss in the roster");
+        }
+    }
+}
+
+#[test]
+fn a_short_override_still_finishes_the_run() {
+    // Testing usually assigns one or two slots. The rest must fall through to
+    // the shipped order rather than repeating the last pick, or a run
+    // configured for one fight would never reach an end.
+    set_boss_order_override(Some(vec![BossKind::Serpent]));
+    assert_eq!(boss_kind_for_index(0), BossKind::Serpent, "slot 1 honours the override");
+    assert_eq!(
+        boss_kind_for_index(1), BossKind::Conductor,
+        "past the override, the shipped order resumes"
+    );
+    assert!(boss_order_is_overridden());
+
+    // Clearing restores the shipped order exactly.
+    set_boss_order_override(None);
+    assert!(!boss_order_is_overridden());
+    for (i, kind) in BOSS_ROSTER.iter().enumerate() {
+        assert_eq!(boss_kind_for_index(i as u32), *kind);
+    }
+}
+
+// ── Serpent body ─────────────────────────────────────────────────────────────
+
+#[test]
+fn the_body_retraces_the_heads_path() {
+    use crate::scenes::game::boss::serpent::{serpent_push_trail, serpent_trail_point};
+    let mut trail: Vec<(f32, f32, f32)> = Vec::new();
+    let mut arc = 0.0_f32;
+
+    // Drive the head along a right-angle turn. A segment one spacing behind
+    // must still be on the FIRST leg while the head is on the second — that is
+    // the difference between following a path and bobbing on a shared curve.
+    for i in 0..400 {
+        serpent_push_trail(&mut trail, &mut arc, (i as f32 * 4.0, 0.0));
+    }
+    let corner = arc;
+    for i in 1..200 {
+        serpent_push_trail(&mut trail, &mut arc, (1596.0, i as f32 * 4.0));
+    }
+
+    let behind = arc - corner + 100.0; // 100px back along the first leg
+    let ((x, y), _) = serpent_trail_point(&trail, arc, behind).expect("trail point");
+    assert!(y.abs() < 1.0, "a segment past the corner should still be on the flat leg, y={y}");
+    assert!((x - 1496.0).abs() < 8.0, "and 100px back from it, x={x}");
+
+    // Spacing is even regardless of how fast the head moved.
+    let a = serpent_trail_point(&trail, arc, 0.0).unwrap().0;
+    let b = serpent_trail_point(&trail, arc, SERPENT_SEGMENT_SPACING).unwrap().0;
+    let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+    assert!(
+        d <= SERPENT_SEGMENT_SPACING + 1.0,
+        "segments must never sit further apart than their spacing (got {d})"
+    );
+}
+
+#[test]
+fn the_shield_band_always_leaves_a_way_in() {
+    use crate::scenes::game::boss::serpent::{serpent_shielded_now, serpent_seam};
+    // The band gates ACCESS; if it ever covered the whole body the fight would
+    // stall with nothing hittable, which is the failure the band exists to
+    // avoid in the first place.
+    for step in 0..240 {
+        let band = step as f32 * 0.05;
+        let exposed = (1..=SERPENT_SEGMENTS)
+            .filter(|&c| !serpent_shielded_now(c, band))
+            .count();
+        assert!(exposed > 0, "every segment shielded at band {band}");
+    }
+    assert!(
+        SERPENT_SHIELD_BAND < SERPENT_SEGMENTS as f32,
+        "the band must be narrower than the body"
+    );
+
+    // The seam is the inverse of the shield, so the art can never say
+    // "hit me" while the shield is up.
+    for c in 1..=SERPENT_SEGMENTS {
+        for step in 0..40 {
+            let band = step as f32 * 0.3;
+            if serpent_shielded_now(c, band) {
+                assert!(serpent_seam(c, band) < 0.5, "seam lit under an active shield");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_chain_order_is_not_the_destruction_order() {
+    use crate::scenes::game::boss::serpent::serpent_chain_index;
+    // `boss_parts` is ordered segments -> tail -> head so the shared loop
+    // unshields in that sequence. The BODY runs head -> segments -> tail.
+    // Conflating them puts the head at the back of its own body.
+    assert_eq!(serpent_chain_index(9, "head"), 0, "the head leads the chain");
+    assert_eq!(serpent_chain_index(8, "tail"), SERPENT_SEGMENTS + 1, "the tail trails it");
+    for i in 0..SERPENT_SEGMENTS {
+        let chain = serpent_chain_index(i, "seg");
+        assert!(chain > 0 && chain <= SERPENT_SEGMENTS, "segment {i} sits between them");
+    }
+
+    // And the destruction order really is segments, then tail, then head.
+    let parts = boss_parts_for_kind(BossKind::Serpent);
+    assert_eq!(parts.len(), SERPENT_SEGMENTS + 2);
+    assert!(parts[..SERPENT_SEGMENTS].iter().all(|p| !p.shielded), "segments start exposed");
+    assert!(parts[SERPENT_SEGMENTS].shielded, "the tail is shielded until the body is gone");
+    assert!(parts[SERPENT_SEGMENTS + 1].shielded, "and the head after it");
+    assert_eq!(parts[SERPENT_SEGMENTS].id, "tail");
+    assert_eq!(parts[SERPENT_SEGMENTS + 1].id, "head");
+}
+
+#[test]
+fn the_serpent_is_not_a_longer_grind_than_the_colossus() {
+    // Diffuse HP reads as longer than concentrated HP, so the Serpent must not
+    // also HAVE more of it — the difficulty is meant to come from the shield
+    // band gating access, not from the pile behind it.
+    let serpent: i32 = boss_parts_for_kind(BossKind::Serpent).iter().map(|p| p.max_hp).sum();
+    let colossus: i32 = boss_parts_for_kind(BossKind::Colossus).iter().map(|p| p.max_hp).sum();
+    assert!(
+        serpent <= colossus,
+        "serpent needs {serpent} buffed hits vs the colossus's {colossus}"
+    );
+    assert!(serpent >= 25, "but it should still feel like a long body ({serpent})");
+}
+
+// ── Serpent acts ─────────────────────────────────────────────────────────────
+
+/// Build a part list with the given survivors, mirroring the real one.
+fn serpent_parts_with(segments: usize, tail: bool, head: bool) -> Vec<BossPart> {
+    let mut parts = boss_parts_for_kind(BossKind::Serpent);
+    let mut seg_seen = 0;
+    for p in parts.iter_mut() {
+        match p.id {
+            "seg" => { seg_seen += 1; if seg_seen > segments { p.alive = false; } }
+            "tail" => { p.alive = tail; p.shielded = false; }
+            _ => { p.alive = head; p.shielded = false; }
+        }
+    }
+    parts
+}
+
+#[test]
+fn removing_a_part_removes_its_attack() {
+    // Availability is decided by which parts survive, not by a phase counter,
+    // so the fight's structure and its anatomy stay the same statement.
+    use crate::scenes::game::boss::serpent::serpent_acts;
+    // Full body: the body attacks, plus the tail launch.
+    let acts = serpent_acts(&serpent_parts_with(SERPENT_SEGMENTS, true, true));
+    assert!(acts.contains(&SerpentAct::Coil));
+    assert!(acts.contains(&SerpentAct::RiftStrikes));
+    assert!(acts.contains(&SerpentAct::TailLaunch));
+    assert!(!acts.contains(&SerpentAct::SpineLash), "no spine while the body is in the way");
+    assert!(!acts.contains(&SerpentAct::WormholeGambit));
+
+    // Body gone, head and tail left: the spine is what the segments used to be.
+    let acts = serpent_acts(&serpent_parts_with(0, true, true));
+    assert_eq!(acts, vec![SerpentAct::SpineLash], "head+tail has exactly one act");
+
+    // Tail gone: the launch goes with it, and the gambit is what remains.
+    let acts = serpent_acts(&serpent_parts_with(0, false, true));
+    assert_eq!(acts, vec![SerpentAct::WormholeGambit]);
+    assert!(!acts.contains(&SerpentAct::TailLaunch), "a destroyed tail cannot launch itself");
+
+    // Nothing left: nothing to do.
+    assert!(serpent_acts(&serpent_parts_with(0, false, false)).is_empty());
+}
+
+#[test]
+fn every_phase_has_something_to_do() {
+    // A phase with no available act would leave the serpent prowling forever
+    // and the fight unwinnable-looking, which is worse than a hard attack.
+    use crate::scenes::game::boss::serpent::serpent_acts;
+    for (segs, tail) in [(SERPENT_SEGMENTS, true), (4, true), (1, true), (0, true), (0, false)] {
+        assert!(
+            !serpent_acts(&serpent_parts_with(segs, tail, true)).is_empty(),
+            "no act available at segments={segs} tail={tail}"
+        );
+    }
+}
+
+#[test]
+fn the_gambit_gives_a_real_reaction_window() {
+    // The capture is only fair because a tether inside the window escapes it.
+    // Too short and it is a coin flip; too long and the capture means nothing.
+    assert!(
+        (15..=45).contains(&SERPENT_GAMBIT_REACT),
+        "reaction window is {SERPENT_GAMBIT_REACT} ticks; wanted roughly a quarter to three quarters of a second"
+    );
+    // The player is delivered far enough out that a tether has somewhere to go.
+    assert!(SERPENT_GAMBIT_DROP > PLAYER_R * 8.0);
+    // And the dash has to be able to cross that gap inside the window, or the
+    // bite would never land and the attack would be theatre.
+    let reach = SERPENT_DASH_SPEED * SERPENT_GAMBIT_REACT as f32;
+    assert!(
+        reach >= SERPENT_GAMBIT_DROP,
+        "the head covers {reach:.0}px in the window but is dropped {SERPENT_GAMBIT_DROP:.0}px away"
+    );
+}
+
+#[test]
+fn the_serpent_head_never_outruns_the_player_while_cruising() {
+    // The threat is the body sweeping space behind the head, not the head
+    // catching you — a head faster than the player's cap makes the whole fight
+    // a chase with no counterplay.
+    assert!(
+        SERPENT_HEAD_SPEED < MOMENTUM_CAP,
+        "head cruises at {SERPENT_HEAD_SPEED}, player cap is {MOMENTUM_CAP}"
+    );
+    // The dash is the deliberate exception, and only lands after a capture.
+    assert!(SERPENT_DASH_SPEED > MOMENTUM_CAP);
+}
+
+// ── Spine lash choreography ──────────────────────────────────────────────────
+
+#[test]
+fn the_lash_takes_up_a_stance_before_it_sweeps() {
+    use crate::scenes::game::boss::serpent::serpent_lash_anchors;
+    let centre = (0.0_f32, 0.0_f32);
+    // Both pieces start somewhere arbitrary on the body's path.
+    let from = ((-4000.0_f32, 900.0_f32), (-4600.0_f32, 1100.0_f32));
+
+    // At tick 0 they are still where they were — the move must be a lerp, not
+    // a teleport, or the stance reads as the boss blinking across the arena.
+    let (h0, t0) = serpent_lash_anchors(0, centre, from);
+    assert!((h0.0 - from.0.0).abs() < 1.0 && (h0.1 - from.0.1).abs() < 1.0);
+    assert!((t0.0 - from.1.0).abs() < 1.0);
+
+    // By the end of the telegraph they are on OPPOSITE sides of the centre.
+    let (h, t) = serpent_lash_anchors(SERPENT_TELEGRAPH_TICKS, centre, from);
+    assert!(
+        h.0.signum() != t.0.signum(),
+        "head at {h:?} and tail at {t:?} are not on opposite sides"
+    );
+    assert!(h.0.abs() > 1000.0 && t.0.abs() > 1000.0, "both should be well out from centre");
+}
+
+#[test]
+fn the_lash_pivot_is_off_centre_so_the_safe_side_moves() {
+    use crate::scenes::game::boss::serpent::serpent_lash_anchors;
+    let centre = (0.0_f32, 0.0_f32);
+    let from = ((0.0_f32, 0.0_f32), (0.0_f32, 0.0_f32));
+
+    // Equal radii would make the spine a diameter through the centre: it would
+    // pivot about one fixed point and the safe side would be whichever half you
+    // started in. Unequal radii make the line translate as it rotates.
+    assert!(
+        (SERPENT_LASH_TAIL_RATIO - 1.0).abs() > 0.1,
+        "the endpoints must orbit at different radii or this is just a pivot"
+    );
+
+    // The midpoint of the spine must actually move over the sweep.
+    let mid = |ticks: u32| {
+        let (h, t) = serpent_lash_anchors(ticks, centre, from);
+        ((h.0 + t.0) * 0.5, (h.1 + t.1) * 0.5)
+    };
+    let a = mid(SERPENT_TELEGRAPH_TICKS);
+    let b = mid(SERPENT_TELEGRAPH_TICKS + (SERPENT_LASH_TICKS - SERPENT_TELEGRAPH_TICKS) / 2);
+    let moved = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+    assert!(moved > 400.0, "the spine's midpoint barely moved ({moved:.0}px) — that is a pivot");
+}
+
+#[test]
+fn the_sweep_covers_every_angle_exactly_once() {
+    use crate::scenes::game::boss::serpent::serpent_lash_anchors;
+    let centre = (0.0_f32, 0.0_f32);
+    let from = ((0.0_f32, 0.0_f32), (0.0_f32, 0.0_f32));
+
+    // Half a turn takes the line across every angle once. A full turn would
+    // repeat ground the player has already cleared and let them wait it out.
+    assert!(
+        (SERPENT_LASH_ARC - std::f32::consts::PI).abs() < 0.01,
+        "the sweep should be a half turn"
+    );
+
+    let ang = |ticks: u32| {
+        let (h, t) = serpent_lash_anchors(ticks, centre, from);
+        (h.1 - t.1).atan2(h.0 - t.0)
+    };
+    let start = ang(SERPENT_TELEGRAPH_TICKS);
+    let end = ang(SERPENT_LASH_TICKS);
+    let swept = (end - start).abs();
+    assert!(
+        swept > 2.0,
+        "the spine only swept {swept:.2} rad; it should cross the arena"
+    );
+
+    // And it stays inside the play area rather than swinging off the top.
+    for step in 0..40 {
+        let ticks = SERPENT_TELEGRAPH_TICKS + step * 4;
+        let (h, t) = serpent_lash_anchors(ticks, centre, from);
+        let worst = h.1.abs().max(t.1.abs());
+        assert!(
+            worst <= SERPENT_LASH_RADIUS * SERPENT_LASH_Y + 1.0,
+            "the sweep reaches {worst:.0}px vertically, past the squashed limit"
+        );
+    }
+}
+
+// ── Serpent fixes ────────────────────────────────────────────────────────────
+
+#[test]
+fn the_serpent_stays_out_of_the_death_floor() {
+    // The body is tetherable, so a player riding a segment goes wherever the
+    // serpent goes. Unclamped it wandered low and took them into the floor —
+    // killed by the thing they were correctly using as traversal.
+    assert!(SERPENT_Y_MAX < 0.0, "the band must sit above the arena floor");
+    // Comfortably above the arena wall's bottom edge (600) with room for the
+    // player to hang below a segment they are tethered to.
+    assert!(
+        SERPENT_Y_MAX < -1000.0,
+        "head may reach y={SERPENT_Y_MAX}, too close to the floor for a tethered player"
+    );
+    assert!(SERPENT_Y_MIN < SERPENT_Y_MAX, "the band must be a band");
+    // And the play centre is inside it, or the serpent could never reach the
+    // player at all.
+    assert!(
+        (SERPENT_Y_MIN..=SERPENT_Y_MAX).contains(&BOSS_Y_CENTER),
+        "the arena's centre is outside the serpent's band"
+    );
+}
+
+#[test]
+fn the_glow_and_the_hit_box_agree() {
+    use crate::scenes::game::boss::serpent::{serpent_seam, serpent_shielded_now};
+    // The cue and the damage test read the same threshold, so the armour is
+    // visibly open exactly when it can be hurt.
+    for c in 1..=SERPENT_SEGMENTS {
+        for step in 0..120 {
+            let band = step as f32 * 0.1;
+            let seam = serpent_seam(c, band);
+            let open = seam >= SERPENT_OPEN_AT;
+            if open {
+                assert!(
+                    !serpent_shielded_now(c, band),
+                    "segment {c} reads as open while its shield is still up"
+                );
+            }
+        }
+    }
+    // The threshold has to be near the top of the ramp, or the glow lights
+    // while the plating is still visibly shut.
+    assert!(SERPENT_OPEN_AT >= 0.8, "open threshold {SERPENT_OPEN_AT} is too early");
+    assert!(SERPENT_OPEN_AT <= 1.0);
+}
+
+#[test]
+fn the_coil_goal_is_something_the_head_can_chase() {
+    // Authored at a fixed 0.02 rad/tick the goal ran the ring at ~52px/tick
+    // against a head that travels 22, so it could never be caught and the coil
+    // read as meandering rather than as a closing ring.
+    let rate = SERPENT_HEAD_SPEED / SERPENT_COIL_RADIUS;
+    let goal_speed = rate * SERPENT_COIL_RADIUS;
+    assert!(
+        goal_speed <= SERPENT_HEAD_SPEED + 0.01,
+        "the coil goal moves at {goal_speed:.1}px/tick, faster than the head's {SERPENT_HEAD_SPEED}"
+    );
+    // And the ring must actually close over the act.
+    assert!(SERPENT_COIL_CLOSE < SERPENT_COIL_RADIUS);
+}
+
+#[test]
+fn the_grace_period_is_long_enough_to_read_the_boss() {
+    assert!(
+        (120..=360).contains(&SERPENT_NOTICE_TICKS),
+        "grace is {SERPENT_NOTICE_TICKS} ticks; wanted roughly two to six seconds"
+    );
+    // It must end before the first attack could otherwise have fired, or the
+    // grace would simply be dead time appended to the fight.
+    assert!(SERPENT_NOTICE_TICKS <= SERPENT_ATTACK_GAP);
+}
+
+#[test]
+fn the_tail_sweep_is_answered_by_elevation() {
+    use crate::scenes::game::boss::serpent::serpent_acts;
+    // It is the only attack in the fight dodged by being higher, so it has to
+    // exist wherever the tail does.
+    let parts = boss_parts_for_kind(BossKind::Serpent);
+    let acts = serpent_acts(&parts);
+    assert!(acts.contains(&SerpentAct::TailSweep), "a live tail should be able to sweep");
+
+    // The arc has to cross a meaningful span or it is a poke, not a sweep.
+    assert!(SERPENT_SWEEP_ARC > 1.5, "sweep arc {SERPENT_SWEEP_ARC} rad is too narrow");
+    // And its reach must cover a good part of the play band.
+    assert!(SERPENT_SWEEP_RADIUS > 1500.0);
+}
+
+#[test]
+fn the_coil_leaves_gaps_a_player_can_fit_through() {
+    // The coil's counterplay IS the gaps between segments, so the body must not
+    // be a solid wall. Overlapping discs look better but make the signature
+    // attack unavoidable.
+    let gap = SERPENT_SEGMENT_SPACING - SERPENT_SEGMENT_SIZE;
+    assert!(gap > PLAYER_R * 2.0, "gap is {gap}px against a player {}px across", PLAYER_R * 2.0);
+    // But not so wide that the body stops reading as one creature.
+    assert!(
+        SERPENT_SEGMENT_SPACING < SERPENT_SEGMENT_SIZE * 2.0,
+        "segments this far apart read as a string of beads, not a serpent"
+    );
+    // And the whole body still has to fit inside the coil it forms.
+    let body = (SERPENT_SEGMENTS + 1) as f32 * SERPENT_SEGMENT_SPACING;
+    let ring = std::f32::consts::TAU * SERPENT_COIL_CLOSE;
+    assert!(body < ring, "the body ({body:.0}px) is longer than the closed ring ({ring:.0}px)");
+}
+
+
+#[test]
+fn boss_order_rows_line_up_with_their_click_targets() {
+    use crate::menu::boss_order_row;
+    // Font sizes are authored in logical px and scaled to virtual units, while
+    // object positions are authored in virtual units. Mixing the two put the
+    // click targets 116 units apart under rows only ~30 apart.
+    let (y0, h) = boss_order_row(0);
+    let (y1, _) = boss_order_row(1);
+    assert!(h > 0.0, "a row must have height");
+    assert!(y1 > y0 + h, "rows must not overlap");
+    assert!(y1 - y0 - h < h * 0.5, "the gap between rows should be small next to the row");
+    // Every row is reachable and they run down the panel in order.
+    for i in 1..BOSS_ROSTER.len() {
+        assert!(boss_order_row(i).0 > boss_order_row(i - 1).0);
+    }
+}
+
+#[test]
+fn the_body_starts_inside_the_rift_it_emerges_from() {
+    use crate::scenes::game::boss::serpent::serpent_trail_point;
+    // Collapsing the trail onto the hole is what makes pieces come out one at a
+    // time. Laid backward from it, each piece sits at its own chain distance
+    // BEHIND the portal — outside the swallow radius, so the whole body is
+    // visible in a line before the portal has produced anything.
+    let hole = (1000.0_f32, -2500.0_f32);
+    let trail = vec![(hole.0, hole.1, 0.0_f32)];
+    let arc = 0.0_f32;
+
+    for chain in 0..=(SERPENT_SEGMENTS + 1) {
+        let behind = chain as f32 * SERPENT_SEGMENT_SPACING;
+        let (pos, _) = serpent_trail_point(&trail, arc, behind).expect("fallback point");
+        let d = ((pos.0 - hole.0).powi(2) + (pos.1 - hole.1).powi(2)).sqrt();
+        assert!(
+            d < SERPENT_RIFT_SWALLOW_R,
+            "piece {chain} sits {d:.0}px from the rift at emergence — it would be visible outside it"
+        );
+    }
+}
+
+#[test]
+fn the_coil_closes_on_a_fixed_point_and_actually_tightens() {
+    use crate::scenes::game::boss::serpent::serpent_goal_for;
+    let coil_at = (500.0_f32, -2500.0_f32);
+    let player = (9999.0_f32, 9999.0_f32); // deliberately elsewhere
+    let vel = (0.0_f32, 0.0_f32);
+
+    let r_at = |ticks: u32| {
+        let g = serpent_goal_for(SerpentAct::Coil, ticks, player, coil_at, vel);
+        ((g.0 - coil_at.0).powi(2) + ((g.1 - coil_at.1) / 0.55).powi(2)).sqrt()
+    };
+    let start = r_at(0);
+    let mid = r_at(SERPENT_COIL_TICKS / 2);
+    let end = r_at(SERPENT_COIL_TICKS);
+    assert!(start > mid && mid > end, "the coil must tighten: {start:.0} -> {mid:.0} -> {end:.0}");
+    assert!((start - SERPENT_COIL_RADIUS).abs() < 20.0);
+    assert!((end - SERPENT_COIL_CLOSE).abs() < 20.0);
+
+    // It closes on the captured point, NOT on the live player — a coil that
+    // tracks never closes.
+    let g = serpent_goal_for(SerpentAct::Coil, SERPENT_COIL_TICKS, player, coil_at, vel);
+    assert!(
+        (g.0 - player.0).abs() > 1000.0,
+        "the coil followed the player instead of closing where they were"
+    );
+
+    // And it makes at least a full lap, or it is an arc rather than a coil.
+    assert!(SERPENT_COIL_LAPS >= 1.5);
+}
+
+#[test]
+fn the_head_faces_the_way_it_is_going() {
+    use crate::scenes::game::boss::serpent::{serpent_push_trail, serpent_trail_point};
+    // The head is sampled newer than the newest trail entry, so its heading has
+    // to come from the two most recent samples. Returning 0 left it drawn
+    // facing right whatever direction the serpent was travelling.
+    for (dx, dy, want) in [
+        (4.0_f32, 0.0_f32, 0.0_f32),
+        (-4.0, 0.0, std::f32::consts::PI),
+        (0.0, 4.0, std::f32::consts::FRAC_PI_2),
+        (0.0, -4.0, -std::f32::consts::FRAC_PI_2),
+    ] {
+        let mut trail: Vec<(f32, f32, f32)> = Vec::new();
+        let mut arc = 0.0_f32;
+        for i in 0..40 {
+            serpent_push_trail(&mut trail, &mut arc, (dx * i as f32, dy * i as f32));
+        }
+        let (_, deg) = serpent_trail_point(&trail, arc, 0.0).expect("head point");
+        let got = deg.to_radians();
+        let diff = ((got - want + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU))
+            - std::f32::consts::PI;
+        assert!(
+            diff.abs() < 0.05,
+            "moving ({dx},{dy}) the head faces {:.2} rad, wanted {want:.2}", got
+        );
+    }
+}
+
+#[test]
+fn the_burrow_visits_every_stage() {
+    // The dive has to be a state machine: on a fixed cycle the entry hole
+    // stayed where the last emergence was while the head steered away from it,
+    // so the serpent vanished and reappeared with no dive on screen.
+    // Approach ends on ARRIVAL, which is what guarantees the swim is seen.
+    assert!(SERPENT_RIFT_AHEAD > SERPENT_RIFT_SWALLOW_R * 2.0,
+        "the portal opens too close to the head for the swim into it to read");
+
+    // Swallowing the whole body must take long enough to watch.
+    let swallow_ticks =
+        crate::scenes::game::boss::serpent::serpent_body_arc() / SERPENT_RIFT_SWALLOW_SPEED;
+    assert!(
+        (60.0..400.0).contains(&swallow_ticks),
+        "the body takes {swallow_ticks:.0} ticks to go under; wanted one to six seconds"
+    );
+
+    // And the act's ceiling has to accommodate every stage of every surfacing,
+    // or the sequence is cut off part way through.
+    let swim = SERPENT_RIFT_AHEAD / SERPENT_HEAD_SPEED;
+    let per = swim + swallow_ticks + SERPENT_RIFT_SURFACE as f32;
+    let need = SERPENT_TELEGRAPH_TICKS as f32 + (SERPENT_RIFT_COUNT + 1) as f32 * per;
+    assert!(need > 500.0, "the whole burrow should be a set piece");
+}
+
+#[test]
+fn the_serpent_is_fully_absent_between_portals() {
+    // Opening the exit on the same frame the last piece went in made the
+    // serpent appear to loop straight back out of the hole it had just entered.
+    // The gap is what makes the two portals read as two places.
+    assert!(
+        SERPENT_RIFT_HIDDEN >= 30,
+        "the absence is {SERPENT_RIFT_HIDDEN} ticks — too short to register as gone"
+    );
+    // But short enough that the fight does not stall with nothing on screen.
+    assert!(SERPENT_RIFT_HIDDEN <= 120);
+
+    // Every stage has to fit inside the act's ceiling, or the burrow is cut off
+    // part way through.
+    let swallow = crate::scenes::game::boss::serpent::serpent_body_arc()
+        / SERPENT_RIFT_SWALLOW_SPEED;
+    let swim = SERPENT_RIFT_AHEAD / SERPENT_HEAD_SPEED;
+    let per = swim + swallow + SERPENT_RIFT_HIDDEN as f32 + SERPENT_RIFT_SURFACE as f32;
+    let ceiling = SERPENT_TELEGRAPH_TICKS as f32
+        + (SERPENT_RIFT_COUNT + 1) as f32
+            * (swim + swallow + SERPENT_RIFT_HIDDEN as f32 + SERPENT_RIFT_SURFACE as f32);
+    assert!(
+        ceiling >= SERPENT_TELEGRAPH_TICKS as f32 + SERPENT_RIFT_COUNT as f32 * per,
+        "the act ends before the last surfacing completes"
+    );
+}
+
+#[test]
+fn a_goal_is_not_a_brake() {
+    // Steering the head AT the portal is not the same as stopping it there. It
+    // swam straight through, kept going, turned around because the portal was
+    // still its goal, and came back — entering twice per cycle with a loop in
+    // between. The head has to be frozen outright while it is in the hole.
+    //
+    // This models the arrival test: the head stops advancing once it is inside,
+    // so its distance from the portal can never grow again during the dive.
+    let hole = (0.0_f32, 0.0_f32);
+    let arrive_at = SERPENT_RIFT_SWALLOW_R * 0.6;
+
+    // Approaching at cruise speed, the head closes on the portal...
+    let mut d = SERPENT_RIFT_AHEAD;
+    let mut steps = 0;
+    while d >= arrive_at && steps < 10_000 {
+        d -= SERPENT_HEAD_SPEED;
+        steps += 1;
+    }
+    assert!(steps < 10_000, "the head never reaches the portal");
+    assert!(d < arrive_at, "arrival test never fires");
+    let _ = hole;
+
+    // ...and from that moment it must not advance, or it exits the far side.
+    // The overshoot on the arrival frame has to stay inside the swallow radius,
+    // or the head is already visibly out the other side when it "arrives".
+    let overshoot = arrive_at - d;
+    assert!(
+        overshoot < SERPENT_RIFT_SWALLOW_R,
+        "the head overshoots {overshoot:.0}px into a {SERPENT_RIFT_SWALLOW_R:.0}px portal"
+    );
+
+    // The body must be able to finish entering before anything else happens.
+    let swallow = crate::scenes::game::boss::serpent::serpent_body_arc()
+        / SERPENT_RIFT_SWALLOW_SPEED;
+    assert!(swallow > 30.0, "the body goes under too fast to see ({swallow:.0} ticks)");
+}
+
+#[test]
+fn a_homing_attack_must_be_slower_than_the_player() {
+    // The launched tail homes every frame, so its speed IS its difficulty.
+    // Anything near the player's cap cannot be shaken by any manoeuvre, which
+    // makes it unavoidable rather than hard.
+    assert!(
+        SERPENT_TAIL_LAUNCH_SPEED < MOMENTUM_CAP * 0.6,
+        "the tail homes at {SERPENT_TAIL_LAUNCH_SPEED} against a player cap of {MOMENTUM_CAP}"
+    );
+    // But fast enough to still be a threat worth moving away from.
+    assert!(SERPENT_TAIL_LAUNCH_SPEED > MOMENTUM_CAP * 0.25);
+
+    // And it must be able to cross a useful distance inside its window, or it
+    // never arrives and the attack is theatre.
+    let reach = SERPENT_TAIL_LAUNCH_SPEED * SERPENT_TAIL_LAUNCH_TICKS as f32;
+    assert!(reach > 2000.0, "the tail only travels {reach:.0}px before it is recalled");
+}

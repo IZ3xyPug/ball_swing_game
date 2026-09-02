@@ -439,6 +439,53 @@ pub struct State {
     /// Colossus: while > 0, the whole body is held still (no sway/bob) after the
     /// torso summons a meteor burst, until the meteors have fired and cleared.
     pub boss_meteor_lock_ticks: u32,
+    // ── Serpent ──────────────────────────────────────────────────────────
+    /// The head's recent positions, newest FIRST, with the arc length travelled
+    /// to reach each one. The body samples this history at fixed spacing, so
+    /// every segment retraces the exact path the head took — which is what
+    /// makes it slither rather than wobble on a shared sine.
+    pub serpent_trail: Vec<(f32, f32, f32)>,
+    /// Total arc length the head has travelled this fight, so a segment's place
+    /// on the body is a distance rather than an index into a shifting buffer.
+    pub serpent_arc: f32,
+    /// Where the head is steering, in world space. Re-picked when reached.
+    pub serpent_goal: (f32, f32),
+    /// Position of the shield band along the body, in segments from the head.
+    /// Wraps, so the band runs the length of the body over and over.
+    pub serpent_band: f32,
+    /// What the Serpent is doing, and how long it has been doing it.
+    pub serpent_act: SerpentAct,
+    pub serpent_act_ticks: u32,
+    /// Ticks until it may commit to a new act.
+    pub serpent_cooldown: u32,
+    /// Rift strike / gambit sites: (x, y, ticks until it erupts).
+    pub serpent_rifts: Vec<(f32, f32, u32)>,
+    /// The rift the body is currently passing through, if any. Pieces near it
+    /// are inside it and are not drawn.
+    pub serpent_hole: Option<(f32, f32)>,
+    /// How many times the serpent has surfaced this rift sequence.
+    pub serpent_surfaced: u32,
+    /// The rift that is OPENING while the body is still sinking into the
+    /// current one. Drawn charging, so the exit is visibly there before
+    /// anything comes out of it.
+    pub serpent_next_hole: Option<(f32, f32)>,
+    /// Where the coil closes on: the player's position when the act began.
+    pub serpent_coil_at: (f32, f32),
+    /// Which stage of a burrow the serpent is in, and how long it has been
+    /// there. Stages end on what they are waiting for, not on a clock.
+    pub serpent_rift_phase: RiftPhase,
+    pub serpent_rift_ticks: u32,
+    /// Ticks left in the player's reaction window after a gambit capture. The
+    /// bite lands at zero unless they have tethered by then.
+    pub serpent_gambit_react: u32,
+    /// Grace after a body contact, so a long body cannot drain every heart.
+    pub serpent_contact_cooldown: u32,
+    /// Head and tail positions when a spine lash began, so the move into
+    /// position is a lerp from where they actually were rather than a snap.
+    pub serpent_lash_from: Option<((f32, f32), (f32, f32))>,
+    /// Where the tail is when launched, and whether it is out.
+    pub serpent_tail_out: bool,
+    pub serpent_tail_pos: (f32, f32),
     /// Colossus hands: how many attacks the PAIR has committed to. Bumped once
     /// per commitment, not once per hand, so both hands read the same attack.
     pub boss_hand_attack: u32,
