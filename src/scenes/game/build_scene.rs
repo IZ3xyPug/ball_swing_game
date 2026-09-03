@@ -947,6 +947,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 serpent_act:       SerpentAct::Prowl,
                 serpent_act_ticks: 0,             serpent_cooldown:  SERPENT_ATTACK_GAP,
                 serpent_rifts:     Vec::new(),    serpent_gambit_react: 0,
+                serpent_gambit_exit: None,        serpent_gambit_exit_ticks: 0,
+                serpent_roam_to:   None,          serpent_roam_ticks: 0,
                 serpent_hole:      None,         serpent_surfaced:  0,
                 serpent_next_hole: None,         serpent_coil_at:   (0.0, 0.0),
                 serpent_rift_phase: RiftPhase::Approach,

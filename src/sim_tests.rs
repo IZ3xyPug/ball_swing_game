@@ -1677,25 +1677,72 @@ fn the_shield_band_always_leaves_a_way_in() {
     // The band gates ACCESS; if it ever covered the whole body the fight would
     // stall with nothing hittable, which is the failure the band exists to
     // avoid in the first place.
-    for step in 0..240 {
-        let band = step as f32 * 0.05;
-        let exposed = (1..=SERPENT_SEGMENTS)
-            .filter(|&c| !serpent_shielded_now(c, band))
-            .count();
-        assert!(exposed > 0, "every segment shielded at band {band}");
+    //
+    // Swept across every body LENGTH, not just the full one: the body shortens
+    // as segments die, and a band authored for ten links covers a three-link
+    // body completely — a permanent shield that no amount of play can open.
+    // The invariant is a DUTY CYCLE, not an instant: with one segment left
+    // there is nothing else to be open while it is covered, so demanding a way
+    // in on every single frame is only satisfiable by never shielding at all.
+    // What must hold is that the shield spends more of the lap off than on.
+    for span in 3..=(SERPENT_SEGMENTS + 2) {
+        for c in 1..span.saturating_sub(1) {
+            let steps = 400;
+            let shut = (0..steps)
+                .filter(|&k| {
+                    let band = k as f32 / steps as f32 * span as f32;
+                    serpent_shielded_now(c, band, span)
+                })
+                .count();
+            let duty = shut as f32 / steps as f32;
+            assert!(
+                duty < 0.5,
+                "link {c} of {span} is shielded {:.0}% of the lap — the band is a wall, \
+                 not a gate",
+                duty * 100.0
+            );
+        }
     }
+    // The open window is AUTHORED, so it has to be the window the player
+    // actually gets — at every body length, not just a full one. It used to
+    // fall out of a fixed band width, which meant it shrank as segments died:
+    // the fight became harder to damage the more of it had been killed.
+    for span in 3..=(SERPENT_SEGMENTS + 2) {
+        for c in 1..span.saturating_sub(1) {
+            let steps = 2000;
+            let open = (0..steps)
+                .filter(|&k| {
+                    let band = k as f32 / steps as f32 * span as f32;
+                    serpent_seam(c, band, span) >= SERPENT_OPEN_AT
+                })
+                .count() as f32
+                / steps as f32;
+            assert!(
+                (open - SERPENT_OPEN_FRACTION).abs() < 0.02,
+                "link {c} of {span} is open {:.0}% of the lap, not the authored {:.0}%",
+                open * 100.0,
+                SERPENT_OPEN_FRACTION * 100.0
+            );
+        }
+    }
+
+    // And in seconds, since that is what the player experiences. A full-length
+    // body laps in `span / speed`, so the window is half of that.
+    let lap = (SERPENT_SEGMENTS + 2) as f32 / SERPENT_SHIELD_SPEED;
+    let window = lap * SERPENT_OPEN_FRACTION;
     assert!(
-        SERPENT_SHIELD_BAND < SERPENT_SEGMENTS as f32,
-        "the band must be narrower than the body"
+        window > 3.0,
+        "a {window:.1}s window is not long enough to get buffed, cross the arena and land a hit"
     );
 
     // The seam is the inverse of the shield, so the art can never say
     // "hit me" while the shield is up.
+    let span = SERPENT_SEGMENTS + 2;
     for c in 1..=SERPENT_SEGMENTS {
         for step in 0..40 {
             let band = step as f32 * 0.3;
-            if serpent_shielded_now(c, band) {
-                assert!(serpent_seam(c, band) < 0.5, "seam lit under an active shield");
+            if serpent_shielded_now(c, band, span) {
+                assert!(serpent_seam(c, band, span) < 0.5, "seam lit under an active shield");
             }
         }
     }
@@ -1707,10 +1754,14 @@ fn the_chain_order_is_not_the_destruction_order() {
     // `boss_parts` is ordered segments -> tail -> head so the shared loop
     // unshields in that sequence. The BODY runs head -> segments -> tail.
     // Conflating them puts the head at the back of its own body.
-    assert_eq!(serpent_chain_index(9, "head"), 0, "the head leads the chain");
-    assert_eq!(serpent_chain_index(8, "tail"), SERPENT_SEGMENTS + 1, "the tail trails it");
+    let full = boss_parts_for_kind(BossKind::Serpent);
+    assert_eq!(serpent_chain_index(&full, 9, "head"), 0, "the head leads the chain");
+    assert_eq!(
+        serpent_chain_index(&full, 8, "tail"), SERPENT_SEGMENTS + 1,
+        "the tail trails it"
+    );
     for i in 0..SERPENT_SEGMENTS {
-        let chain = serpent_chain_index(i, "seg");
+        let chain = serpent_chain_index(&full, i, "seg");
         assert!(chain > 0 && chain <= SERPENT_SEGMENTS, "segment {i} sits between them");
     }
 
@@ -1725,6 +1776,396 @@ fn the_chain_order_is_not_the_destruction_order() {
 }
 
 #[test]
+fn a_dead_segment_does_not_leave_a_hole_in_the_body() {
+    use crate::scenes::game::boss::serpent::{serpent_chain_index, serpent_chain_span};
+    // Links are consecutive from the head with no gaps, whichever segments have
+    // died. Ranked by INDEX instead, the survivors kept their original slots and
+    // the serpent flew around with a bite out of its middle — the body has to
+    // close up and get shorter, which is also the read the fight wants.
+    let mut parts = boss_parts_for_kind(BossKind::Serpent);
+    for dead in [0usize, 3, 4, 7] {
+        parts[dead].alive = false;
+    }
+    let span = serpent_chain_span(&parts);
+    assert_eq!(span, SERPENT_SEGMENTS + 2 - 4, "the body is four links shorter");
+
+    let mut links: Vec<usize> = parts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.alive)
+        .map(|(i, p)| serpent_chain_index(&parts, i, p.id))
+        .collect();
+    links.sort_unstable();
+    let want: Vec<usize> = (0..span).collect();
+    assert_eq!(links, want, "chain links must be consecutive with no empty slots");
+
+    // And the order is still head, segments, tail.
+    let head = parts.iter().position(|p| p.id == "head").unwrap();
+    let tail = parts.iter().position(|p| p.id == "tail").unwrap();
+    assert_eq!(serpent_chain_index(&parts, head, "head"), 0);
+    assert_eq!(serpent_chain_index(&parts, tail, "tail"), span - 1);
+}
+
+#[test]
+fn the_body_stays_coherent_all_the_way_through_being_dismantled() {
+    use crate::scenes::game::boss::serpent::{
+        serpent_body_arc_for, serpent_chain_distance, serpent_chain_index, serpent_chain_span,
+        serpent_shielded_now,
+    };
+    // The whole destruction sequence, one kill at a time. The auto-play bot
+    // never lands a buffed hit, so nothing else exercises a PARTLY eaten
+    // serpent — every property here held at full length and had to be checked
+    // as the body shortens.
+    let mut parts = boss_parts_for_kind(BossKind::Serpent);
+    let mut last_arc = f32::MAX;
+
+    for kill in 0..SERPENT_SEGMENTS {
+        let span = serpent_chain_span(&parts);
+
+        // Links are consecutive: no empty slot where a dead segment used to be.
+        let mut links: Vec<usize> = parts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.alive)
+            .map(|(i, p)| serpent_chain_index(&parts, i, p.id))
+            .collect();
+        links.sort_unstable();
+        assert_eq!(links, (0..span).collect::<Vec<_>>(), "gap in the body after {kill} kills");
+
+        // Spacing is even, so the pieces still read as one animal.
+        for w in links.windows(2) {
+            let d = serpent_chain_distance(w[1]) - serpent_chain_distance(w[0]);
+            assert!(
+                (d - SERPENT_SEGMENT_SPACING).abs() < 0.01,
+                "uneven spacing {d} after {kill} kills"
+            );
+        }
+
+        // The body genuinely gets shorter — the fight is meant to speed up as
+        // it is dismantled, not merely lose hit points.
+        let arc = serpent_body_arc_for(span);
+        assert!(arc < last_arc, "body arc did not shrink after {kill} kills");
+        last_arc = arc;
+
+        // And the shield still opens: a band that covered a short body for the
+        // whole lap would leave nothing hittable and stall the fight.
+        for c in 1..span.saturating_sub(1) {
+            let open = (0..200).any(|k| {
+                let band = k as f32 / 200.0 * span as f32;
+                !serpent_shielded_now(c, band, span)
+            });
+            assert!(open, "link {c} never opens with {span} links left");
+        }
+
+        parts[kill].alive = false;
+    }
+
+    // Down to head + tail, the two survivors are adjacent rather than sitting
+    // nine empty slots apart.
+    let tail = parts.iter().position(|p| p.id == "tail").unwrap();
+    assert_eq!(serpent_chain_index(&parts, tail, "tail"), 1, "the tail closes up to the head");
+}
+
+#[test]
+fn the_headless_driver_can_pin_every_boss_in_the_roster() {
+    // The flag exists so a fight can be exercised without playing it. A slug
+    // that silently failed to match would run the shipped order instead and
+    // report a clean sweep of the wrong boss.
+    for kind in BOSS_ROSTER {
+        assert!(
+            crate::headless::pin_boss(kind.slug()).is_ok(),
+            "{} has no working slug",
+            kind.name()
+        );
+        let order = boss_order_override().expect("an override was installed");
+        assert_eq!(
+            order.len(), crate::mode::BOSS_ROSTER_SIZE as usize,
+            "a short override falls through to the shipped roster past its end"
+        );
+        assert!(order.iter().all(|&k| k == kind), "every slot must be the pinned boss");
+        for slot in 0..crate::mode::BOSS_ROSTER_SIZE {
+            assert_eq!(boss_kind_for_index(slot), kind);
+        }
+    }
+    assert!(crate::headless::pin_boss("nonesuch").is_err());
+    set_boss_order_override(None);
+}
+
+#[test]
+fn a_wall_never_holds_the_player_against_it() {
+    use crate::scenes::game::boss::arena::{arena_wall_bounce, WallBounce};
+    let (x1, x2) = (0.0_f32, 20_000.0_f32);
+    let inner_l = x1 + ARENA_WALL_THICKNESS * 0.5 + PLAYER_R;
+    let inner_r = x2 - ARENA_WALL_THICKNESS * 0.5 - PLAYER_R;
+    let mid = (inner_l + inner_r) * 0.5;
+
+    // Clear of both walls: nothing happens. A bounce that fired in open space
+    // would be a permanent nudge, not a wall.
+    assert_eq!(
+        arena_wall_bounce(mid, -2000.0, 12.0, 3.0, false, (mid, -3000.0), x1, x2),
+        WallBounce::None
+    );
+
+    // The sticking case, and the one the minimum bounce exists for: falling
+    // flush against the wall with essentially no horizontal speed. A pure
+    // reflection returns ~0 and the player grinds down the face.
+    match arena_wall_bounce(inner_l - 5.0, -2000.0, -0.2, 30.0, false, (0.0, 0.0), x1, x2) {
+        WallBounce::Free { px, vx } => {
+            assert!(vx >= ARENA_WALL_MIN_BOUNCE, "left with only {vx} — still stuck");
+            assert!(px >= inner_l, "left inside the wall at {px}");
+        }
+        other => panic!("a free player against the wall must bounce, got {other:?}"),
+    }
+
+    // Same on the right, and the direction is out of the wall, not through it.
+    match arena_wall_bounce(inner_r + 5.0, -2000.0, 0.2, 30.0, false, (0.0, 0.0), x1, x2) {
+        WallBounce::Free { px, vx } => {
+            assert!(vx <= -ARENA_WALL_MIN_BOUNCE, "sent the wrong way ({vx})");
+            assert!(px <= inner_r, "left inside the wall at {px}");
+        }
+        other => panic!("expected a free bounce, got {other:?}"),
+    }
+
+    // A wall is a boundary, not a trampoline: arriving fast must not come back
+    // faster.
+    let fast = 40.0;
+    match arena_wall_bounce(inner_l - 5.0, -2000.0, -fast, 0.0, false, (0.0, 0.0), x1, x2) {
+        WallBounce::Free { vx, .. } => assert!(vx < fast, "the wall added energy ({vx})"),
+        other => panic!("expected a free bounce, got {other:?}"),
+    }
+
+    // HOOKED. The rope re-projects the position every frame, so a position fix
+    // is erased before it is drawn — the swing itself has to reverse.
+    // Hook directly above, player at the wall on the left, swinging further
+    // into it (moving -x, which for a player below its hook means downward
+    // tangent... whichever it is, the answer must be "away from the wall").
+    let hook = (inner_l + 400.0, -4000.0);
+    match arena_wall_bounce(inner_l - 5.0, -2000.0, -14.0, 0.0, true, hook, x1, x2) {
+        WallBounce::Swing { vx, vy } => {
+            assert!(vx > 0.0, "the swing still carries into the wall (vx {vx})");
+            let speed = (vx * vx + vy * vy).sqrt();
+            assert!(speed >= ARENA_WALL_MIN_BOUNCE - 0.01, "swung back at only {speed}");
+        }
+        other => panic!("a hooked player against the wall must swing back, got {other:?}"),
+    }
+
+    // Already swinging out of the wall: left alone. Reversing here would pump
+    // the swing every frame and pin the player at the boundary.
+    assert_eq!(
+        arena_wall_bounce(inner_l - 5.0, -2000.0, 14.0, 0.0, true, hook, x1, x2),
+        WallBounce::None,
+        "a swing already leaving the wall must not be touched"
+    );
+}
+
+#[test]
+fn only_a_deliberate_strike_cuts_the_rope() {
+    use crate::scenes::game::boss::serpent::{serpent_cut_for, Cut, Strike};
+    // The body IS the level in this fight, so cutting the rope does not only
+    // cost a heart — it takes away the traversal the player was using to reach
+    // the thing they were aiming at. Untethering on every hit delivered two
+    // punishments as one, on contact with an eight-piece object that fills the
+    // arena. Only the serpent's aimed strikes do it now.
+    //
+    // This calls the SAME function the strike sites call, so it tests the
+    // decision the game makes rather than a copy of the policy restated here —
+    // a table written in the test would agree with itself no matter what the
+    // fight actually did.
+    for aimed in [Strike::TailSweep, Strike::TailLaunch, Strike::Bite, Strike::HeadContact] {
+        assert_eq!(serpent_cut_for(aimed), Cut::Rope, "{aimed:?} is an aimed strike");
+    }
+    for incidental in [Strike::BodyContact, Strike::RiftEruption, Strike::SpineLash] {
+        assert_eq!(
+            serpent_cut_for(incidental), Cut::Keep,
+            "{incidental:?} must not strand the player on the level they are riding"
+        );
+    }
+
+    // The one thing that unhooks the player WITHOUT being a strike at all: the
+    // gambit's capture teleports them across the arena, and a rope to a hook
+    // they are no longer near is not a rope. Recorded here so it is a known
+    // exception rather than a contradiction found later.
+    assert!(SERPENT_GAMBIT_DROP > 0.0, "capture relocates the player, so the rope cannot survive");
+}
+
+#[test]
+fn the_lull_between_attacks_is_actually_a_lull() {
+    use crate::scenes::game::boss::serpent::serpent_roam_goal;
+    let centre = (0.0, BOSS_Y_CENTER);
+    let mut to = None;
+    let mut left = 0u32;
+    let mut seed = 0x5eed_1234u64;
+
+    // Walk the head along its own waypoints for a few lulls' worth of ticks,
+    // collecting where it was asked to go.
+    let mut head = centre;
+    let mut goals: Vec<(f32, f32)> = Vec::new();
+    for _ in 0..(SERPENT_ATTACK_GAP * 4) {
+        let g = serpent_roam_goal(&mut to, &mut left, &mut seed, centre, head);
+        if goals.last() != Some(&g) {
+            goals.push(g);
+        }
+        // Move toward it at the head's cruising speed.
+        let (dx, dy) = (g.0 - head.0, g.1 - head.1);
+        let d = (dx * dx + dy * dy).sqrt().max(1.0);
+        let step = SERPENT_HEAD_SPEED.min(d);
+        head = (head.0 + dx / d * step, head.1 + dy / d * step);
+    }
+
+    // It goes to several different places, rather than settling on one.
+    assert!(goals.len() >= 4, "only {} waypoints in four lulls — that is a patrol \
+            route, not a wander", goals.len());
+
+    // Every waypoint is inside the band the head is allowed to occupy, so it is
+    // never steering at somewhere it will be clamped out of.
+    for g in &goals {
+        assert!(
+            (SERPENT_Y_MIN..=SERPENT_Y_MAX).contains(&g.1),
+            "waypoint {g:?} is outside the serpent's band"
+        );
+        let r = ((g.0 - centre.0).powi(2) + (g.1 - centre.1).powi(2)).sqrt();
+        assert!(r <= SERPENT_ROAM_MAX_R * 1.01, "waypoint {g:?} leaves the arena");
+    }
+
+    // And it does not converge on any one point — successive waypoints are far
+    // apart, which is what stops the "wander" being a slow chase.
+    let spread = goals
+        .windows(2)
+        .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
+        .fold(0.0f32, f32::max);
+    assert!(spread > SERPENT_ROAM_ARRIVE, "waypoints {spread:.0}px apart are one place");
+}
+
+#[test]
+fn a_stalled_waypoint_cannot_hold_the_serpent_forever() {
+    use crate::scenes::game::boss::serpent::serpent_roam_goal;
+    // The head turns at a limited rate, so a waypoint inside its turning circle
+    // is one it can orbit indefinitely without arriving. The timeout is what
+    // stops that becoming a permanent orbit, so it is checked with a head that
+    // never moves at all — the worst case.
+    let centre = (0.0, BOSS_Y_CENTER);
+    let mut to = None;
+    let mut left = 0u32;
+    let mut seed = 0xabcd_ef01u64;
+    let stuck = (99_000.0, BOSS_Y_CENTER); // unreachably far: never "arrives"
+
+    let first = serpent_roam_goal(&mut to, &mut left, &mut seed, centre, stuck);
+    for _ in 0..SERPENT_ROAM_MAX_TICKS {
+        serpent_roam_goal(&mut to, &mut left, &mut seed, centre, stuck);
+    }
+    let after = serpent_roam_goal(&mut to, &mut left, &mut seed, centre, stuck);
+    assert_ne!(first, after, "the waypoint never timed out");
+}
+
+#[test]
+fn the_exit_portal_cannot_take_the_player_again() {
+    // The hole the player is delivered out of has to be inert. Sharing a slot
+    // with an entry hole, or living in `serpent_rifts`, would mean the portal
+    // that just spat them out pulls them straight back in — a loop with no way
+    // out rather than an attack.
+    assert!(
+        SERPENT_GAMBIT_EXIT_SLOT >= SERPENT_GAMBIT_HOLES,
+        "the exit reuses an entry slot ({SERPENT_GAMBIT_EXIT_SLOT})"
+    );
+    assert!(
+        SERPENT_GAMBIT_EXIT_SLOT >= SERPENT_RIFT_COUNT as usize,
+        "the exit reuses a burrow slot"
+    );
+    assert!(
+        SERPENT_RIFT_SLOTS > SERPENT_GAMBIT_EXIT_SLOT,
+        "the pool has no object for the exit slot"
+    );
+
+    // It outlasts the bite, so the player is never left standing next to a
+    // portal that closed before the attack it delivered them into resolved.
+    assert!(
+        SERPENT_GAMBIT_EXIT_CLOSE > 0,
+        "an exit that closes instantly is the mid-air arrival it exists to fix"
+    );
+    let life = SERPENT_GAMBIT_REACT + SERPENT_GAMBIT_EXIT_CLOSE;
+    assert!(life > SERPENT_GAMBIT_REACT, "the exit must survive the reaction window");
+
+    // And it shuts smoothly: the close ramp runs full-width down to nothing
+    // over exactly the closing stretch.
+    let charge = |left: u32| (left as f32 / SERPENT_GAMBIT_EXIT_CLOSE as f32).clamp(0.0, 1.0);
+    assert_eq!(charge(life), 1.0, "full width while the bite is still live");
+    assert_eq!(charge(SERPENT_GAMBIT_EXIT_CLOSE), 1.0, "still full as the close begins");
+    assert!(charge(1) < 0.1, "and nearly shut on the last frame");
+}
+
+#[test]
+fn a_rift_swallows_from_its_centre_not_its_rim() {
+    // The funnel has to run all the way in. Hiding a piece at the rim made the
+    // serpent wink out at the EDGE of the portal and pop back in at the edge on
+    // the way out, which reads as the hole deleting it rather than eating it.
+    assert!(
+        SERPENT_RIFT_MOUTH_R < SERPENT_RIFT_R * 0.2,
+        "the mouth ({SERPENT_RIFT_MOUTH_R}) must be near the centre of a \
+         {SERPENT_RIFT_R}px rift"
+    );
+    assert!(
+        SERPENT_RIFT_THROAT_R > SERPENT_RIFT_MOUTH_R * 3.0,
+        "the funnel needs room to shrink across, or the piece still pops"
+    );
+    assert!(
+        SERPENT_RIFT_THROAT_R <= SERPENT_RIFT_R,
+        "a piece must be inside the visible portal before it starts shrinking"
+    );
+
+    // And a piece is fully gone before it reaches the middle, so nothing is
+    // drawn at a sliver of a size.
+    let shrink_at = |d: f32| {
+        if d < SERPENT_RIFT_MOUTH_R { return 0.0; }
+        if d >= SERPENT_RIFT_THROAT_R { return 1.0; }
+        (d - SERPENT_RIFT_MOUTH_R) / (SERPENT_RIFT_THROAT_R - SERPENT_RIFT_MOUTH_R)
+    };
+    assert_eq!(shrink_at(0.0), 0.0);
+    assert!(shrink_at(SERPENT_RIFT_MOUTH_R + 1.0) < 0.02, "it leaves at nearly nothing");
+    assert_eq!(shrink_at(SERPENT_RIFT_R), 1.0, "and is full size outside the portal");
+}
+
+#[test]
+fn a_rift_is_behind_everything_that_travels_through_it() {
+    use crate::scenes::game::bootstrap::{
+        LAYER_PLAYER, LAYER_ROPE, LAYER_SERPENT_BODY, LAYER_SERPENT_RIFT,
+    };
+    // Layers sort ASCENDING: higher is nearer the camera. The rift was 28, in
+    // front of the body at 21 and the rope at 20, under a comment that claimed
+    // it was behind them — so the serpent erupted from behind its own wormhole
+    // and the player swung in front of nothing. A comment did not hold this;
+    // an assertion does.
+    assert!(LAYER_SERPENT_RIFT < LAYER_SERPENT_BODY, "the serpent draws over its rift");
+    assert!(LAYER_SERPENT_RIFT < LAYER_PLAYER, "the player draws over it too");
+    assert!(LAYER_SERPENT_RIFT < LAYER_ROPE, "and so does the rope");
+}
+
+#[test]
+fn the_gambit_rifts_pull_hard_enough_to_matter_and_late_enough_to_escape() {
+    // The holes have to take the player rather than wait to be walked into —
+    // otherwise standing still is a complete answer and the act is a pause.
+    // But the pull is a threat, not a verdict: it has to be weak at the edge.
+    assert!(
+        SERPENT_GAMBIT_PULL_R > SERPENT_GAMBIT_HOLE_R * 2.0,
+        "the suction must reach well outside the hole, so the drift IS the warning"
+    );
+    let at = |d: f32| SERPENT_GAMBIT_PULL * (1.0 - d / SERPENT_GAMBIT_PULL_R).powf(0.6);
+
+    // At the rim of the capture radius it is decisive: a player who has let
+    // themselves get this close is taken.
+    let rim = at(SERPENT_GAMBIT_HOLE_R);
+    assert!(rim > 0.5, "pull at the mouth ({rim}) is too weak to close the trap");
+
+    // At the outer edge it is a nudge — a few percent of top speed per tick, so
+    // reacting early is cheap and reacting late is not.
+    let edge = at(SERPENT_GAMBIT_PULL_R * 0.9);
+    assert!(
+        edge < MOMENTUM_CAP * 0.02,
+        "pull at the edge ({edge}) is strong enough to be inescapable on sight"
+    );
+    assert!(rim > edge * 3.0, "the ramp must bite toward the centre");
+}
+
+#[test]
 fn the_serpent_is_not_a_longer_grind_than_the_colossus() {
     // Diffuse HP reads as longer than concentrated HP, so the Serpent must not
     // also HAVE more of it — the difficulty is meant to come from the shield
@@ -1735,7 +2176,28 @@ fn the_serpent_is_not_a_longer_grind_than_the_colossus() {
         serpent <= colossus,
         "serpent needs {serpent} buffed hits vs the colossus's {colossus}"
     );
-    assert!(serpent >= 25, "but it should still feel like a long body ({serpent})");
+
+    // The length comes from the NUMBER OF SEPARATELY GATED TARGETS, not from
+    // the HP on each. A segment is only hittable while the travelling band has
+    // uncovered it, so a second hit on the same segment usually costs a whole
+    // extra lap of the band — that is waiting, not difficulty, and it is why a
+    // segment takes exactly one.
+    //
+    // This assertion used to be `serpent >= 25`, i.e. "a long body means a lot
+    // of HP". That is the belief the fight is built to disprove.
+    assert_eq!(SERPENT_SEGMENT_HP, 1, "a band-gated target must die in one hit");
+    assert!(
+        SERPENT_SEGMENTS >= 6,
+        "only {SERPENT_SEGMENTS} gated openings is not a long body"
+    );
+
+    // The tail and the head are NOT band-gated — they are gated by phase, and
+    // once reachable they stay reachable — so they carry their length as HP
+    // instead, or the last two phases would be over in two hits.
+    assert!(
+        SERPENT_TAIL_HP > SERPENT_SEGMENT_HP && SERPENT_HEAD_HP > SERPENT_TAIL_HP,
+        "an ungated target needs the HP a gated one does not"
+    );
 }
 
 // ── Serpent acts ─────────────────────────────────────────────────────────────
@@ -1939,14 +2401,15 @@ fn the_glow_and_the_hit_box_agree() {
     use crate::scenes::game::boss::serpent::{serpent_seam, serpent_shielded_now};
     // The cue and the damage test read the same threshold, so the armour is
     // visibly open exactly when it can be hurt.
+    let span = SERPENT_SEGMENTS + 2;
     for c in 1..=SERPENT_SEGMENTS {
         for step in 0..120 {
             let band = step as f32 * 0.1;
-            let seam = serpent_seam(c, band);
+            let seam = serpent_seam(c, band, span);
             let open = seam >= SERPENT_OPEN_AT;
             if open {
                 assert!(
-                    !serpent_shielded_now(c, band),
+                    !serpent_shielded_now(c, band, span),
                     "segment {c} reads as open while its shield is still up"
                 );
             }

@@ -62,7 +62,11 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             .get_game_object("player")
             .map(|p| p.size.0.max(p.size.1).max(PLAYER_R * 2.0))
             .unwrap_or(PLAYER_R * 2.0);
-        super::fx::attach_electric_fx(c, "player", (d * 1.6, d * 1.6), (0.75, 0.95, 1.0, 0.9));
+        super::fx::attach_electric_fx(
+            c, "player",
+            (d * BUFF_PLAYER_FX_SCALE, d * BUFF_PLAYER_FX_SCALE),
+            BUFF_PLAYER_FX_TINT,
+        );
     }
     if s.buff_hit_flash > 0 {
         s.buff_hit_flash -= 1;

@@ -1,5 +1,5 @@
 pub mod helpers;
-mod bootstrap;
+pub(crate) mod bootstrap;
 pub mod events;
 mod physics;
 mod spawning;

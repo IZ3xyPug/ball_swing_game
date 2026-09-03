@@ -478,6 +478,24 @@ pub struct State {
     /// Ticks left in the player's reaction window after a gambit capture. The
     /// bite lands at zero unless they have tethered by then.
     pub serpent_gambit_react: u32,
+    /// Where a gambit capture spat the player out, and how long that exit
+    /// portal is still drawn.
+    ///
+    /// Deliberately NOT a member of `serpent_rifts`: everything in that list
+    /// pulls and captures, and the hole the player just came out of must do
+    /// neither, or being taken once means being taken forever. Its being `Some`
+    /// is also what marks the gambit as already fired, so the entry holes are
+    /// not re-seeded around the player while they are being bitten.
+    pub serpent_gambit_exit: Option<(f32, f32)>,
+    pub serpent_gambit_exit_ticks: u32,
+    /// Where the serpent is wandering to between attacks, and the ticks left
+    /// before it gives up on that waypoint and picks another.
+    ///
+    /// The timeout is not decoration: the head turns at a limited rate, so a
+    /// waypoint just inside its turning circle is one it can orbit forever
+    /// without ever arriving.
+    pub serpent_roam_to: Option<(f32, f32)>,
+    pub serpent_roam_ticks: u32,
     /// Grace after a body contact, so a long body cannot drain every heart.
     pub serpent_contact_cooldown: u32,
     /// Head and tail positions when a spine lash began, so the move into

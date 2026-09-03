@@ -22,20 +22,135 @@ pub(crate) fn tick_arena_walls(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let wall_h = bottom - top;
     let cy = (top + bottom) * 0.5;
     if active {
+        let half = ARENA_WALL_THICKNESS * 0.5;
         if let Some(obj) = c.get_game_object_mut("arena_wall_l") {
-            obj.size = (140.0, wall_h);
-            obj.position = (x1 - 70.0, cy - wall_h * 0.5);
+            obj.size = (ARENA_WALL_THICKNESS, wall_h);
+            obj.position = (x1 - half, cy - wall_h * 0.5);
             obj.visible = true;
         }
         if let Some(obj) = c.get_game_object_mut("arena_wall_r") {
-            obj.size = (140.0, wall_h);
-            obj.position = (x2 - 70.0, cy - wall_h * 0.5);
+            obj.size = (ARENA_WALL_THICKNESS, wall_h);
+            obj.position = (x2 - half, cy - wall_h * 0.5);
             obj.visible = true;
         }
+        bounce_player_off_walls(c, st, x1, x2);
     } else {
         for name in ["arena_wall_l", "arena_wall_r"] {
             if let Some(obj) = c.get_game_object_mut(name) {
                 obj.visible = false;
+            }
+        }
+    }
+}
+
+/// Push the player back off an arena wall, and make sure they LEAVE it.
+///
+/// Called from `tick_arena_walls`, which runs after `tick_rope_constraint` and
+/// before `cap_momentum_and_write_back` — the only window in the tick where
+/// both the position and the velocity can be corrected and survive to the
+/// engine. Earlier, the rope solve would overwrite the position; later, the
+/// write-back has already happened.
+///
+/// The two states need different answers, because the rope OWNS the player's
+/// position while they are hooked:
+///
+///  * Free: reflect the horizontal velocity and place them clear of the face.
+///  * Hooked: `tick_rope_constraint` re-projects `px` onto the arc every frame,
+///    so a position correction is erased before it is ever drawn. What can be
+///    changed is the direction of travel ALONG the arc, so the swing reverses
+///    and carries them away from the wall under its own momentum. That is why
+///    this reflects the TANGENT and not `vx` — reflecting `vx` on a hooked
+///    player is undone by the next frame's projection, which is exactly the
+///    "stuck swinging against the wall".
+///
+/// A minimum separation speed matters more than the restitution: a player
+/// arriving almost parallel to the wall reflects to almost nothing and grinds
+/// along it, which is the sticking this exists to prevent.
+/// What a wall does to the player this frame.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum WallBounce {
+    /// Clear of both walls.
+    None,
+    /// Free flight: move to `px` and leave with `vx`.
+    Free { px: f32, vx: f32 },
+    /// On the rope: keep the position (the arc owns it) and swing back.
+    Swing { vx: f32, vy: f32 },
+}
+
+/// The wall response, as a pure function of the player's state.
+///
+/// Split out from the tick so it can be tested against the arithmetic that
+/// actually runs, rather than against a description of it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn arena_wall_bounce(
+    px: f32, py: f32, vx: f32, vy: f32,
+    hooked: bool, hook: (f32, f32),
+    x1: f32, x2: f32,
+) -> WallBounce {
+    // The wall objects are CENTRED on the bound, so the inner face is half a
+    // thickness inside it.
+    let inner_l = x1 + ARENA_WALL_THICKNESS * 0.5 + PLAYER_R;
+    let inner_r = x2 - ARENA_WALL_THICKNESS * 0.5 - PLAYER_R;
+    if inner_r <= inner_l { return WallBounce::None; }
+
+    // `dir` is the direction OUT of the wall: +1 off the left wall, -1 off the
+    // right one.
+    let (dir, face) = if px < inner_l {
+        (1.0_f32, inner_l)
+    } else if px > inner_r {
+        (-1.0_f32, inner_r)
+    } else {
+        return WallBounce::None;
+    };
+
+    if hooked {
+        // On the arc: reverse the swing if it is still heading into the wall.
+        let dx = px - hook.0;
+        let dy = py - hook.1;
+        let d = (dx * dx + dy * dy).sqrt().max(1.0);
+        let (tx, ty) = (-dy / d, dx / d);
+        let tangent = vx * tx + vy * ty;
+        // Which way along the arc moves the player out of the wall.
+        let out = if tx * dir >= 0.0 { 1.0 } else { -1.0 };
+        // Already swinging out: leave the swing alone rather than pumping it.
+        if tangent * out > 0.0 { return WallBounce::None; }
+        let speed = (tangent.abs() * ARENA_WALL_RESTITUTION).max(ARENA_WALL_MIN_BOUNCE) * out;
+        return WallBounce::Swing { vx: tx * speed, vy: ty * speed };
+    }
+
+    // Free: put them on the clear side of the face and send them away from it.
+    let away = (vx.abs() * ARENA_WALL_RESTITUTION).max(ARENA_WALL_MIN_BOUNCE) * dir;
+    WallBounce::Free { px: face, vx: away }
+}
+
+fn bounce_player_off_walls(c: &mut Canvas, st: &Arc<Mutex<State>>, x1: f32, x2: f32) {
+    let bounce = {
+        let s = st.lock().unwrap();
+        if s.dead { return; }
+        arena_wall_bounce(
+            s.px, s.py, s.vx, s.vy, s.hooked, (s.hook_x, s.hook_y), x1, x2,
+        )
+    };
+    match bounce {
+        WallBounce::None => {}
+        WallBounce::Swing { vx, vy } => {
+            let mut s = st.lock().unwrap();
+            s.vx = vx;
+            s.vy = vy;
+        }
+        WallBounce::Free { px, vx } => {
+            let (px, py, vx, vy) = {
+                let mut s = st.lock().unwrap();
+                s.px = px;
+                s.vx = vx;
+                (s.px, s.py, s.vx, s.vy)
+            };
+            // The engine integrates `momentum` into `position` after the tick,
+            // so a stale inward momentum would walk the player straight back
+            // into the wall on the very frame they were pushed out of it.
+            if let Some(obj) = c.get_game_object_mut("player") {
+                obj.position = (px - PLAYER_R, py - PLAYER_R);
+                obj.momentum = (vx, vy);
             }
         }
     }
@@ -87,8 +202,8 @@ pub(crate) fn tick_buff_node_elec(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if !obj.visible || !obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) { continue; }
         crate::scenes::game::fx::attach_electric_fx(
             c, id,
-            (HOOK_R * 2.6, HOOK_R * 2.6),
-            (0.6, 0.95, 1.0, 0.7),
+            (HOOK_R * BUFF_NODE_FX_SCALE, HOOK_R * BUFF_NODE_FX_SCALE),
+            BUFF_NODE_FX_TINT,
         );
         attached.push(id.clone());
     }

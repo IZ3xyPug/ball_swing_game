@@ -17,6 +17,30 @@ use prism::event::{
 use prism::drawable::SizedTree;
 
 use crate::constants::*;
+
+/// Pin every roster slot to one boss, by its `BossKind::slug`.
+///
+/// Exposed here rather than by opening `constants` to the world: the binary is
+/// the only caller, and the module boundary is what keeps the tuning tables
+/// from leaking into anything that is not the game.
+///
+/// Every slot, not just the first — a short override falls through to the
+/// shipped roster past its end, so a one-entry list fights this boss once and
+/// then goes back to the normal order.
+pub fn pin_boss(name: &str) -> Result<(), Vec<&'static str>> {
+    match boss_kind_by_name(name) {
+        Some(kind) => {
+            set_boss_order_override(Some(vec![kind; crate::mode::BOSS_ROSTER_SIZE as usize]));
+            Ok(())
+        }
+        None => Err(boss_kind_names()),
+    }
+}
+
+/// The names `pin_boss` accepts, for help text.
+pub fn boss_slugs() -> Vec<&'static str> {
+    boss_kind_names()
+}
 use crate::achievements::TOTAL_COINS_COLLECTED_VAR;
 use crate::menu::{
     build_tutorial_scene, build_menu_scene, build_gameover_oxygen_scene, build_gameover_scene,

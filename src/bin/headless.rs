@@ -46,6 +46,21 @@ fn main() {
                 boss_warp = true;
                 stasis_down = true;
             }
+            // Pin the roster to one boss, so a fight can actually be exercised
+            // headlessly instead of whichever one the rush happens to reach.
+            // Without it the Serpent was only ever verified by playing it.
+            "--boss-kind" => {
+                boss_mode = true;
+                boss_warp = true;
+                if i + 1 < args.len() {
+                    let name = args[i + 1].to_ascii_lowercase();
+                    if let Err(known) = main::headless::pin_boss(&name) {
+                        eprintln!("unknown boss `{name}`; known: {}", known.join(", "));
+                        return;
+                    }
+                }
+                i += 1;
+            }
             "--at-minute" => {
                 if i + 1 < args.len() {
                     start_minute = args[i + 1].parse().unwrap_or(0.0);
@@ -62,7 +77,8 @@ fn main() {
                 fall_test = true;
             }
             "--help" | "-h" => {
-                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-stasis-down] [--boss-weakpoint-check] [--fall-test] [--flare-test] [--flare-shelter-check] [--at-minute N]");
+                println!("headless [--episodes N] [--frames N] [--boss] [--boss-warp] [--boss-kind NAME] [--boss-stasis-down] [--boss-weakpoint-check] [--fall-test] [--flare-test] [--flare-shelter-check] [--at-minute N]");
+                println!("  --boss-kind one of: {}", main::headless::boss_slugs().join(", "));
                 return;
             }
             _ => {}

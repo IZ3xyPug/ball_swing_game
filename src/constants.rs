@@ -696,6 +696,29 @@ impl BossKind {
     pub fn is_multi_part(self) -> bool {
         matches!(self, BossKind::Colossus | BossKind::Serpent)
     }
+
+    /// The short name the headless driver takes on `--boss-kind`.
+    pub fn slug(self) -> &'static str {
+        match self {
+            BossKind::Colossus      => "colossus",
+            BossKind::Conductor     => "conductor",
+            BossKind::GravityWeaver => "weaver",
+            BossKind::FlareTitan    => "titan",
+            BossKind::Magnetar      => "magnetar",
+            BossKind::Serpent       => "serpent",
+            BossKind::SunDevourer   => "devourer",
+        }
+    }
+}
+
+/// Look a boss up by its `slug`, for the headless driver's `--boss-kind`.
+pub fn boss_kind_by_name(name: &str) -> Option<BossKind> {
+    BOSS_ROSTER.iter().copied().find(|k| k.slug() == name)
+}
+
+/// Every slug, for the error message when one does not match.
+pub fn boss_kind_names() -> Vec<&'static str> {
+    BOSS_ROSTER.iter().map(|k| k.slug()).collect()
 }
 
 /// Select the boss for a 0-based roster slot. Order follows the "Boss Roster &
@@ -919,7 +942,15 @@ pub fn boss_parts_for_kind(kind: BossKind) -> Vec<BossPart> {
 // the thing you are dismantling.
 /// Body segments between the head and the tail.
 pub const SERPENT_SEGMENTS: usize = 8;
-pub const SERPENT_SEGMENT_HP: i32 = 3;
+/// Buffed hits to destroy one segment.
+///
+/// ONE. The band already gates when a segment can be hit at all, so extra HP
+/// per segment does not add difficulty — it adds waiting: three hits meant
+/// three separate open windows on the SAME segment, and since the window moves
+/// along the body, usually three separate laps of the band to get them. The
+/// length of the fight is the eight segments and the shield wave, not the pile
+/// behind each one.
+pub const SERPENT_SEGMENT_HP: i32 = 1;
 pub const SERPENT_TAIL_HP: i32 = 4;
 pub const SERPENT_HEAD_HP: i32 = 5;
 
@@ -955,10 +986,27 @@ pub const SERPENT_TRAIL_LEN: usize = 1400;
 // 24-hit body into a timing problem instead of a damage sponge.
 //
 // Raising HP makes a sponge; gating access makes a skill test.
-/// Segments covered by the energised band at once.
-pub const SERPENT_SHIELD_BAND: f32 = 3.5;
+/// The fraction of each lap a segment spends OPEN — actually hittable, plating
+/// visibly parted.
+///
+/// This is authored directly, and the band's width is derived from it (see
+/// `serpent_band_half`). It used to be the other way round: the width was the
+/// constant and the open window was whatever fell out of it, which was 33% of
+/// a 6.25s lap — about 2s — and that is the whole window in which the player
+/// has to already be buffed, already be at THAT segment, and land a hit.
+/// Nobody had chosen 2s; it was a consequence of three unrelated numbers.
+///
+/// Deriving it the other way also makes the window survive the body shortening.
+/// A width in LINKS is a bigger share of a short body, so the open fraction
+/// collapsed as segments died — the fight got harder to damage exactly as it
+/// was supposed to be opening up.
+pub const SERPENT_OPEN_FRACTION: f32 = 0.5;
 /// Segments per second the band travels along the body.
-pub const SERPENT_SHIELD_SPEED: f32 = 1.6;
+///
+/// With the fraction fixed, this alone sets how LONG each window is: a full
+/// lap is `span / speed` seconds and the segment is open for half of it. At 1.3
+/// that is ~3.8s on a full-length body.
+pub const SERPENT_SHIELD_SPEED: f32 = 1.3;
 
 /// What the Serpent is doing. Which attacks are available is decided by which
 /// PARTS survive, so removing a piece removes its attack — the tail launch goes
@@ -1035,6 +1083,29 @@ pub const SERPENT_KNOCKBACK_TICKS: i32 = 20;
 /// heart in the time it takes to slide off it.
 pub const SERPENT_CONTACT_COOLDOWN: u32 = 45;
 
+// ── Roaming ──────────────────────────────────────────────────────────────────
+//
+// Between attacks the serpent WANDERS. It used to keep hunting — the lull was
+// only a lull in what it fired, not in where it went — so the head was bearing
+// down on the player during the entire window in which they were supposed to be
+// getting hits in. Two systems were asking for the same seconds, and the attack
+// gap was not doing the job its name says.
+//
+// A wandering body is also a better tether: it goes somewhere, which makes
+// riding it worth doing.
+/// How close the head has to get to a waypoint before choosing another. Loose,
+/// because arriving exactly is not the point and a tight radius makes the head
+/// fuss at the last few hundred pixels.
+pub const SERPENT_ROAM_ARRIVE: f32 = 700.0;
+/// Ceiling on one waypoint, so a point inside the head's turning circle cannot
+/// hold it in an orbit for the rest of the lull.
+pub const SERPENT_ROAM_MAX_TICKS: u32 = 240;
+/// Waypoints are drawn from a ring around the arena centre, flattened to match
+/// the arena's shape — the same ellipse the entry circuit uses.
+pub const SERPENT_ROAM_MIN_R: f32 = 900.0;
+pub const SERPENT_ROAM_MAX_R: f32 = 3000.0;
+pub const SERPENT_ROAM_Y_SQUASH: f32 = 0.55;
+
 // ── Attacks ──────────────────────────────────────────────────────────────────
 /// Ticks between the serpent committing to attacks.
 pub const SERPENT_ATTACK_GAP: u32 = 300;
@@ -1095,13 +1166,40 @@ pub const SERPENT_RIFT_AHEAD: f32 = 1600.0;
 pub const SERPENT_RIFT_SURFACE: u32 = 90;
 pub const SERPENT_RIFT_WARN: u32 = 40;
 pub const SERPENT_RIFT_R: f32 = 520.0;
-/// A piece within this of the ACTIVE rift is inside it, and not drawn.
+/// Pooled rift objects: enough for the largest set either attack shows at once,
+/// plus one reserved for the gambit's exit portal.
 ///
-/// One rule covers both directions: diving, a piece enters the radius and
-/// vanishes; emerging, it leaves and reappears. That is what makes the body go
-/// in head-first one piece at a time and come back out the same way, without a
-/// separate animation for each.
+/// The exit needs a slot the entry holes cannot reuse — sharing one made the
+/// portal the player came out of flicker into a portal that could take them.
+pub const SERPENT_RIFT_SLOTS: usize = {
+    let n = if SERPENT_RIFT_COUNT as usize > SERPENT_GAMBIT_HOLES {
+        SERPENT_RIFT_COUNT as usize
+    } else {
+        SERPENT_GAMBIT_HOLES
+    };
+    n + 1
+};
+/// The reserved slot, always the last one.
+pub const SERPENT_GAMBIT_EXIT_SLOT: usize = SERPENT_RIFT_SLOTS - 1;
+/// How close the head must get to a rift before the body starts sliding in.
+///
+/// Generous, because the head steers under a turn-rate limit and an exact
+/// arrival cannot be guaranteed: this is the threshold at which the burrow
+/// COMMITS, after which the head is walked the rest of the way to the centre by
+/// `SERPENT_RIFT_SWALLOW_SPEED`.
 pub const SERPENT_RIFT_SWALLOW_R: f32 = 460.0;
+/// A piece within this of the ACTIVE rift's CENTRE is inside it: not drawn, not
+/// hittable in either direction.
+///
+/// One rule covers both directions: diving, a piece funnels down to the mouth
+/// and vanishes; emerging, it grows back out of it. Keyed to the rift's outer
+/// radius instead, the serpent winked out at the RIM of the portal and popped
+/// back in at the rim on the way out, which reads as the hole deleting it
+/// rather than swallowing it.
+pub const SERPENT_RIFT_MOUTH_R: f32 = 60.0;
+/// Where the funnel starts: inside this, a piece shrinks toward the mouth so it
+/// is visibly drawn down into the centre rather than cut off at a radius.
+pub const SERPENT_RIFT_THROAT_R: f32 = 430.0;
 /// How fast the body slides into a rift once the head is in, in px/tick of
 /// trail arc. Slow enough to watch each segment go under.
 pub const SERPENT_RIFT_SWALLOW_SPEED: f32 = 26.0;
@@ -1157,8 +1255,31 @@ pub const SERPENT_LASH_ARC: f32 = std::f32::consts::PI;
 /// spits you out in front of the head, which is already winding up a dash bite.
 /// A tether inside the reaction window still saves you.
 pub const SERPENT_GAMBIT_HOLES: usize = 3;
-pub const SERPENT_GAMBIT_HOLE_R: f32 = 460.0;
+/// The same size as the portals the serpent itself travels through, and drawn
+/// with the same animation, because they are meant to read as the same
+/// phenomenon: the head is doing to the player what it does to itself. This is
+/// also the CAPTURE radius, so the art and the trap are one number — drawn
+/// larger than it captured, the hole would swallow you visually and do nothing.
+pub const SERPENT_GAMBIT_HOLE_R: f32 = SERPENT_RIFT_R;
 pub const SERPENT_GAMBIT_SPREAD: f32 = 1500.0;
+/// How long the exit portal stays open after the bite has resolved.
+///
+/// It is there so the player arrives OUT of something instead of appearing in
+/// mid-air in front of the head. It is inert — no pull, no capture — because a
+/// live exit would take the player again the instant it delivered them, which
+/// is a loop with no way out rather than an attack.
+pub const SERPENT_GAMBIT_EXIT_CLOSE: u32 = 34;
+/// How far a rift's suction reaches. Well outside the hole itself, so the pull
+/// is the telegraph: you feel the drift long before you are in danger of being
+/// taken, and that drift is what tells you which way to go.
+pub const SERPENT_GAMBIT_PULL_R: f32 = 1500.0;
+/// Peak suction, in px/tick² added to the player's velocity at the rim of the
+/// mouth. The ramp is the OPPOSITE of the Colossus well: that one is strongest
+/// far away because its job is to haul you across the arena, this one is
+/// strongest close in because its job is to make the last stretch unwinnable
+/// once you have let yourself drift. Escaping early has to stay cheap or the
+/// attack is a coin flip rather than a reaction.
+pub const SERPENT_GAMBIT_PULL: f32 = 1.5;
 /// Ticks from being spat out to the bite landing. Deliberately tight, and the
 /// whole reason the attack is fair: it is a REACTION window, not a puzzle.
 pub const SERPENT_GAMBIT_REACT: u32 = 26;
@@ -1729,6 +1850,23 @@ pub const HEART_HUD_Y: f32 = 40.0;
 pub const C_HEART_FULL:  (u8, u8, u8) = (240,  70,  80);
 pub const C_HEART_EMPTY: (u8, u8, u8) = ( 60,  34,  38);
 
+// ── Boss arena walls ─────────────────────────────────────────────────────────
+/// Thickness of a boundary wall. The wall object is CENTRED on the arena bound,
+/// so its inner face is half this inside it.
+pub const ARENA_WALL_THICKNESS: f32 = 140.0;
+/// How much speed a wall gives back. Well under 1: a wall is a boundary, not a
+/// trampoline, and a lively bounce would launch the player across the arena
+/// every time they clipped an edge.
+pub const ARENA_WALL_RESTITUTION: f32 = 0.45;
+/// The floor on how fast the player leaves a wall, whatever they arrived at.
+///
+/// This is the constant that actually fixes the sticking, and the restitution
+/// is not. A player descending nearly parallel to a wall has almost no speed
+/// INTO it, so a pure reflection returns almost nothing and they grind down the
+/// face — which is what "stuck against the wall falling" is. The minimum makes
+/// leaving unconditional.
+pub const ARENA_WALL_MIN_BOUNCE: f32 = 9.0;
+
 // ── Buff tether nodes ────────────────────────────────────────────────────────
 /// Probability that a freshly-spawned grab node is a buff tether node.
 pub const BUFF_HOOK_SPAWN_CHANCE: f32 = 0.05;
@@ -1736,6 +1874,35 @@ pub const BUFF_HOOK_SPAWN_CHANCE: f32 = 0.05;
 pub const BUFF_HOOK_MIN_X_GAP: f32 = 6000.0;
 /// Tag on buff tether nodes.
 pub const BUFF_HOOK_TAG: &str = "buff_node";
+
+// ── Buff aura (the electricity effect on nodes and on the player) ────────────
+//
+// Two knobs, and it matters which one does what.
+//
+// SCALE is the effect's WORLD size. The bolts are drawn in the sprite's own UV
+// space and clipped at ~0.48, so the quad's size is the effect's size — a
+// bigger quad means longer, thicker, further-reaching arcs, not a zoomed-in
+// crop of the same ones.
+//
+// TINT multiplies the finished effect, ALPHA INCLUDED, at the end of the
+// fragment shader. It is therefore the effect's overall opacity as much as its
+// colour, which is why raising `.a` is the cheapest way to make the aura read
+// harder without touching the shader. The bloom skirt is deliberately NOT
+// scaled by it a second time inside the branch — see `animated_vfx.wgsl`.
+/// A buff node's aura, as a multiple of the node's radius.
+pub const BUFF_NODE_FX_SCALE: f32 = 3.6;
+/// Node aura colour and opacity. Nearly opaque: a node has to be readable as
+/// buffed from across the arena, since crossing to one is the decision the
+/// player is making.
+pub const BUFF_NODE_FX_TINT: (f32, f32, f32, f32) = (0.62, 0.96, 1.0, 0.95);
+/// The player's own aura, as a multiple of the player's drawn size.
+///
+/// Smaller multiple than a node's because the player is the smaller object and
+/// this rides on top of them: past roughly 2.2x the arcs start reaching far
+/// enough to be mistaken for something in the world rather than something worn.
+pub const BUFF_PLAYER_FX_SCALE: f32 = 2.1;
+/// Player aura colour and opacity.
+pub const BUFF_PLAYER_FX_TINT: (f32, f32, f32, f32) = (0.78, 0.96, 1.0, 1.0);
 /// How long a buff lasts (ticks). 600 = 10 s at 60 fps.
 /// How long a tether buff lasts (5 s at 60 fps).
 ///

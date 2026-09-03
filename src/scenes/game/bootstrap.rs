@@ -54,10 +54,20 @@ const LAYER_SPACE_ASTEROID: i32 = 20;
 const LAYER_SPACE_HOOK: i32 = 21;
 const LAYER_SPACE_COIN: i32 = 22;
 const LAYER_SPACE_RED_COIN: i32 = 23;
-const LAYER_ROPE: i32 = 20;
-const LAYER_PLAYER: i32 = 42;
+pub(crate) const LAYER_ROPE: i32 = 20;
+pub(crate) const LAYER_PLAYER: i32 = 42;
 const LAYER_AIRSHIELD: i32 = 43;
 const LAYER_ENERGY_HOOK_REF: i32 = 150;
+
+/// A serpent rift is a hole in the BACKGROUND. Everything in the arena draws
+/// over it — the body, the rope, the player — which is what makes them pass
+/// THROUGH the portal rather than behind it.
+///
+/// Named rather than written inline because the ordering is the whole point and
+/// a comment did not protect it: this was 28, in front of the body at
+/// `LAYER_SPACE_HOOK`, under a comment claiming it was behind it.
+pub(crate) const LAYER_SERPENT_RIFT: i32 = LAYER_SPACE_HOOK - 2;
+pub(crate) const LAYER_SERPENT_BODY: i32 = LAYER_SPACE_HOOK;
 
 /// All pools and starter hook names created during scene construction.
 pub struct PoolSets {
@@ -1240,8 +1250,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         // Rift markers: shared by the rift-strike sequence and the wormhole
         // gambit, since only one of the two is ever running.
         {
-            let n = (SERPENT_RIFT_COUNT as usize).max(SERPENT_GAMBIT_HOLES);
-            for i in 0..n {
+            for i in 0..SERPENT_RIFT_SLOTS {
                 let name = format!("serpent_rift_{i}");
                 let d = SERPENT_RIFT_R.max(SERPENT_GAMBIT_HOLE_R) * 2.0;
                 let mut obj = GameObject::new_rect(ctx, name.clone().into(),
@@ -1252,7 +1261,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
                         color: None,
                     }),
                     (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
-                obj.layer = 28; // under the body, so the serpent erupts THROUGH it
+                obj.layer = LAYER_SERPENT_RIFT;
                 obj.gravity = 0.0;
                 obj.visible = false;
                 scene = scene.with_object(&name, obj);
@@ -1345,7 +1354,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         // edges and floor of the fight so the player can see the play area
         // limits. Positioned/sized per-tick in boss.rs.
         {
-            let wall_th = 140.0;
+            let wall_th = ARENA_WALL_THICKNESS;
             let wall_h = 4800.0;
             let wall_img = crate::images::solid(120, 170, 255, 90);
             for name in ["arena_wall_l", "arena_wall_r"] {
@@ -1355,6 +1364,18 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
                 obj.layer = 19; // behind the boss parts / player
                 obj.gravity = 0.0;
                 obj.visible = false;
+                // NOT a platform. The default collision mode is `Surface`,
+                // which resolves against a body's SURFACE NORMAL — and an
+                // unrotated rectangle's normal is (0, -1), i.e. "up".
+                //
+                // A 140 x 9600 wall in that mode is a floor standing on its
+                // end: its collidable face is its top edge, ~9000px above the
+                // arena, so a player descending anywhere inside that thin,
+                // arena-tall box was resolved onto it and held there. That is
+                // the "stuck against the wall falling". The bounce below owns
+                // the walls' behaviour instead, so the solver must not also
+                // have an opinion about them.
+                obj.collision_mode = CollisionMode::NonPlatform;
                 obj.set_glow(GlowConfig { color: Color(120, 170, 255, 120), width: 26.0 });
                 scene = scene.with_object(name, obj);
             }
