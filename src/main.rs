@@ -1,6 +1,7 @@
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+fn main() {}
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn main() {
-    #[cfg(not(target_arch="wasm32"))]
-    {
-        main::maverick_main()
-    }
+    main::maverick_main()
 }

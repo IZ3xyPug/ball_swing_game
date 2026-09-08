@@ -1482,7 +1482,7 @@ fn tick_space_oxygen_pickups(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
     if !collect.is_empty() {
-        c.play_sound_with(ASSET_COIN_SFX_1, SoundOptions::new().volume(sfx_vol(c, 0.4)));
+        c.play_sound_bytes_with(ASSET_COIN_SFX_1, SoundOptions::new().volume(sfx_vol(c, 0.4)));
     }
 }
 
@@ -2342,7 +2342,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        c.play_sound_with(
+        c.play_sound_bytes_with(
             crate::constants::ASSET_COIN_SFX_2,
             SoundOptions::new().volume(sfx_vol(c, 0.28)),
         );
@@ -2404,7 +2404,7 @@ fn tick_space_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         if !blue_collected.is_empty() || !red_collected.is_empty() {
-            c.play_sound_with(
+            c.play_sound_bytes_with(
                 crate::constants::ASSET_COIN_SFX_2,
                 SoundOptions::new().volume(sfx_vol(c, 0.45)),
             );

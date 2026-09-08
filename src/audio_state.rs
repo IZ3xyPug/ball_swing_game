@@ -70,6 +70,14 @@ pub fn menu_bgm_finished() -> bool {
         .unwrap_or(false)
 }
 
+pub fn menu_bgm_playable() -> bool {
+    menu_bgm_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|h| h.is_playable()))
+        .unwrap_or(false)
+}
+
 pub fn set_game_bgm_volume(vol: f32) {
     if let Ok(slot) = game_bgm_slot().lock() {
         if let Some(h) = slot.as_ref() {

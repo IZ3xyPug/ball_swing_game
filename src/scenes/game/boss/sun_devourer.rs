@@ -179,7 +179,7 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         (
             s.px,
             s.py,
-            s.player_buff > 0,
+            s.buff_active(),
             c.get_game_object("boss").map(|o| o.position).unwrap_or((-9999.0, -9999.0)),
         )
     };
@@ -643,7 +643,7 @@ pub(crate) fn tick_boss_bolt_player_collision(c: &mut Canvas, st: &Arc<Mutex<Sta
     // A boss bolt normally breaks the tether and costs a heart. While buffed,
     // the buff absorbs up to BUFF_ABSORB_MAX hits with no damage; after the last
     // one it ends early. Refreshing the buff resets the absorb count.
-    let absorb = s.player_buff > 0 && s.buff_absorbs > 0;
+    let absorb = s.buff_active() && s.buff_absorbs > 0;
     if absorb {
         s.buff_absorbs -= 1;
         s.buff_hit_flash = 6;
@@ -697,7 +697,7 @@ pub(crate) fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>)
 
     // ── Buffed weakpoint hit damages the boss; unprotected body contact ─────
     // knocks the player back and disconnects the tether (no boss damage).
-    let buffed = s.player_buff > 0;
+    let buffed = s.buff_active();
     let near_weakpoint = BOSS_WEAKPOINT_OFFSETS.iter().any(|(wx, wy)| {
         let wx = bcx + wx;
         let wy = bcy + wy;

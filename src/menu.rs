@@ -9,16 +9,69 @@ use crate::scenes::game::helpers::{volume_value, set_volume_value, music_volume,
                                    position_volume_sliders, update_volume_labels};
 use crate::shop;
 
-const MENU_TRACKS: [&str; 3] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2, ASSET_MENU_BGM_3];
+const MENU_TRACKS: [&[u8]; 3] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2, ASSET_MENU_BGM_3];
 
 fn play_menu_track(c: &mut Canvas, idx: usize) {
     let track_idx = idx % MENU_TRACKS.len();
-    let handle = c.play_sound_with(
+    let handle = c.play_sound_bytes_with(
         MENU_TRACKS[track_idx],
         SoundOptions::new().volume(music_volume(c, 0.18)).looping(false),
     );
     audio_state::replace_menu_bgm(handle);
     c.set_var("menu_bgm_track_index", track_idx as i32);
+}
+
+
+/// Which arrow of the mode selector a tap landed on: -1 for the left, +1 for
+/// the right, `None` for a miss.
+///
+/// The zones are DELIBERATELY much larger than the arrows drawn inside the
+/// widget. The selector is 140 world units tall, which is about eight
+/// millimetres on a phone — under the ~9mm a thumb can reliably hit, and that
+/// is before asking the player to land in the outer third of it. A tap that
+/// misses gives no feedback at all, so it reads as "swiping doesn't work"
+/// rather than "you missed by 4mm".
+///
+/// So the zones extend well above and below the widget and outward past its
+/// edges, and they split it down the MIDDLE rather than into thirds: there is
+/// nothing in the centre of the selector worth protecting from a stray tap, and
+/// a dead band between the halves is just another way to miss.
+fn mode_arrow_hit(c: &Canvas, world: (f32, f32)) -> Option<i32> {
+    let obj = c.get_game_object("menu_mode_selector")?;
+    let (x, y) = obj.position;
+    let (w, h) = obj.size;
+    // Grown by half the widget's height on every side.
+    let pad = h * 0.5;
+    if world.0 < x - pad || world.0 > x + w + pad
+        || world.1 < y - pad || world.1 > y + h + pad
+    {
+        return None;
+    }
+    Some(if world.0 < x + w * 0.5 { -1 } else { 1 })
+}
+
+/// Move the game-mode selection by `delta` and redraw its labels.
+///
+/// The index lives in `game_mode_idx` on the canvas and NOWHERE ELSE. It used
+/// to live in an `Arc<Mutex<usize>>` captured by the key handler as well, which
+/// meant the tap path and the key path could disagree — and it forced anything
+/// that wanted to change the mode to be registered where that Arc was in scope,
+/// which is the menu's `on_enter`, which is precisely where mouse-press
+/// handlers do not survive.
+pub(crate) fn step_game_mode(c: &mut Canvas, delta: i32) {
+    let n = GAME_MODES.len() as i32;
+    let idx = ((c.get_i32("game_mode_idx") + delta).rem_euclid(n)) as usize;
+    let (mode_name, mode_desc) = GAME_MODES[idx];
+    if let Some(font) = ui_font() {
+        let s = c.virtual_scale();
+        if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
+            obj.set_drawable(Box::new(ui_text_spec(mode_name, &font, 36.0 * s, Color(200, 240, 255, 255), 640.0 * s)));
+        }
+        if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
+            obj.set_drawable(Box::new(ui_text_spec(mode_desc, &font, 18.0 * s, Color(140, 190, 240, 200), 800.0 * s)));
+        }
+    }
+    c.set_var("game_mode_idx", idx as i32);
 }
 
 /// The menu lives in the upper half of a 2×VH world (camera at MENU_Y), but the
@@ -39,6 +92,20 @@ pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
             return;
         }
         let world = c.screen_to_world(pos);
+
+        // The mode selector's arrows.
+        //
+        // Handled HERE, in the handler registered at app start, and not in the
+        // menu's `on_enter` — a mouse-press callback registered there does not
+        // survive the scene load, which is the reason this function exists at
+        // all (see its call site in `lib.rs`). Every attempt to add tap or
+        // gesture handling in `on_enter` was dead code that never received an
+        // event.
+        if let Some(d) = mode_arrow_hit(c, world) {
+            step_game_mode(c, d);
+            return;
+        }
+
         const BTNS: &[(&str, &str)] = &[
             ("start_btn", "goto_game"),
             ("menu_shop_btn", "goto_shop"),
@@ -230,6 +297,34 @@ fn init_gameover_countup(c: &mut Canvas, stats_object_id: &str, width: f32) {
 /// Camera pans between these two regions (from VH down to 0) for the transition.
 const MENU_Y: f32 = VH;
 
+/// How strongly the full-screen scene tints are applied, as a multiplier on
+/// their authored alpha.
+///
+/// One knob rather than nine scattered `Color(...)` literals, because these are
+/// tuned by eye against a background and always want adjusting together.
+///
+/// NOTE: turning this down is a content change, not a rendering fix. The
+/// backgrounds looking washed out on Android was first blamed on these, on the
+/// theory that alpha-to-coverage had been quietly discarding most of the tint
+/// and real alpha blending now applies it in full. That theory is wrong: at 4x
+/// coverage a 59% alpha writes ~59% of samples and resolves to the same colour
+/// alpha blending produces directly. Whatever changed the backgrounds is still
+/// unidentified — do not treat this constant as having fixed it.
+const MENU_TINT_SCALE: f32 = 0.85;
+
+/// A full-screen scene tint at the shared strength.
+fn scene_tint(w: f32, h: f32, c: Color) -> Image {
+    let Color(r, g, b, a) = c;
+    tint_overlay(w, h, Color(r, g, b, (a as f32 * MENU_TINT_SCALE).round() as u8))
+}
+
+/// Widest a menu background is ever rasterised, whatever size the quad is.
+///
+/// 1920 still exceeds the pixel width of any phone this is meant to run on and
+/// is half the linear size — a quarter of the texels — of the 4640 the quads
+/// ask for.
+pub(crate) const MENU_BG_MAX_W: f32 = 1920.0;
+
 /// Cached aurora earth background — decoded and resized once, then Arc-shared.
 static AURORA_BG_CACHE: std::sync::OnceLock<Arc<image::RgbaImage>> = std::sync::OnceLock::new();
 
@@ -240,8 +335,24 @@ fn bright_background_2(w: f32, h: f32) -> Image {
         let aurora_src = image::load_from_memory(include_bytes!("../assets/aurora_earth.gif"))
             .expect("aurora_earth.gif decode failed")
             .to_rgba8();
+        // Rasterised at a BOUNDED size and stretched to `w` x `h`, not at the
+        // full quad size.
+        //
+        // Callers ask for `VW + 800` x `VH` = 4640 x 2160, which is ten million
+        // texels of a soft, out-of-focus photograph — over a phone's 4096
+        // texture limit (so the engine had to downscale it again at upload) and
+        // a large amount of sampling bandwidth for every frame that shows a
+        // background. Two of them are on screen at once during the shop slide.
+        //
+        // The source GIF is nowhere near this detailed to begin with, so the
+        // cap costs nothing visible on any display.
+        let scale = (MENU_BG_MAX_W / w).min(1.0);
+        let (tw, th) = (
+            (w * scale).round().max(1.0) as u32,
+            (h * scale).round().max(1.0) as u32,
+        );
         let pixels = image::imageops::resize(
-            &aurora_src, w as u32, h as u32, image::imageops::FilterType::Triangle,
+            &aurora_src, tw, th, image::imageops::FilterType::Triangle,
         );
         Arc::new(pixels)
     });
@@ -311,7 +422,7 @@ pub fn build_tutorial_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "tutorial_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(40, 70, 130, 165))),
+        Some(scene_tint(VW + 800.0, VH, Color(40, 70, 130, 165))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     let mut scene = Scene::new("tutorial")
@@ -482,7 +593,7 @@ fn menu_mode_selector_img() -> image::RgbaImage {
 
 /// Select a profile slot, apply its persistent state to the run vars, and then
 /// continue to the tutorial (if not yet done) or straight to the menu.
-fn select_profile_and_continue(canvas: &mut Canvas, idx: usize) {
+pub fn select_profile_and_continue(canvas: &mut Canvas, idx: usize) {
     crate::profile::select_profile(idx);
     let p = crate::profile::profile();
     let (tutorial_done, extra_hearts, c_char, c_rope, c_bg, c_trail) = {
@@ -579,7 +690,7 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "profile_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(50, 80, 150, 150))),
+        Some(scene_tint(VW + 800.0, VH, Color(50, 80, 150, 150))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let mut scene = Scene::new("profile")
         .with_object("profile_bg", bg)
@@ -792,7 +903,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, MENU_Y), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "menu_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(70, 120, 255, 110))),
+        Some(scene_tint(VW + 800.0, VH, Color(70, 120, 255, 110))),
         (VW + 800.0, VH), (-400.0, MENU_Y), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     let title = {
@@ -826,6 +937,18 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             (w as f32, h as f32), (VW/2.0 - w as f32/2.0, MENU_Y + VH*0.40),
             vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
     };
+
+    // Frame-rate readout (Android only).
+    //
+    // Added because "is it choppy?" has needed answering repeatedly and the
+    // platform will not tell us: `SurfaceFlinger --latency` reports nothing for
+    // this surface and perf counters are locked down on retail devices, so
+    // every previous answer was inferred from CPU time rather than measured.
+    let mut menu_fps_text = GameObject::build("menu_fps_text")
+        .size(420.0, 60.0)
+        .position(40.0, MENU_Y + 30.0)
+        .build(ctx);
+    menu_fps_text.visible = mobile_controls_enabled();
 
     let menu_mode_selector = GameObject::new_rect(ctx, "menu_mode_selector".into(),
         Some(Image { shape: ShapeType::Rectangle(0.0, (800.0, 140.0), 0.0), image: menu_mode_selector_img().into(), color: None }),
@@ -938,6 +1061,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .with_object("menu_bg_tint",        bg_tint)
         .with_object("menu_title",          title)
         .with_object("menu_sub",            menu_sub)
+        .with_object("menu_fps_text",       menu_fps_text)
         .with_object("menu_mode_selector",  menu_mode_selector)
         .with_object("start_btn",           start_btn)
         .with_object("menu_shop_btn",       shop_btn)
@@ -1051,12 +1175,10 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             // Normal is the core mode; Casual sits to its left, Boss Rush to its right.
             canvas.set_var("game_mode_idx", crate::mode::GameMode::Normal.index());
 
-            let selected = Arc::new(Mutex::new(0usize));
 
             let menu_key_registered = matches!(canvas.get_var("menu_key_registered"), Some(Value::Bool(true)));
             if !menu_key_registered {
                 canvas.on_key_press({
-                    let sel = Arc::clone(&selected);
                     move |c, key| {
                         if !c.is_scene("menu") { return; }
                         // In shop: route all keystrokes to the carousel handler.
@@ -1082,37 +1204,17 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                             play_menu_track(c, next);
                             return;
                         }
-                        let n = GAME_MODES.len();
-                        let changed = {
-                            let mut idx = sel.lock().unwrap();
-                            match key {
-                                Key::Named(NamedKey::ArrowLeft) => {
-                                    *idx = (*idx + n - 1) % n;
-                                    true
-                                }
-                                Key::Named(NamedKey::ArrowRight) => {
-                                    *idx = (*idx + 1) % n;
-                                    true
-                                }
-                                _ => false,
-                            }
+                        let delta = match key {
+                            Key::Named(NamedKey::ArrowLeft)  => -1,
+                            Key::Named(NamedKey::ArrowRight) =>  1,
+                            _ => 0,
                         };
-                        if changed {
-                            let idx = *sel.lock().unwrap();
-                            let (mode_name, mode_desc) = GAME_MODES[idx];
-                            if let Some(font) = ui_font() {
-                                let s = c.virtual_scale();
-                                if let Some(obj) = c.get_game_object_mut("menu_mode_name_text") {
-                                    obj.set_drawable(Box::new(ui_text_spec(mode_name, &font, 36.0 * s, Color(200, 240, 255, 255), 640.0 * s)));
-                                }
-                                if let Some(obj) = c.get_game_object_mut("menu_mode_desc_text") {
-                                    obj.set_drawable(Box::new(ui_text_spec(mode_desc, &font, 18.0 * s, Color(140, 190, 240, 200), 800.0 * s)));
-                                }
-                            }
-                            c.set_var("game_mode_idx", idx as i32);
+                        if delta != 0 {
+                            step_game_mode(c, delta);
                         }
                     }
                 });
+
                 canvas.on_key_release(|c, key| {
                     if !c.is_scene("menu") { return; }
                     if c.get_bool("menu_in_shop") {
@@ -1150,6 +1252,40 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                         c.set_var("menu_text_dirty", true);
                     }
 
+                    // ── Frame-rate readout ──────────────────────────────
+                    if mobile_controls_enabled() {
+                        let n = c.get_i32("fps_frames") + 1;
+                        c.set_var("fps_frames", n);
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let last = match c.get_var("fps_last_ms") {
+                            Some(Value::I32(v)) => v as i64,
+                            _ => 0,
+                        };
+                        if last == 0 {
+                            c.set_var("fps_last_ms", (now & 0x3fff_ffff) as i32);
+                        } else {
+                            let elapsed = (now & 0x3fff_ffff) - last;
+                            if elapsed >= 1000 {
+                                let fps = (n as f32) * 1000.0 / elapsed as f32;
+                                c.set_var("fps_frames", 0i32);
+                                c.set_var("fps_last_ms", (now & 0x3fff_ffff) as i32);
+                                if let Some(font) = ui_font() {
+                                    let sc = c.virtual_scale();
+                                    let msg = format!("{fps:.0} fps");
+                                    if let Some(obj) = c.get_game_object_mut("menu_fps_text") {
+                                        obj.set_drawable(Box::new(ui_text_spec(
+                                            &msg, &font, 26.0 * sc,
+                                            Color(255, 230, 130, 220), 400.0 * sc)));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    c.profile_stage("m_fps");
                     // ── Camera pan (shop ↔ menu) ────────────────────────
                     let target_y = c.get_f32("menu_cam_target_y");
                     if let Some(cam) = c.camera_mut() {
@@ -1161,23 +1297,40 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                         }
                     }
 
+                    c.profile_stage("m_cam");
                     // ── Shop carousel tick ──────────────────────────────
                     if c.get_bool("menu_in_shop") {
                         shop::tick_shop(c);
                         shop::tick_shop_preview(c);
                     }
 
+                    c.profile_stage("m_shop");
                     // ── Menu BGM alternation ───────────────────────────
-                    if audio_state::menu_bgm_finished() {
+                    // `is_playable` guards the chain: with no audio device a
+                    // handle is finished the moment it exists, and without this
+                    // that means a fresh sound every frame forever.
+                    if audio_state::menu_bgm_playable() && audio_state::menu_bgm_finished() {
                         let cur = c.get_i32("menu_bgm_track_index").max(0) as usize;
                         let next = (cur + 1) % MENU_TRACKS.len();
                         play_menu_track(c, next);
                     }
 
+                    c.profile_stage("m_bgm");
                     if c.get_bool("menu_text_dirty") {
                         if let Some(font) = ui_font() {
                             let s = c.virtual_scale();
-                            let (mode_name, mode_desc) = GAME_MODES[0];
+                            // The CURRENT mode, not GAME_MODES[0].
+                            //
+                            // Hardcoding index 0 meant any text rebuild — a
+                            // window resize, a scene re-entry — silently reset
+                            // the visible mode name to CASUAL while
+                            // `game_mode_idx` kept whatever had been chosen. The
+                            // label and the mode it claimed to show could
+                            // disagree, and on a phone that made mode selection
+                            // look broken even when it was working.
+                            let idx = (c.get_i32("game_mode_idx").max(0) as usize)
+                                .min(GAME_MODES.len() - 1);
+                            let (mode_name, mode_desc) = GAME_MODES[idx];
                             for (id, text, sz, col, w) in [
                                 ("menu_title_text",        "ball_swing",                              58.0, Color(0, 0, 0, 255),          1700.0),
                                 ("menu_sub_text",          "SELECT   MODE",                           18.0, Color(180, 220, 255, 220),      600.0),
@@ -1199,6 +1352,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                         c.set_var("menu_text_dirty", false);
                     }
 
+                    c.profile_stage("m_text");
                     if !matches!(c.get_var("menu_ui_animating"), Some(Value::Bool(true))) { return; }
 
                     let mut remaining = c.get_i32("menu_ui_anim_frames").max(0);
@@ -1306,6 +1460,16 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 shop::show_categories(c);
             });
             // Category button events — each opens the carousel for that category.
+            // Carousel arrows. Route through the same function the arrow keys
+            // use, so a tap and a key can never disagree about what "next" means.
+            canvas.register_custom_event("shop_prev".into(), |c| {
+                shop::handle_shop_key(c, &Key::Named(NamedKey::ArrowLeft));
+                shop::handle_shop_key_release(c, &Key::Named(NamedKey::ArrowLeft));
+            });
+            canvas.register_custom_event("shop_next".into(), |c| {
+                shop::handle_shop_key(c, &Key::Named(NamedKey::ArrowRight));
+                shop::handle_shop_key_release(c, &Key::Named(NamedKey::ArrowRight));
+            });
             canvas.register_custom_event("shop_cat_0".into(), |c| { shop::show_carousel(c, 0); });
             canvas.register_custom_event("shop_cat_1".into(), |c| { shop::show_carousel(c, 1); });
             canvas.register_custom_event("shop_cat_2".into(), |c| { shop::show_carousel(c, 2); });
@@ -1351,7 +1515,7 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "ms_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(40, 80, 160, 140))),
+        Some(scene_tint(VW + 800.0, VH, Color(40, 80, 160, 140))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     // Title text
@@ -1636,7 +1800,7 @@ fn build_gameover_scene_generic(
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, format!("{pfx}_bg_tint").into(),
-        Some(tint_overlay(VW + 800.0, VH, t.tint)),
+        Some(scene_tint(VW + 800.0, VH, t.tint)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let title = {
         let (w, h) = (t.title_w, 230u32);
@@ -1791,7 +1955,7 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "ach_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(80, 40, 140, 140))),
+        Some(scene_tint(VW + 800.0, VH, Color(80, 40, 140, 140))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     let back_btn = {
@@ -1905,7 +2069,7 @@ pub fn build_stats_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "stats_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(80, 40, 100, 160))),
+        Some(scene_tint(VW + 800.0, VH, Color(80, 40, 100, 160))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     let back_btn = {
@@ -2063,7 +2227,7 @@ pub fn build_daily_reward_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "daily_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(40, 140, 80, 140))),
+        Some(scene_tint(VW + 800.0, VH, Color(40, 140, 80, 140))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     let back_btn = {
@@ -2226,7 +2390,7 @@ pub fn build_boss_order_scene(ctx: &mut Context) -> Scene {
         Some(bright_background_2(VW + 800.0, VH)),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
     let bg_tint = GameObject::new_rect(ctx, "bo_bg_tint".into(),
-        Some(tint_overlay(VW + 800.0, VH, Color(90, 40, 60, 170))),
+        Some(scene_tint(VW + 800.0, VH, Color(90, 40, 60, 170))),
         (VW + 800.0, VH), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     let button = |ctx: &mut Context, id: &str, x: f32, y: f32, w: u32, h: u32, tint: [u8; 3]| {

@@ -27,7 +27,7 @@ pub fn play_death_sound(c: &mut Canvas) {
     };
     let asset = if mode == 1 { ASSET_ARCADE_GAME_OVER } else { ASSET_WOBBLY_MEOW };
     let vol = sfx_vol(c, 0.65);
-    c.play_sound_with(asset, SoundOptions::new().volume(vol));
+    c.play_sound_bytes_with(asset, SoundOptions::new().volume(vol));
 }
 
 /// Compute effective SFX volume: base * vol_master * vol_sound.
@@ -53,9 +53,10 @@ pub fn hook_img(r: u8, g: u8, b: u8) -> Image {
 static HOOK_ARTIFACT_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
 
 fn decode_hook_artifact_frames() -> Vec<image::RgbaImage> {
-    let bytes = std::fs::read(ASSET_HOOK_ARTIFACT_GIF).expect("hook_artifact.gif missing");
+    // Embedded, not read from disk: the old path was the build machine's
+    // absolute path, which crashes on any other device.
     let d = (HOOK_ARTIFACT_R * 2.0).round() as u32;
-    let cursor = Cursor::new(bytes);
+    let cursor = Cursor::new(ASSET_HOOK_ARTIFACT_GIF);
     if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
         let frames: Vec<image::RgbaImage> = decoder.into_frames()
             .filter_map(|f| f.ok())
@@ -101,9 +102,8 @@ pub fn hook_artifact_anim() -> AnimatedSprite {
 // ── Zero-G overlay ─────────────────────────────────────────────────────────
 static ZERO_G_OVERLAY_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
 fn decode_zero_g_overlay_frames() -> Vec<image::RgbaImage> {
-    let bytes = std::fs::read(ASSET_ZERO_G_GIF).expect("ZeroG.gif missing");
     let d = 256u32; // ZeroG.gif is natively 256×256
-    let cursor = Cursor::new(bytes);
+    let cursor = Cursor::new(ASSET_ZERO_G_GIF);
     if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
         let frames: Vec<image::RgbaImage> = decoder.into_frames()
             .filter_map(|f| f.ok())
@@ -140,9 +140,8 @@ pub fn zero_g_overlay_anim() -> AnimatedSprite {
 static HOOK_ARTIFACT_GREEN_FRAMES: OnceLock<Vec<image::RgbaImage>> = OnceLock::new();
 
 fn decode_hook_artifact_green_frames() -> Vec<image::RgbaImage> {
-    let bytes = std::fs::read(ASSET_HOOK_ARTIFACT_GREEN_GIF).expect("hook_artifact_green.gif missing");
     let d = (HOOK_ARTIFACT_R * 2.0).round() as u32;
-    let cursor = Cursor::new(bytes);
+    let cursor = Cursor::new(ASSET_HOOK_ARTIFACT_GREEN_GIF);
     if let Ok(decoder) = image::codecs::gif::GifDecoder::new(cursor) {
         let frames: Vec<image::RgbaImage> = decoder.into_frames()
             .filter_map(|f| f.ok())

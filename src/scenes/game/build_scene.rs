@@ -212,6 +212,135 @@ fn hide_pause_ui(c: &mut Canvas) {
     }
 }
 
+/// Close the pause menu and put the world back the way it was.
+///
+/// Factored out because three things now dismiss the pause menu — the P key,
+/// the RESUME button, and the pause gesture on mobile — and each of them has to
+/// restore exactly the same state. Two of the three used to carry their own
+/// copy of this, and a copy is one edit away from resuming into a slightly
+/// different world than the one that was paused.
+/// Which pause-menu button a virtual-space touch landed on, by the button's own
+/// bounds.
+///
+/// The pause UI is `ignore_zoom`: its objects hold VIRTUAL positions and are
+/// drawn at base scale, and input positions are virtual too, so the two compare
+/// directly. The old test multiplied the input by the camera's zoom first,
+/// which is only the identity when the zoom happens to be 1 — and the game
+/// zooms with the player's height, so the buttons drifted out from under the
+/// finger by however far the camera happened to be zoomed. That is why the
+/// menu could be opened and not closed: `P` never went near this code.
+///
+/// Reading the objects' real rectangles also removes the hardcoded 780/950/1000
+/// numbers, which were a second copy of the layout.
+/// The live run's state, reachable from handlers registered outside the scene.
+///
+/// Input handlers must be registered at `App::new` — a mouse-press handler
+/// registered inside a scene's `on_enter` never receives presses in the live
+/// window — so they cannot capture a local created inside `build_game_scene`.
+/// There is one game scene and one run at a time, so a process singleton is the
+/// honest shape for it.
+pub fn run_state() -> &'static Arc<Mutex<Option<Arc<Mutex<State>>>>> {
+    static S: std::sync::OnceLock<Arc<Mutex<Option<Arc<Mutex<State>>>>>> = std::sync::OnceLock::new();
+    S.get_or_init(|| Arc::new(Mutex::new(None)))
+}
+
+/// Which upgrade-dialogue line a click landed on, 1-5, or 6 for "leave".
+///
+/// A click anywhere inside the panel but not on a line does nothing; a click
+/// outside the panel closes it, which is what every other modal in the game
+/// does.
+fn upgrade_option_at(c: &Canvas, pos: (f32, f32)) -> Option<u8> {
+    // The dialogue is `ignore_zoom` too — see the note in `pause_button_at`.
+    let pos = c.input_to_unzoomed(pos);
+    let panel = c.get_game_object("upgrade_dialogue_panel")?;
+    if !panel.visible { return None; }
+    for i in 0..6u8 {
+        if let Some(obj) = c.get_game_object(&format!("upgrade_opt_{i}")) {
+            if obj.visible
+                && pos.0 >= obj.position.0
+                && pos.0 <= obj.position.0 + obj.size.0
+                && pos.1 >= obj.position.1
+                && pos.1 <= obj.position.1 + obj.size.1
+            {
+                return Some(i + 1);
+            }
+        }
+    }
+    let inside = pos.0 >= panel.position.0
+        && pos.0 <= panel.position.0 + panel.size.0
+        && pos.1 >= panel.position.1
+        && pos.1 <= panel.position.1 + panel.size.1;
+    if inside { None } else { Some(6) }
+}
+
+fn pause_button_at(c: &Canvas, pos: (f32, f32)) -> Option<&'static str> {
+    // The pause UI is `ignore_zoom`, so it is laid out with the base scale
+    // while input arrives divided by a scale that includes the camera zoom.
+    // Without this the whole menu is unreachable by exactly the zoom factor —
+    // measured on the device as a tap at x=1478 against a Resume button
+    // spanning 1570..2270 at zoom 1.3.
+    let pos = c.input_to_unzoomed(pos);
+    // `settings_back_btn` is not in PAUSE_BTN_LAYOUT (that list drives the
+    // slide-in animation, and the settings panel does not slide), so it is
+    // named explicitly or the settings screen loses its way out.
+    let names = PAUSE_BTN_LAYOUT
+        .iter()
+        .map(|&(n, _, _)| n)
+        .chain(std::iter::once("settings_back_btn"));
+    for name in names {
+        if let Some(obj) = c.get_game_object(name) {
+            if obj.visible
+                && pos.0 >= obj.position.0
+                && pos.0 <= obj.position.0 + obj.size.0
+                && pos.1 >= obj.position.1
+                && pos.1 <= obj.position.1 + obj.size.1
+            {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn resume_from_pause(c: &mut Canvas) {
+    let from_stasis = matches!(c.get_var("pause_came_from_stasis"), Some(Value::Bool(true)));
+    c.set_var("pause_came_from_stasis", false);
+    c.resume();
+    c.set_var("pause_animating", false);
+    c.set_var("pause_anim_frames", 0);
+    hide_pause_ui(c);
+    c.set_var("settings_open", false);
+    c.set_var("settings_dragging", -1i32);
+    if from_stasis {
+        // Back to the soft-pause stasis, which is where it came from.
+        c.set_var("game_paused", true);
+    } else {
+        // Back to gameplay.
+        c.set_var("game_paused", false);
+        c.set_var("start_prompt_active", false);
+    }
+    // Put the start prompt back if the run is still waiting to begin.
+    // `hide_pause_ui` clears it along with the menu, so without this a run
+    // paused during the intro resumed with no prompt and no obvious way to
+    // start. The pause control comes back on its own, from the tick callback
+    // that derives it, once ticks resume.
+    if c.get_bool("start_prompt_active") {
+        if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
+            obj.visible = true;
+        }
+    }
+    rebuild_player_trail(c, selected_trail_color(c));
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.visible = true;
+    }
+    if !from_stasis {
+        let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
+        if let Some(obj) = c.get_game_object_mut("rope") {
+            obj.visible = was_hooked;
+        }
+    }
+}
+
 fn clear_pause_state(c: &mut Canvas) {
     if !c.get_bool("game_paused") { return; }
     c.resume();
@@ -252,6 +381,17 @@ fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.position = (bx, by - VH);
             obj.visible = true;
+        }
+    }
+    // Hide the things that would otherwise draw straight through the menu.
+    // Done HERE rather than derived in a tick callback: `c.pause()` stops tick
+    // callbacks entirely, so anything not already hidden by the time the menu
+    // finishes opening stays on screen for as long as the game is paused —
+    // which is how "HOLD SPACE TO BEGIN" ended up printed across the Restart
+    // button, and the pause control itself stayed lit behind the menu.
+    for name in ["start_prompt_text", "pause_touch_btn"] {
+        if let Some(obj) = c.get_game_object_mut(name) {
+            obj.visible = false;
         }
     }
     c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
@@ -304,13 +444,376 @@ const PAUSE_BTN_LAYOUT: [(&str, f32, f32); 5] = [
     ("pause_menu_btn",     (VW - 700.0) / 2.0, 1440.0),
 ];
 
-fn switch_game_bgm(c: &mut Canvas, track_idx: i32, asset: &str, base_vol: f32) {
+fn switch_game_bgm(c: &mut Canvas, track_idx: i32, asset: &'static [u8], base_vol: f32) {
     if c.get_i32("bgm_track_index") != track_idx {
-        let handle = c.play_sound_with(asset, SoundOptions::new().volume(music_volume(c, base_vol)).looping(true));
+        let handle = c.play_sound_bytes_with(asset, SoundOptions::new().volume(music_volume(c, base_vol)).looping(true));
         audio_state::replace_game_bgm(handle);
         c.set_var("bgm_track_index", track_idx);
         c.set_var("bgm_base_vol", base_vol);
     }
+}
+
+/// Register the pause menu's and the touch controls' input handlers.
+///
+/// Called from `App::new`, NOT from the game scene's `on_enter`, where this
+/// whole block used to live. A canvas mouse-press handler registered inside a
+/// scene's `on_enter` never receives presses in the live window — it works in
+/// the headless harness, which is what let it look correct — so the pause
+/// button did nothing, and once paused there was no way back out. The menu's
+/// handler was moved out for exactly this reason; this is the same fix for the
+/// game scene.
+///
+/// Every handler already guards on `is_scene("game")`, so registering them
+/// before any scene is loaded is safe.
+pub fn register_pause_ui_handlers(canvas: &mut Canvas) {
+        // ── Pause menu button handlers (register once) ───────────────
+        let pause_btns_registered = matches!(
+            canvas.get_var("pause_btns_registered"),
+            Some(Value::Bool(true))
+        );
+        if !pause_btns_registered {
+            // Click handlers
+            canvas.register_custom_event("pause_resume_click".into(), |c| {
+                if !c.get_bool("game_paused") { return; }
+                let from_stasis = matches!(c.get_var("pause_came_from_stasis"), Some(Value::Bool(true)));
+                clear_pause_state(c);
+                if from_stasis {
+                    // Return to the soft-pause stasis (keep soft pause).
+                    c.set_var("pause_came_from_stasis", false);
+                    c.set_var("game_paused", true);
+                    rebuild_player_trail(c, selected_trail_color(c));
+                    if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
+                } else {
+                    rebuild_player_trail(c, selected_trail_color(c));
+                    if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
+                    let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
+                    if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
+                }
+            });
+            canvas.register_custom_event("pause_restart_click".into(), |c| {
+                if !c.get_bool("game_paused") { return; }
+                clear_pause_state(c);
+                let next = c.get_i32("level_nonce").saturating_add(1);
+                c.set_var("level_nonce", next);
+                c.load_scene("game");
+            });
+            canvas.register_custom_event("pause_menu_click".into(), |c| {
+                if !c.get_bool("game_paused") { return; }
+                clear_pause_state(c);
+                if let Some(cam) = c.camera_mut() {
+                    cam.snap_zoom(1.0);
+                    cam.zoom_anchor = None;
+                }
+                c.load_scene("menu");
+            });
+            canvas.register_custom_event("pause_settings_click".into(), |c| {
+                if !c.get_bool("game_paused") { return; }
+                // Hide pause menu buttons, show settings panel.
+                for name in ["pause_title", "pause_resume_btn", "pause_restart_btn",
+                             "pause_settings_btn", "pause_menu_btn"] {
+                    if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                }
+                c.set_var("settings_open", true);
+                c.set_var("settings_dragging", -1i32);
+                // Render label text (percentages only)
+                update_settings_text(c);
+                for name in ["settings_label_0", "settings_label_1", "settings_label_2"] {
+                    if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
+                }
+                if let Some(obj) = c.get_game_object_mut("settings_back_btn") {
+                    obj.position = ((VW - 700.0) / 2.0, 1660.0);
+                    obj.visible = true;
+                }
+                // Show slider tracks and thumbs at positions matching current vols
+                position_slider_thumbs(c);
+                for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
+                    if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
+                }
+            });
+            canvas.register_custom_event("settings_back_click".into(), |c| {
+                c.set_var("settings_open", false);
+                c.set_var("settings_dragging", -1i32);
+                for name in ["settings_label_0", "settings_label_1", "settings_label_2",
+                             "settings_back_btn"] {
+                    if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                }
+                for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
+                    if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
+                }
+                // Re-show pause menu.
+                for &(name, bx, by) in PAUSE_BTN_LAYOUT.iter() {
+                    if let Some(obj) = c.get_game_object_mut(name) {
+                        obj.position = (bx, by);
+                        obj.visible = true;
+                    }
+                }
+            });
+
+            // Pause UI uses ignore_zoom objects, so mouse hit-tests must
+            // compensate for camera zoom (input pos is in world virtual space).
+
+            let pause_ui_mouse_registered = matches!(
+                canvas.get_var("pause_ui_mouse_registered"),
+                Some(Value::Bool(true))
+            );
+            if !pause_ui_mouse_registered {
+                canvas.on_mouse_move({
+                    move |c, pos| {
+                        if !c.is_scene("game") { return; }
+                        // Track the finger for the pause swipe. Before the
+                        // early return below, because it has to be sampled
+                        // while the pause menu is CLOSED — that is when the
+                        // gesture that opens it happens.
+                        if mobile_controls_enabled() {
+                            c.set_var("touch_last_x", pos.0);
+                            c.set_var("touch_last_y", pos.1);
+                        }
+                        // Only the full pause menu is clickable; a soft-pause
+                        // stasis (boss orbit, respawn, hold-space) must not
+                        // let you hit invisible buttons.
+                        if !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) {
+                            return;
+                        }
+
+                        // Pause/settings UI is ignore_zoom — see the note on
+                        // `Canvas::input_to_unzoomed`. Taken from the LAYOUT's
+                        // zoom rather than the camera's, because that is the
+                        // one the objects were actually laid out with; the two
+                        // differ mid-transition while a smooth zoom settles.
+
+                        // If dragging a settings slider, update its position/value.
+                        let dragging = c.get_i32("settings_dragging");
+                        if dragging >= 0 && c.get_bool("settings_open") {
+                            let idx = dragging as usize;
+                            if idx < 3 {
+                                let vol = ((c.input_to_unzoomed(pos).0 - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                set_volume_value(c, SLIDER_VARS[idx], vol);
+                                let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+                                let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+                                if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
+                                    obj.position = (thumb_x, thumb_y);
+                                }
+                                // Sync so the renderer sees the new thumb position
+                                // while the engine is hard-paused.
+                                update_settings_text(c);
+                                update_bgm_volume(c);
+                            }
+                            return;
+                        }
+
+                        let (ux, uy) = c.input_to_unzoomed(pos);
+                        let bx = (VW - 700.0) / 2.0;
+
+                        let over_resume = ux >= bx && ux <= bx + 700.0 && uy >= 780.0 && uy <= 950.0;
+                        let over_restart = ux >= bx && ux <= bx + 700.0 && uy >= 1000.0 && uy <= 1170.0;
+                        let over_settings = ux >= bx && ux <= bx + 700.0 && uy >= 1220.0 && uy <= 1390.0;
+                        let over_menu = ux >= bx && ux <= bx + 700.0 && uy >= 1440.0 && uy <= 1610.0;
+                        let over_back = ux >= bx && ux <= bx + 700.0 && uy >= 1660.0 && uy <= 1830.0;
+
+                        let hover_idx = if over_resume {
+                            0
+                        } else if over_restart {
+                            1
+                        } else if over_settings {
+                            2
+                        } else if over_menu {
+                            3
+                        } else if over_back {
+                            4
+                        } else {
+                            -1
+                        };
+
+                        let prev_idx = c.get_i32("pause_hover_idx");
+                        if hover_idx == prev_idx {
+                            return;
+                        }
+                        c.set_var("pause_hover_idx", hover_idx);
+
+                        // Subtle but visible lighter hover state.
+                        let hover_tint = Color(255, 255, 255, 92);
+                        for (name, over) in [
+                            ("pause_resume_btn",    over_resume),
+                            ("pause_restart_btn",   over_restart),
+                            ("pause_settings_btn",  over_settings),
+                            ("pause_menu_btn",      over_menu),
+                            ("settings_back_btn",   over_back),
+                        ] {
+                            if let Some(obj) = c.get_game_object_mut(name) {
+                                if over { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
+                            }
+                        }
+                    }
+                });
+
+                canvas.on_mouse_press(move |c, btn, pos| {
+                    if btn != MouseButton::Left { return; }
+                    if !c.is_scene("game") { return; }
+
+                    // ── Modal prompts, before anything else can take the click.
+                    //
+                    // Both of these used to be keyboard-only (1-5/Esc for the
+                    // upgrade node, F for the cannon), which on a phone means
+                    // the node holds the player in a menu they cannot answer.
+                    // Not gated on mobile: clicking a menu option works on
+                    // desktop too, and the keys still do what they did.
+                    if let Some(state_arc) = run_state().lock().unwrap().as_ref().cloned() {
+                        if state_arc.lock().unwrap().upgrade_dialogue_active {
+                            if let Some(opt) = upgrade_option_at(c, pos) {
+                                c.set_var("mouse_left_held", false);
+                                upgrades::upgrade_dialogue_select(c, &state_arc, opt);
+                            }
+                            return;
+                        }
+                        let ft_ready = {
+                            let st = state_arc.lock().unwrap();
+                            st.cannon_ft_prompt && st.cannon_captured
+                        };
+                        if ft_ready {
+                            let hpos = c.input_to_unzoomed(pos);
+                            let hit = c.get_game_object("cannon_prompt_text").is_some_and(|o| {
+                                o.visible
+                                    && hpos.0 >= o.position.0
+                                    && hpos.0 <= o.position.0 + o.size.0
+                                    && hpos.1 >= o.position.1
+                                    && hpos.1 <= o.position.1 + o.size.1
+                            });
+                            if hit {
+                                state_arc.lock().unwrap().cannon_ft_active = true;
+                                c.set_var("mouse_left_held", false);
+                                return;
+                            }
+                        }
+                    }
+
+                    if mobile_controls_enabled() {
+                        // Remember where this touch began, so the release
+                        // can tell a swipe from a tap. `pos` is already in
+                        // virtual space.
+
+                        let paused = matches!(
+                            c.get_var("pause_menu_open"), Some(Value::Bool(true))
+                        );
+                        if !paused {
+                            // The pause control comes first: it sits on the
+                            // left, so it can never take a touch the swing
+                            // half wanted.
+                            // Same space as the rest of the pause UI: this
+                            // control is drawn `ignore_zoom`.
+                            let bpos = c.input_to_unzoomed(pos);
+                            if point_in_rect(bpos.0, bpos.1, PAUSE_TOUCH_BTN) {
+                                let animating = matches!(
+                                    c.get_var("pause_animating"), Some(Value::Bool(true))
+                                );
+                                if !animating {
+                                    c.set_var("mouse_left_held", false);
+                                    open_pause_menu(c, is_game_paused(c));
+                                }
+                                return;
+                            }
+                            // Holding the right half swings, exactly as
+                            // holding the mouse button does on desktop. The
+                            // whole half is the control, so it can be used
+                            // without looking at it.
+                            if mobile_swing_zone_contains(pos.0, pos.1) {
+                                c.set_var("mouse_left_held", true);
+                            }
+                            return;
+                        }
+                        // Pause menu open: fall through to its own hit
+                        // testing. Returning here instead made every button
+                        // in the pause menu untappable on a phone.
+                    }
+
+                    // Only the full pause menu is clickable; a soft-pause
+                    // stasis must not let you hit invisible buttons.
+                    if !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) {
+                        return;
+                    }
+
+                    // Pause/settings UI is ignore_zoom — see the note on
+                    // `Canvas::input_to_unzoomed`.
+                    let (ux, uy) = c.input_to_unzoomed(pos);
+
+                    // If settings panel is open, check for slider track hits first.
+                    if c.get_bool("settings_open") {
+                        if ux >= SLIDER_TRACK_X && ux <= SLIDER_TRACK_X + SLIDER_TRACK_W {
+                            for idx in 0..3usize {
+                                if uy >= SLIDER_Y[idx] - 40.0 && uy <= SLIDER_Y[idx] + 64.0 {
+                                    let vol = ((ux - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
+                                    set_volume_value(c, SLIDER_VARS[idx], vol);
+                                    let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
+                                    let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
+                                    if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
+                                        obj.position = (thumb_x, thumb_y);
+                                    }
+                                    update_settings_text(c);
+                                    update_bgm_volume(c);
+                                    c.set_var("settings_dragging", idx as i32);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
+                    // Hit-tested against the buttons' own rectangles, in
+                    // the virtual space the input already arrives in.
+                    match pause_button_at(c, pos) {
+                        Some("pause_resume_btn") => {
+                            // Called directly rather than dispatched: this
+                            // is the one control the player cannot do
+                            // without, so it takes the shortest path there
+                            // is to the same function `P` uses.
+                            resume_from_pause(c);
+                        }
+                        Some("pause_restart_btn") => {
+                            c.run(Action::Custom { name: "pause_restart_click".into() });
+                        }
+                        Some("pause_settings_btn") => {
+                            c.run(Action::Custom { name: "pause_settings_click".into() });
+                        }
+                        Some("pause_menu_btn") => {
+                            c.run(Action::Custom { name: "pause_menu_click".into() });
+                        }
+                        Some("settings_back_btn") => {
+                            c.run(Action::Custom { name: "settings_back_click".into() });
+                        }
+                        _ => {}
+                    }
+                });
+
+                // Show the pause control while a run is live (Android only).
+                canvas.on_update(|c| {
+                    if !c.is_scene("game") { return; }
+                    if !mobile_controls_enabled() { return; }
+                    // Also off while the menu is sliding in: `pause_menu_open`
+                    // only becomes true when that animation FINISHES, so
+                    // deriving from it alone re-showed the control on every
+                    // frame of the opening animation — and the last of those
+                    // frames is the state it stays in, because `c.pause()`
+                    // stops tick callbacks from then on.
+                    let show = !matches!(
+                        c.get_var("pause_menu_open"), Some(Value::Bool(true))
+                    ) && !matches!(
+                        c.get_var("pause_animating"), Some(Value::Bool(true))
+                    );
+                    if let Some(obj) = c.get_game_object_mut("pause_touch_btn") {
+                        obj.visible = show;
+                    }
+                });
+
+                canvas.on_mouse_release(move |c, _btn, _pos| {
+                    if !c.is_scene("game") { return; }
+                    if mobile_controls_enabled() {
+                        c.set_var("mouse_left_held", false);
+                    }
+                    c.set_var("settings_dragging", -1i32);
+                });
+
+                canvas.set_var("pause_ui_mouse_registered", true);
+            }
+            canvas.set_var("pause_btns_registered", true);
+        }
 }
 
 pub fn build_game_scene(ctx: &mut Context) -> Scene {
@@ -340,8 +843,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     let starter_hooks = crate::level_gen::starter_hooks();
 
     // Persistent state arc — created on first enter, reused on respawns.
-    let persistent_state: Arc<Mutex<Option<Arc<Mutex<State>>>>> =
-        Arc::new(Mutex::new(None));
+    let persistent_state: Arc<Mutex<Option<Arc<Mutex<State>>>>> = Arc::clone(run_state());
     scene
         .on_enter(move |canvas| {
             // ── Crystalline renderer ─────────────────────────────────────
@@ -452,7 +954,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // ── Background music (looped, switchable) ───────────────────
             if !audio_state::has_game_bgm() {
-                let handle = canvas.play_sound_with(
+                let handle = canvas.play_sound_bytes_with(
                     ASSET_BGM_TRACK_1,
                     SoundOptions::new().volume(music_volume(canvas, 0.084)).looping(true),
                 );
@@ -646,34 +1148,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         let full_pause = c.is_paused();
                         if full_pause {
                             // Full pause menu open — resume.
-                            let from_stasis = matches!(c.get_var("pause_came_from_stasis"), Some(Value::Bool(true)));
-                            c.set_var("pause_came_from_stasis", false);
-                            c.resume();
-                            c.set_var("pause_animating", false);
-                            c.set_var("pause_anim_frames", 0);
-                            hide_pause_ui(c);
-                            c.set_var("settings_open", false);
-                            c.set_var("settings_dragging", -1i32);
-                            if from_stasis {
-                                // Return to the soft-pause stasis (keep soft pause).
-                                c.set_var("game_paused", true);
-                                rebuild_player_trail(c, selected_trail_color(c));
-                                if let Some(obj) = c.get_game_object_mut("player") {
-                                    obj.visible = true;
-                                }
-                            } else {
-                                // Return to gameplay.
-                                c.set_var("game_paused", false);
-                                c.set_var("start_prompt_active", false);
-                                rebuild_player_trail(c, selected_trail_color(c));
-                                if let Some(obj) = c.get_game_object_mut("player") {
-                                    obj.visible = true;
-                                }
-                                let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
-                                if let Some(obj) = c.get_game_object_mut("rope") {
-                                    obj.visible = was_hooked;
-                                }
-                            }
+                            resume_from_pause(c);
                         } else if is_pause {
                             // Soft-pause stasis: P opens the pause menu (full pause).
                             open_pause_menu(c, true);
@@ -943,6 +1418,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_part_invuln_ticks: 0,
                 beam_explode_live: Vec::new(), buff_fx_attached:  Vec::new(),
                 shield_fx_attached: Vec::new(), shield_player_fx:  false,
+                buff_player_fx:     false,
                 boss_torso_attack: 0,             boss_meteor_queue: Vec::new(),
                 serpent_act:       SerpentAct::Prowl,
                 serpent_act_ticks: 0,             serpent_cooldown:  SERPENT_ATTACK_GAP,
@@ -1362,243 +1838,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
 
-            // ── Pause menu button handlers (register once) ───────────────
-            let pause_btns_registered = matches!(
-                canvas.get_var("pause_btns_registered"),
-                Some(Value::Bool(true))
-            );
-            if !pause_btns_registered {
-                // Click handlers
-                canvas.register_custom_event("pause_resume_click".into(), |c| {
-                    if !c.get_bool("game_paused") { return; }
-                    let from_stasis = matches!(c.get_var("pause_came_from_stasis"), Some(Value::Bool(true)));
-                    clear_pause_state(c);
-                    if from_stasis {
-                        // Return to the soft-pause stasis (keep soft pause).
-                        c.set_var("pause_came_from_stasis", false);
-                        c.set_var("game_paused", true);
-                        rebuild_player_trail(c, selected_trail_color(c));
-                        if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
-                    } else {
-                        rebuild_player_trail(c, selected_trail_color(c));
-                        if let Some(obj) = c.get_game_object_mut("player") { obj.visible = true; }
-                        let was_hooked = matches!(c.get_var("rope_visible_at_pause"), Some(Value::Bool(true)));
-                        if let Some(obj) = c.get_game_object_mut("rope") { obj.visible = was_hooked; }
-                    }
-                });
-                canvas.register_custom_event("pause_restart_click".into(), |c| {
-                    if !c.get_bool("game_paused") { return; }
-                    clear_pause_state(c);
-                    let next = c.get_i32("level_nonce").saturating_add(1);
-                    c.set_var("level_nonce", next);
-                    c.load_scene("game");
-                });
-                canvas.register_custom_event("pause_menu_click".into(), |c| {
-                    if !c.get_bool("game_paused") { return; }
-                    clear_pause_state(c);
-                    if let Some(cam) = c.camera_mut() {
-                        cam.snap_zoom(1.0);
-                        cam.zoom_anchor = None;
-                    }
-                    c.load_scene("menu");
-                });
-                canvas.register_custom_event("pause_settings_click".into(), |c| {
-                    if !c.get_bool("game_paused") { return; }
-                    // Hide pause menu buttons, show settings panel.
-                    for name in ["pause_title", "pause_resume_btn", "pause_restart_btn",
-                                 "pause_settings_btn", "pause_menu_btn"] {
-                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
-                    }
-                    c.set_var("settings_open", true);
-                    c.set_var("settings_dragging", -1i32);
-                    // Render label text (percentages only)
-                    update_settings_text(c);
-                    for name in ["settings_label_0", "settings_label_1", "settings_label_2"] {
-                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
-                    }
-                    if let Some(obj) = c.get_game_object_mut("settings_back_btn") {
-                        obj.position = ((VW - 700.0) / 2.0, 1660.0);
-                        obj.visible = true;
-                    }
-                    // Show slider tracks and thumbs at positions matching current vols
-                    position_slider_thumbs(c);
-                    for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
-                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = true; }
-                    }
-                });
-                canvas.register_custom_event("settings_back_click".into(), |c| {
-                    c.set_var("settings_open", false);
-                    c.set_var("settings_dragging", -1i32);
-                    for name in ["settings_label_0", "settings_label_1", "settings_label_2",
-                                 "settings_back_btn"] {
-                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
-                    }
-                    for name in SLIDER_TRACKS.iter().chain(SLIDER_THUMBS.iter()) {
-                        if let Some(obj) = c.get_game_object_mut(name) { obj.visible = false; }
-                    }
-                    // Re-show pause menu.
-                    for &(name, bx, by) in PAUSE_BTN_LAYOUT.iter() {
-                        if let Some(obj) = c.get_game_object_mut(name) {
-                            obj.position = (bx, by);
-                            obj.visible = true;
-                        }
-                    }
-                });
-
-                // Pause UI uses ignore_zoom objects, so mouse hit-tests must
-                // compensate for camera zoom (input pos is in world virtual space).
-
-                let pause_ui_mouse_registered = matches!(
-                    canvas.get_var("pause_ui_mouse_registered"),
-                    Some(Value::Bool(true))
-                );
-                if !pause_ui_mouse_registered {
-                    canvas.on_mouse_move({
-                        move |c, pos| {
-                            if !c.is_scene("game") { return; }
-                            // Only the full pause menu is clickable; a soft-pause
-                            // stasis (boss orbit, respawn, hold-space) must not
-                            // let you hit invisible buttons.
-                            if !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) {
-                                return;
-                            }
-
-                            // Pause/settings UI is ignore_zoom: its offset stays at the
-                            // object's virtual position and is rendered with base_scale
-                            // (scale/zoom). Input `pos` is virtual (= obj.position/zoom),
-                            // so multiply by zoom to recover the object's position.
-                            let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
-
-                            // If dragging a settings slider, update its position/value.
-                            let dragging = c.get_i32("settings_dragging");
-                            if dragging >= 0 && c.get_bool("settings_open") {
-                                let idx = dragging as usize;
-                                if idx < 3 {
-                                    let vol = ((pos.0 * zoom - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
-                                    set_volume_value(c, SLIDER_VARS[idx], vol);
-                                    let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
-                                    let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
-                                    if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
-                                        obj.position = (thumb_x, thumb_y);
-                                    }
-                                    // Sync so the renderer sees the new thumb position
-                                    // while the engine is hard-paused.
-                                    update_settings_text(c);
-                                    update_bgm_volume(c);
-                                }
-                                return;
-                            }
-
-                            let ux = pos.0 * zoom;
-                            let uy = pos.1 * zoom;
-                            let bx = (VW - 700.0) / 2.0;
-
-                            let over_resume = ux >= bx && ux <= bx + 700.0 && uy >= 780.0 && uy <= 950.0;
-                            let over_restart = ux >= bx && ux <= bx + 700.0 && uy >= 1000.0 && uy <= 1170.0;
-                            let over_settings = ux >= bx && ux <= bx + 700.0 && uy >= 1220.0 && uy <= 1390.0;
-                            let over_menu = ux >= bx && ux <= bx + 700.0 && uy >= 1440.0 && uy <= 1610.0;
-                            let over_back = ux >= bx && ux <= bx + 700.0 && uy >= 1660.0 && uy <= 1830.0;
-
-                            let hover_idx = if over_resume {
-                                0
-                            } else if over_restart {
-                                1
-                            } else if over_settings {
-                                2
-                            } else if over_menu {
-                                3
-                            } else if over_back {
-                                4
-                            } else {
-                                -1
-                            };
-
-                            let prev_idx = c.get_i32("pause_hover_idx");
-                            if hover_idx == prev_idx {
-                                return;
-                            }
-                            c.set_var("pause_hover_idx", hover_idx);
-
-                            // Subtle but visible lighter hover state.
-                            let hover_tint = Color(255, 255, 255, 92);
-                            for (name, over) in [
-                                ("pause_resume_btn",    over_resume),
-                                ("pause_restart_btn",   over_restart),
-                                ("pause_settings_btn",  over_settings),
-                                ("pause_menu_btn",      over_menu),
-                                ("settings_back_btn",   over_back),
-                            ] {
-                                if let Some(obj) = c.get_game_object_mut(name) {
-                                    if over { obj.set_tint(hover_tint); } else { obj.clear_highlight(); }
-                                }
-                            }
-                        }
-                    });
-
-                    canvas.on_mouse_press(move |c, btn, pos| {
-                        if btn != MouseButton::Left { return; }
-                        if !c.is_scene("game") { return; }
-                        // Only the full pause menu is clickable; a soft-pause
-                        // stasis must not let you hit invisible buttons.
-                        if !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) {
-                            return;
-                        }
-
-                        // Pause/settings UI is ignore_zoom: its offset stays at the
-                        // object's virtual position and is rendered with base_scale
-                        // (scale/zoom). Input `pos` is virtual (= obj.position/zoom),
-                        // so multiply by zoom to recover the object's position.
-                        let zoom = c.camera().map(|cam| cam.zoom).unwrap_or(1.0);
-                        let ux = pos.0 * zoom;
-                        let uy = pos.1 * zoom;
-
-                        // If settings panel is open, check for slider track hits first.
-                        if c.get_bool("settings_open") {
-                            if ux >= SLIDER_TRACK_X && ux <= SLIDER_TRACK_X + SLIDER_TRACK_W {
-                                for idx in 0..3usize {
-                                    if uy >= SLIDER_Y[idx] - 40.0 && uy <= SLIDER_Y[idx] + 64.0 {
-                                        let vol = ((ux - SLIDER_TRACK_X) / SLIDER_TRACK_W).clamp(0.0, 1.0);
-                                        set_volume_value(c, SLIDER_VARS[idx], vol);
-                                        let thumb_x = SLIDER_TRACK_X + vol * (SLIDER_TRACK_W - SLIDER_THUMB_W);
-                                        let thumb_y = SLIDER_Y[idx] - (SLIDER_THUMB_H - SLIDER_TRACK_H) / 2.0;
-                                        if let Some(obj) = c.get_game_object_mut(SLIDER_THUMBS[idx]) {
-                                            obj.position = (thumb_x, thumb_y);
-                                        }
-                                        update_settings_text(c);
-                                        update_bgm_volume(c);
-                                        c.set_var("settings_dragging", idx as i32);
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-
-                        let bx = (VW - 700.0) / 2.0;
-
-                        if ux >= bx && ux <= bx + 700.0 {
-                            if uy >= 780.0 && uy <= 950.0 {
-                                c.run(Action::Custom { name: "pause_resume_click".into() });
-                            } else if uy >= 1000.0 && uy <= 1170.0 {
-                                c.run(Action::Custom { name: "pause_restart_click".into() });
-                            } else if uy >= 1220.0 && uy <= 1390.0 {
-                                c.run(Action::Custom { name: "pause_settings_click".into() });
-                            } else if uy >= 1440.0 && uy <= 1610.0 {
-                                c.run(Action::Custom { name: "pause_menu_click".into() });
-                            } else if uy >= 1660.0 && uy <= 1830.0 {
-                                c.run(Action::Custom { name: "settings_back_click".into() });
-                            }
-                        }
-                    });
-
-                    canvas.on_mouse_release(move |c, _btn, _pos| {
-                        if !c.is_scene("game") { return; }
-                        c.set_var("settings_dragging", -1i32);
-                    });
-
-                    canvas.set_var("pause_ui_mouse_registered", true);
-                }
-                canvas.set_var("pause_btns_registered", true);
-            }
+            // Pause menu + touch input handlers are registered at App::new,
+            // not here — see `register_pause_ui_handlers`.
 
             // ── Main tick (register once) ────────────────────────────────
             let tick_registered = matches!(
@@ -2520,5 +2761,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             });
             canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
             canvas.remove_emitter(PLAYER_TRAIL_MID_NAME);
+
+            // Put the frame back, whatever the reason for leaving.
+            //
+            // The night-mode post pass is a SINGLE GLOBAL SLOT, so a scene that
+            // leaves it on hands a darkened, bloomed frame to every scene after
+            // it. Dying during an eclipse or a boss's darkness phase did
+            // exactly that: the death path loads the gameover scene directly
+            // and never went near `end_night_mode`, so the shader stayed on.
+            //
+            // Here rather than on each exit path, because there are four of
+            // them (fall, sun, oxygen, menu) and the next one added would not
+            // know it had to do this either.
+            super::eclipse::end_night_mode(canvas);
         })
 }

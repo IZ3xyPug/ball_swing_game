@@ -1624,6 +1624,10 @@ fn a_short_override_still_finishes_the_run() {
     set_boss_order_override(Some(vec![BossKind::Serpent]));
     assert_eq!(boss_kind_for_index(0), BossKind::Serpent, "slot 1 honours the override");
     assert_eq!(
+        // Named, not BOSS_ROSTER[1]. Indexing the roster makes this assertion
+        // agree with any reordering of it, which is the one thing it is here to
+        // catch — the shipped run structure is a design decision, not whatever
+        // the array happens to say today.
         boss_kind_for_index(1), BossKind::Conductor,
         "past the override, the shipped order resumes"
     );
@@ -1889,6 +1893,104 @@ fn the_headless_driver_can_pin_every_boss_in_the_roster() {
     }
     assert!(crate::headless::pin_boss("nonesuch").is_err());
     set_boss_order_override(None);
+}
+
+#[test]
+fn no_asset_is_decoded_from_a_build_machine_path() {
+    use std::path::Path;
+    // `concat!(env!("CARGO_MANIFEST_DIR"), "/assets/x.gif")` bakes an absolute
+    // path from the machine that COMPILED the binary. It works there and
+    // nowhere else — and on Android there is no path that would work at all,
+    // because APK assets are reached through the AssetManager rather than
+    // through `std::fs`. With `panic = "abort"` in the release profile, one
+    // `std::fs::read(...).expect(...)` on such a path is not a missing texture,
+    // it is the process dying at launch. That is what the black screen was.
+    //
+    // Audio is the deliberate exception: the sound backend opens its file
+    // lazily on a worker thread and treats a failure as silence, so a path that
+    // resolves to nothing costs the sound and not the app. Embedding 45 MB of
+    // music in the binary to avoid that would be the worse trade.
+    //
+    // Scanned from source because the rule is about how a value is USED, and
+    // nothing in the type system distinguishes a path that will exist at
+    // runtime from one that will not.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders: Vec<String> = Vec::new();
+
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") { continue; }
+            let rel = path.strip_prefix(&root).unwrap_or(&path)
+                .to_string_lossy().replace('\\', "/");
+            // This file describes the rule in prose.
+            if rel == "sim_tests.rs" { continue; }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim();
+                if t.starts_with("//") || t.starts_with("///") { continue; }
+                // Decoding an image from a PATH, in any of the forms that exist
+                // in this codebase.
+                let reads_path = t.contains("image::open(")
+                    || (t.contains("std::fs::read(") && t.contains("ASSET_"))
+                    || (t.contains("File::open(") && t.contains("ASSET_"));
+                if reads_path {
+                    offenders.push(format!("{rel}:{} {t}", n + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "assets decoded from a filesystem path — embed them with include_bytes! \
+         instead, or they crash on every machine that did not compile them:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn every_touch_control_is_reachable_and_unambiguous() {
+    // Touch controls are TAPS ON TARGETS, not gestures.
+    //
+    // Three rounds of swipe recognition failed on device for three different
+    // real reasons — prism converts vertical drags to kinetic scroll before the
+    // game sees them, the release position is not where the finger ended, and a
+    // threshold low enough to catch a real flick catches every wobble too. Taps
+    // have none of those failure modes, and the menu's other buttons have
+    // worked from the first build using exactly this path.
+    //
+    // What can still go wrong with a tap is the target: too small to hit, or
+    // overlapping something else. That is what this pins.
+
+    // The pause control must not overlap the swing half. The right half is held
+    // down for most of a run, so anything there competes with the game's main
+    // control for the same finger.
+    let (px, py, pw, ph) = PAUSE_TOUCH_BTN;
+    assert!(
+        px + pw < VW * 0.5,
+        "the pause control reaches into the swing half (ends at {})",
+        px + pw
+    );
+    assert!(!mobile_swing_zone_contains(px, py));
+    assert!(!mobile_swing_zone_contains(px + pw, py + ph));
+
+    // And it must be big enough to hit. A touch target below roughly 9mm is
+    // unreliable; on a 3840-unit-wide virtual screen shown on a ~145mm-wide
+    // phone, 9mm is about 240 virtual units — but the control only needs to be
+    // hit deliberately, so 180 is the floor here.
+    assert!(pw >= 180.0 && ph >= 180.0, "pause control {pw}x{ph} is too small for a thumb");
+
+    // It must also be ON the screen, with room to spare from the edge — a
+    // control flush against the bezel is one the palm triggers.
+    assert!(px >= 20.0 && py >= 20.0, "pause control is jammed into the corner");
+    assert!(px + pw <= VW && py + ph <= VH, "pause control is off screen");
 }
 
 #[test]

@@ -70,9 +70,14 @@ pub fn push_mega_fx(
     c.push_mega_sprite(sprite);
 }
 
-/// Convenience: a plain white 1×1 texture for pure-effect mega sprites.
+/// The shared 1x1 white pixel every mega effect is drawn from.
+///
+/// Delegates to the engine's one instance rather than allocating. A fresh `Arc`
+/// here is a fresh atlas key, so building one per call cost a texture upload
+/// EVERY FRAME for as long as an effect was attached — the buff aura calls this
+/// from `tick_buff` on every tick it is active.
 pub fn flat_white() -> Arc<image::RgbaImage> {
-    Arc::new(image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255])))
+    quartz::white_pixel()
 }
 
 /// Push an animated-VFX **electricity** sprite over a world position/scale.

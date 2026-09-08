@@ -288,7 +288,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // ── Background images ────────────────────────────────────────────────
     let bg_texture_w = VW as u32;
     let bg_texture_h = VH as u32;
-    let bg_zone_start = image::open(ASSET_AURORA_EARTH_GIF)
+    let bg_zone_start = image::load_from_memory(ASSET_AURORA_EARTH_GIF)
         .map(|img| {
             image::imageops::resize(
                 &img.to_rgba8(),
@@ -434,6 +434,41 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     pause_overlay.visible = false;
     pause_overlay.layer = 10_000;
     pause_overlay.ignore_zoom = true;
+
+    // The in-game pause control (Android only; hidden on desktop, which has P).
+    //
+    // Two faint bars in a rounded box, at low alpha. Deliberately quiet: a
+    // bright PAUSE button in the corner of every frame is read past a thousand
+    // times to be used once, and it was the atmosphere cost that got the last
+    // one removed. This one has to be findable, not noticeable.
+    let pause_touch_btn = {
+        let (bx, by, bw, bh) = PAUSE_TOUCH_BTN;
+        let (w, h) = (bw as u32, bh as u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            img.put_pixel(px, py, image::Rgba([180, 210, 245, 46]));
+        }}
+        // Two vertical bars.
+        let bar_w = w / 7;
+        let (y0, y1) = (h / 4, h - h / 4);
+        for py in y0..y1 {
+            for px in 0..bar_w {
+                img.put_pixel(w / 3 - bar_w / 2 + px, py, image::Rgba([225, 240, 255, 190]));
+                img.put_pixel(2 * w / 3 - bar_w / 2 + px, py, image::Rgba([225, 240, 255, 190]));
+            }
+        }
+        let mut obj = GameObject::new_rect(ctx, "pause_touch_btn".into(),
+            Some(Image {
+                shape: ShapeType::RoundedRectangle(0.0, (bw, bh), 0.0, bh * 0.22),
+                image: img.into(), color: None,
+            }),
+            (bw, bh), (bx, by), vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        obj.visible = false;
+        obj.layer = 9_500; // under the pause menu, over the world
+        obj.ignore_zoom = true;
+        obj.gravity = 0.0;
+        obj
+    };
 
     let flip_timer_hud     = hud_obj(ctx, "flip_timer",     504.0, 118.0, VW * 0.5 - 252.0, 560.0,
         Some(rect_img(504.0, 118.0, flip_timer_img(FLIP_DURATION, FLIP_DURATION))));
@@ -875,8 +910,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     }
 
     // ── Main-world decorative asteroid pool ──────────────────────────────
-    let asteroid_space_img: image::RgbaImage = image::open(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.gif"))
-        .or_else(|_| image::open(ASSET_ASTEROID))
+    let asteroid_space_img: image::RgbaImage =
+        image::load_from_memory(include_bytes!("../../../assets/asteroid.gif"))
+            .or_else(|_| image::load_from_memory(ASSET_ASTEROID))
         .map(|img| img.into_rgba8())
         .unwrap_or_else(|_| solid(120, 120, 132, 255));
     let asteroid_anim_template = tint_asteroid_gif_brownish_red(
@@ -985,7 +1021,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     scene = scene.with_object("space_welcome_text", space_welcome_text);
 
     // Pause overlay last so it renders above everything.
-    scene = scene.with_object("pause_overlay", pause_overlay);
+    scene = scene.with_object("pause_overlay", pause_overlay)
+        .with_object("pause_touch_btn", pause_touch_btn);
 
     // ── Pause menu buttons (above overlay) ───────────────────────────────
     let pause_btn_w: f32 = 700.0;
@@ -1019,6 +1056,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let pause_restart_btn = make_pause_btn(ctx, "pause_restart_btn", 60, 120, 200, "RESTART", 1000.0);
     let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", 80, 80, 100, "SETTINGS", 1220.0);
     let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", 170, 65, 65, "MENU", 1440.0);
+
+    // No on-screen SWING or PAUSE buttons. Swinging is the whole right half of
+    // the screen and pausing is a swipe — see the touch-control block in
+    // `constants.rs`. A permanent button in the corner of a space game is read
+    // past constantly and pressed once.
 
     let mut start_prompt_text = GameObject::build("start_prompt_text")
         .size(1300.0, 120.0)

@@ -22,4 +22,4 @@ mod upgrades;
 pub mod space_zone;
 mod build_scene;
 
-pub use build_scene::build_game_scene;
+pub use build_scene::{build_game_scene, register_pause_ui_handlers};

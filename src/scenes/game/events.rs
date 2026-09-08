@@ -224,7 +224,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             }
 
             c.run(Action::Show { target: Target::name("rope") });
-            c.play_sound_with(ASSET_CARTOON_CAT, SoundOptions::new().volume(sfx_vol(c, 0.6)));
+            c.play_sound_bytes_with(ASSET_CARTOON_CAT, SoundOptions::new().volume(sfx_vol(c, 0.6)));
         }
     });
 
@@ -246,8 +246,20 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
 pub fn register_mouse_handlers(canvas: &mut Canvas) {
     let mouse_registered = matches!(canvas.get_var("game_mouse_registered"), Some(Value::Bool(true)));
     if mouse_registered { return; }
-    canvas.on_mouse_press(move |c, btn, _pos| {
+    canvas.on_mouse_press(move |c, btn, pos| {
         if btn != MouseButton::Left { return; }
+        if mobile_controls_enabled() {
+            // `pos` is already VIRTUAL — the engine divides by the layout scale
+            // and subtracts the safe-area padding before calling us (see
+            // `Canvas::screen_to_virtual`). The previous version multiplied by
+            // the camera zoom on top of that, which is neither a screen->virtual
+            // conversion nor a virtual->world one, and put the touch somewhere
+            // that was only correct at zoom 1.
+            let held = !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true)))
+                && mobile_swing_zone_contains(pos.0, pos.1);
+            c.set_var("mouse_left_held", held);
+            return;
+        }
         c.set_var("mouse_left_held", true);
     });
     canvas.on_mouse_release(move |c, btn, _pos| {

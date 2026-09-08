@@ -16,6 +16,7 @@ quartz = { path = "../quartz"}
 rodio = "0.21.1"
 rand = "0.9.2"
 rgb = "0.8.52"
+log = "0.4.27"
 
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -32,6 +33,35 @@ path = "src/bin/headless.rs"
 [package.metadata.android]
 package = "com.orange.pkg"
 build_targets = [ "aarch64-linux-android", "armv7-linux-androideabi" ]
+
+# The canvas is built with CanvasMode::Landscape, so the activity has to be
+# landscape too. Set here rather than patched into the generated manifest by a
+# build script: a text edit applied after cargo-apk has already packaged is a
+# step that silently stops happening the moment anyone builds the normal way.
+[package.metadata.android.application]
+# Fullscreen: no title bar and no status bar.
+#
+# This is the part that can be done declaratively. Hiding the NAVIGATION bar as
+# well needs `WindowInsetsController` at runtime, which is a JNI call this app
+# has no Java side for — so the gesture pill or button row stays until that is
+# wired up.
+theme = "@android:style/Theme.NoTitleBar.Fullscreen"
+
+[package.metadata.android.application.activity]
+orientation = "landscape"
+
+# `cargo apk build --release` needs a keystore or it ABORTS AFTER COMPILING —
+# the .so and the manifest land in target/release/apk and no APK is ever
+# produced. That failure is what build_android.sh was swallowing with `set +e`
+# before hand-assembling an APK out of the intermediates.
+#
+# This is the standard Android debug keystore, which is not a secret: it exists
+# on every machine with the SDK installed, its password is literally "android",
+# and Google Play refuses anything signed with it. It is here so a test build
+# completes, not to ship with.
+[package.metadata.android.signing.release]
+path = "debug.keystore"
+keystore_password = "android"
 
 [profile.dev.package."*"]
 # Full optimization for deps (image, quartz, etc.) — fast rendering without changing tick rate.

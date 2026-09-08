@@ -28,10 +28,15 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // Quantize for dirty checks (sign-aware so display refreshes on flip)
     let q_dist_fill = (dist_fill * 1000.0) as u32;
-    // Quantize to 5-pixel resolution — x/y meters only need to refresh when
-    // the displayed value visibly changes, not every single tick.
-    let q_py        = (display_py / 5.0) as i32 * 5;
-    let q_px        = (px / 5.0) as i32 * 5;
+    // Quantize the x/y meters COARSELY.
+    //
+    // Each refresh rasterises a 420x86 image and uploads it as a new texture,
+    // and the player moves at up to 50px a tick — so a 5px bucket changed on
+    // essentially every frame, rebuilding and re-uploading both meters
+    // continuously for a readout nobody can read that fast anyway. 25px is
+    // still finer than the eye tracks on a moving coordinate.
+    let q_py        = (display_py / 25.0) as i32 * 25;
+    let q_px        = (px / 25.0) as i32 * 25;
 
     let _dirty_dist    = q_dist_fill     != s.hud_last_dist_fill;
     let dirty_coins    = coins           != s.hud_last_coins;
@@ -80,24 +85,23 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let coin_alpha = s.hud_coin_alpha;
     let dirty_alpha = coin_alpha != s.hud_last_coin_alpha;
 
-    // Rebuild base image whenever coin count changes
+    // The counter fades with a TINT, not by rebuilding its pixels.
+    //
+    // The fade runs for 300 ticks — five seconds — and it used to clone a
+    // 640x168 image every one of those frames, write all 107,520 pixels' alpha
+    // on the CPU, and hand the result to `set_image` as a NEW Arc, which the
+    // atlas sees as an unfamiliar texture and uploads. That is roughly 129 MB
+    // of texture upload and 32 million pixel writes for ONE coin, and it is why
+    // picking one up hitched.
+    //
+    // It had to work that way because the tint used to REPLACE a sprite's rgb,
+    // so it could not dim a multicoloured image. The tint multiplies now (see
+    // `image/rectangle.wgsl`), so the alpha is just a tint and the base texture
+    // is uploaded once for a given coin count and then left alone.
     if dirty_coins || s.hud_coin_base_img.is_none() {
-        s.hud_coin_base_img = Some(coin_counter_img(coins));
+        s.hud_coin_base_img = Some(std::sync::Arc::new(coin_counter_img(coins)));
     }
-
-    // Build alpha-applied image when coin count or alpha changes
-    let update_coin_img = if dirty_coins || dirty_alpha {
-        let base = s.hud_coin_base_img.as_ref().unwrap();
-        let mut img = base.clone();
-        if coin_alpha < 255 {
-            for pixel in img.pixels_mut() {
-                pixel[3] = ((pixel[3] as u32 * coin_alpha as u32) / 255) as u8;
-            }
-        }
-        Some(img)
-    } else {
-        None
-    };
+    let coin_img = s.hud_coin_base_img.clone();
 
     // Update tracking
     s.hud_last_dist_fill    = q_dist_fill;
@@ -117,8 +121,13 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if let Some(obj) = c.get_game_object_mut("coin_counter") {
         obj.position = (26.0, 24.0);
         obj.visible = coin_alpha > 0;
-        if let Some(img) = update_coin_img {
-            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (640.0, 168.0), 0.0), image: img.into(), color: None });
+        if let Some(img) = coin_img {
+            obj.set_image(Image {
+                shape: ShapeType::Rectangle(0.0, (640.0, 168.0), 0.0),
+                image: img,
+                // The fade. Free — no pixels touched, no upload.
+                color: Some(Color(255, 255, 255, coin_alpha)),
+            });
         }
     }
     // Animated catcoingold icon — show when coin counter is visible, no tint (avoids white box).

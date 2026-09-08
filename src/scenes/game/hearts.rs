@@ -39,23 +39,49 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     c.set_var("player_buff", Value::I32(s.player_buff as i32));
     c.set_var("buff_timer", Value::I32(s.buff_timer as i32));
-    if s.buff_timer == 0 {
+
+    // The aura is released whenever the buff is NOT active — not on the frame
+    // the timer happens to tick from 1 to 0.
+    //
+    // Releasing on that transition assumed the timer is the only thing that
+    // ever ends a buff. It is not: spending the last absorption sets
+    // `player_buff` and `buff_timer` to zero directly, and so does anything
+    // that resets run state. The next tick then returned at the `timer == 0`
+    // guard above without ever releasing the effect, and the player kept
+    // wearing it — through a boss kill, through the teleport back to the lane,
+    // until the NEXT buff expired on a clean timer and took the transition
+    // path. Deriving the state every frame cannot miss an exit.
+    //
+    // `buff_player_fx` records that WE attached it: the player's effect slot is
+    // shared with the solar shield (see `solar.rs`), so releasing one we do not
+    // own would take the shield's dome down with it.
+    let active = s.buff_active();
+    if !active {
+        // Retire the buff outright, do not just stop drawing it.
+        //
+        // This function was the ONLY place that treated the buff as
+        // `player_buff > 0 && buff_timer > 0`. Everywhere else — every boss,
+        // the solar shield, the weakpoint checks — asks `player_buff > 0` on
+        // its own. Leaving `player_buff` set when the timer lapsed therefore
+        // ended the buff visually while leaving it in force mechanically: the
+        // Colossus kept absorbing hits into a buff that had already expired,
+        // so the player stopped taking damage. `buff_absorbs` goes with it, or
+        // the next real buff starts with the previous one's leftovers.
+        let owned = std::mem::take(&mut s.buff_player_fx);
+        s.retire_buff();
+        drop(s);
+        if owned {
+            if let Some(p) = c.get_game_object_mut("player") {
+                p.clear_glow();
+            }
+            super::fx::clear_object_fx(c, "player");
+        }
         return;
     }
     s.buff_timer -= 1;
-    if s.buff_timer == 0 {
-        s.player_buff = 0;
-        drop(s);
-        if let Some(p) = c.get_game_object_mut("player") {
-            p.clear_glow();
-        }
-        // An attached effect lives on the object until released.
-        super::fx::clear_object_fx(c, "player");
-        return;
-    }
     // Buff is still active: render the "electricity ball" mega-shader effect over
     // the player while the boss-damage buff is in effect.
-    if s.player_buff > 0 {
+    if active {
         // ATTACHED to the player rather than pushed, so it rides the player's
         // own transform instead of a separately reconstructed one.
         let d = c
@@ -67,6 +93,12 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             (d * BUFF_PLAYER_FX_SCALE, d * BUFF_PLAYER_FX_SCALE),
             BUFF_PLAYER_FX_TINT,
         );
+        // Through the guard we already hold. `st.lock()` here re-locked the
+        // SAME std::sync::Mutex on the same thread while `s` was still alive —
+        // it is not reentrant, so the main thread deadlocked the instant a buff
+        // turned on. Android reports that as "isn't responding" and kills the
+        // app, which is why it read as a crash on grabbing a buff node.
+        s.buff_player_fx = true;
     }
     if s.buff_hit_flash > 0 {
         s.buff_hit_flash -= 1;

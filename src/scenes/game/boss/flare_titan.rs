@@ -50,7 +50,7 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
     drop(s);
 
-    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+    let buffed = { let g = st.lock().unwrap(); g.buff_active() };
 
     // ── Flare cycle ──
     // idle → warning (flare_warn) → active (flare_active) → weakpoint window

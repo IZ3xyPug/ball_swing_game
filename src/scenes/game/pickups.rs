@@ -310,7 +310,7 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        c.play_sound_with(ASSET_COIN_SFX_3, SoundOptions::new().volume(sfx_vol(c, 0.2)));
+        c.play_sound_bytes_with(ASSET_COIN_SFX_3, SoundOptions::new().volume(sfx_vol(c, 0.2)));
     }
 }
 
@@ -328,7 +328,7 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &I
     park_collected(c, &collected, -3800.0);
     if !collected.is_empty() {
         trigger_flip(c, st, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
-        c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2)));
+        c.play_sound_bytes_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2)));
         if let Some(cam) = c.camera_mut() {
             cam.flash_with(Color(160, 50, 220, 200), 0.50, FlashMode::Pulse, FlashEase::Sharp, 0.85, 0.02);
             cam.shake(60.0, 0.60);
@@ -358,7 +358,7 @@ fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     drop(s);
     park_collected(c, &collected, -3875.0);
-    if !collected.is_empty() { c.play_sound_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2))); }
+    if !collected.is_empty() { c.play_sound_bytes_with(ASSET_COIN_SFX_2, SoundOptions::new().volume(sfx_vol(c, 0.2))); }
 }
 
 // ── Flip timer ──────────────────────────────────────────────────────────────

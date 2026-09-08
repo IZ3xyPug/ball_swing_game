@@ -93,6 +93,13 @@ pub struct EpisodeReport {
     /// have to be zero — the player is airborne between nodes by design — but a
     /// run of consecutive starved frames is a hole in the level.
     pub starved_frames: u64,
+    /// Frames on which `player_buff > 0` while `buff_timer == 0`.
+    ///
+    /// The buff is read as `player_buff > 0` by every boss, the solar shield
+    /// and the weakpoint checks, but its lifetime is `buff_timer`. If the two
+    /// ever disagree the player is mechanically buffed with no buff running —
+    /// which is how the Colossus stopped dealing damage. Must be 0.
+    pub buff_desync_frames: u64,
     pub airborne_frames: u64,
     /// Longest unbroken run of starved frames in the episode.
     pub worst_starve_streak: u64,
@@ -159,6 +166,8 @@ pub struct AggregateReport {
     pub weakpoint_hits: u64,
     pub death_scene_histogram: std::collections::HashMap<String, u64>,
     pub starved_frames: u64,
+    /// Total frames where the buff's two fields disagreed. Must be 0.
+    pub buff_desync_frames: u64,
     pub airborne_frames: u64,
     pub worst_starve_streak: u64,
     pub flares_fired: i32,
@@ -491,6 +500,7 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
     let mut weakpoint_check_ticks: u32 = 0;
     let mut death_scene: Option<String> = None;
     let mut starved_frames: u64 = 0;
+    let mut buff_desync_frames: u64 = 0;
     let mut airborne_frames: u64 = 0;
     let mut starve_streak: u64 = 0;
     let mut worst_starve_streak: u64 = 0;
@@ -517,6 +527,16 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
             // its frames are neither in-band nor a hole in the level — counting
             // them made a run that reached space look twice as starved as one
             // that did not.
+            // The buff's two fields must never disagree: `player_buff > 0` is
+            // what every consumer tests, `buff_timer` is what expires it.
+            {
+                let pb = get_i32_or(&canvas, "player_buff", 0);
+                let bt = get_i32_or(&canvas, "buff_timer", 0);
+                if pb > 0 && bt <= 0 {
+                    buff_desync_frames += 1;
+                }
+            }
+
             let in_space = matches!(canvas.get_var("in_space_mode"), Some(Value::Bool(true)));
             let in_band = !in_space
                 && o.py >= HOOK_Y_MIN - ROPE_LEN_MAX
@@ -768,6 +788,7 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         hearts_end,
         panicked: None,
         starved_frames,
+        buff_desync_frames,
         airborne_frames,
         worst_starve_streak,
         flares_fired: get_i32_or(&canvas, "flares_fired", 0),
@@ -814,6 +835,7 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
                 hearts_end: 0,
                 panicked: Some(msg),
                 starved_frames: 0,
+                buff_desync_frames: 0,
                 airborne_frames: 0,
                 worst_starve_streak: 0,
                 flares_fired: 0,
@@ -857,6 +879,7 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
         }
         agg.max_zone = agg.max_zone.max(ep.zone);
         agg.starved_frames += ep.starved_frames;
+        agg.buff_desync_frames += ep.buff_desync_frames;
         agg.airborne_frames += ep.airborne_frames;
         agg.worst_starve_streak = agg.worst_starve_streak.max(ep.worst_starve_streak);
         agg.flares_fired += ep.flares_fired;

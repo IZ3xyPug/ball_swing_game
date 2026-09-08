@@ -312,7 +312,7 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             player_is_sheltered(c, &s),
             s.ticks,
             s.shield_fx_attached.clone(),
-            s.player_buff > 0,
+            s.buff_active(),
         )
     };
     let mut shielded_now: Vec<String> = Vec::new();

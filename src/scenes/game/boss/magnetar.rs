@@ -49,7 +49,7 @@ pub(crate) fn tick_magnetar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
     drop(s);
 
-    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+    let buffed = { let g = st.lock().unwrap(); g.buff_active() };
 
     // ── Charge cycle ──
     // idle (flare_cooldown) → pull window (boss_pull_ticks) → weakpoint window.

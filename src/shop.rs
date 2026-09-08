@@ -369,7 +369,8 @@ pub fn show_categories(c: &mut Canvas) {
         set_visible(c, &format!("shop_cat_label_{i}"), true);
         set_visible(c, &format!("shop_cat_sub_{i}"), true);
     }
-    for name in ["shop_card_strip", "shop_instr_text", "shop_select_btn", "shop_select_text"] {
+    for name in ["shop_card_strip", "shop_instr_text", "shop_select_btn", "shop_select_text",
+                 "shop_prev_btn", "shop_next_btn"] {
         set_visible(c, name, false);
     }
     for s in 0..NUM_SLOTS {
@@ -410,7 +411,8 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
     }
 
     // All carousel categories, cosmetic and purchasable alike.
-    for name in ["shop_card_strip", "shop_instr_text", "shop_select_btn", "shop_select_text"] {
+    for name in ["shop_card_strip", "shop_instr_text", "shop_select_btn", "shop_select_text",
+                 "shop_prev_btn", "shop_next_btn"] {
         set_visible(c, name, true);
     }
     for s in 0..NUM_SLOTS {
@@ -610,7 +612,21 @@ pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
 }
 
 fn bright_background(w: f32, h: f32) -> Image {
-    star_field(w as u32, h as u32, STARFIELD_STAR_COUNT, 0xCAFE_BABE)
+    // Rasterised at a bounded width and stretched, like the menu's aurora.
+    //
+    // At the quad's own size this was a 4640 x 2160 procedural starfield — ten
+    // million pixels, and past the 4096 texture limit of most phones, so it
+    // took the engine's downscale path on upload. The star COUNT scales with
+    // the area so the density on screen is unchanged; the stars themselves come
+    // out slightly larger, which on a background of dots is not a look anyone
+    // can miss it having.
+    let scale = (crate::menu::MENU_BG_MAX_W / w).min(1.0);
+    let (tw, th) = ((w * scale) as u32, (h * scale) as u32);
+    let count = ((STARFIELD_STAR_COUNT as f32) * scale * scale).round().max(1.0) as u32;
+    let mut img = star_field(tw, th, count, 0xCAFE_BABE);
+    // Keep the quad at its full size; only the texture is smaller.
+    img.shape = ShapeType::Rectangle(0.0, (w, h), 0.0);
+    img
 }
 
 // ── Public API for menu.rs ─────────────────────────────────────────────────
@@ -739,6 +755,12 @@ pub fn tick_shop(c: &mut Canvas) {
 
 // ── Live item preview (orbit + trail) ────────────────────────────────────────
 
+/// How many dots the preview trail is made of.
+pub const SHOP_TRAIL_DOTS: usize = 18;
+/// Radius the shared trail-dot texture is rasterised at. The dots are stretched
+/// to their real size by the quad, so one texture serves every size.
+const TRAIL_DOT_TEX_R: u32 = 34;
+
 /// Centre of the shop preview pane.
 fn preview_center() -> (f32, f32) { (VW * 0.5, 250.0) }
 
@@ -846,6 +868,16 @@ fn energy_hook_preview(color: (u8, u8, u8), size: (f32, f32)) -> Option<Animated
     anim
 }
 
+
+/// Hide every pooled trail dot. The dots persist until told otherwise, so every
+/// early return out of the preview has to clear them or they hang in the air
+/// over whatever comes next.
+fn hide_trail_dots(c: &mut Canvas) {
+    for i in 0..SHOP_TRAIL_DOTS {
+        set_visible(c, &format!("shop_trail_dot_{i}"), false);
+    }
+}
+
 /// Per-frame shop preview: an orbiting ball with the selected character/trail
 /// colour, plus a background preview for the background category. The trail
 /// mirrors the gameplay loop's particle trail (round, tapering, trailing behind
@@ -859,6 +891,7 @@ pub fn tick_shop_preview(c: &mut Canvas) {
         set_visible(c, "shop_preview_ball", false);
         set_visible(c, "shop_preview_trail", false);
         set_visible(c, "shop_preview_bg", false);
+        hide_trail_dots(c);
         return;
     }
     set_visible(c, "shop_preview_panel", true);
@@ -870,6 +903,7 @@ pub fn tick_shop_preview(c: &mut Canvas) {
         set_visible(c, "shop_preview_ball", false);
         set_visible(c, "shop_preview_trail", false);
         set_visible(c, "shop_preview_bg", true);
+        hide_trail_dots(c);
         if let Some(obj) = c.get_game_object_mut("shop_preview_bg") {
             let (bw, bh) = (700.0, 260.0);
             obj.size = (bw, bh);
@@ -883,6 +917,7 @@ pub fn tick_shop_preview(c: &mut Canvas) {
     // Ropes category: preview the recoloured energy-hook animation, not a ball.
     if cat == 1 {
         set_visible(c, "shop_preview_ball", false);
+        hide_trail_dots(c);
         let c2 = SHOP_ROPE_COLORS[sel.min(SHOP_ROPE_COLORS.len() - 1)];
         if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
             // energy_hook_1.gif is 32×64 (1:2) — show it at a beam aspect.
@@ -949,26 +984,32 @@ pub fn tick_shop_preview(c: &mut Canvas) {
         }
         t.iter().cloned().collect::<Vec<_>>()
     };
-    if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
-        let w = 700u32;
-        let h = 300u32;
-        let mut img = image::RgbaImage::new(w, h);
-        let max_r = 34.0_f32; // trail radius sized so it reads clearly behind the smaller circles
-        let len = points.len().max(2) as f32;
-        for (i, p) in points.iter().enumerate() {
-            let t = (i as f32 + 1.0) / len;
-            let px = (p.0 - pcx) + w as f32 * 0.5;
-            let py = (p.1 - pcy) + h as f32 * 0.5;
-            let r = max_r * (0.30 + 0.70 * t);
-            let alpha = (36.0 + t * 200.0).min(255.0) as u8;
-            draw_circle_alpha(&mut img, px, py, r, [trail_rgb.0, trail_rgb.1, trail_rgb.2, alpha]);
+    // Place the pooled dots. One shared, cached circle texture; only the
+    // position, size and tint change, so nothing is rasterised or uploaded.
+    let max_r = 34.0_f32; // sized to read clearly behind the smaller circles
+    let len = points.len().max(2) as f32;
+    for i in 0..SHOP_TRAIL_DOTS {
+        let name = format!("shop_trail_dot_{i}");
+        match points.get(i) {
+            Some(p) => {
+                let t = (i as f32 + 1.0) / len;
+                let r = max_r * (0.30 + 0.70 * t);
+                let alpha = (36.0 + t * 200.0).min(255.0) as u8;
+                if let Some(obj) = c.get_game_object_mut(&name) {
+                    obj.set_image(Image {
+                        shape: ShapeType::Ellipse(0.0, (r * 2.0, r * 2.0), 0.0),
+                        image: circle_cached(TRAIL_DOT_TEX_R, 255, 255, 255),
+                        color: Some(Color(trail_rgb.0, trail_rgb.1, trail_rgb.2, alpha)),
+                    });
+                    obj.size = (r * 2.0, r * 2.0);
+                    obj.position = (p.0 - r, p.1 - r);
+                    obj.visible = true;
+                }
+            }
+            None => set_visible(c, &name, false),
         }
-        obj.animated_sprite = None; // clear any lingering rope-animation sprite
-        obj.position = (pcx - w as f32 * 0.5, pcy - h as f32 * 0.5);
-        obj.size = (w as f32, h as f32);
-        obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None });
-        obj.visible = true;
     }
+    set_visible(c, "shop_preview_trail", false);
 }
 
 // ── Scene extender ─────────────────────────────────────────────────────────
@@ -992,13 +1033,19 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
     // Carousel card strip (hidden until a category is chosen)
     let strip_h = (CARD_H + 200) as u32;
     let card_strip = {
-        let sw = bg_w as u32;
+        // A flat panel with two hairlines. Rasterised at a small fixed width
+        // and stretched, not at the quad's 4640px — that was 4.3 million pixels
+        // written one at a time through `put_pixel` for a solid colour, and
+        // over the texture limit besides. Only the height needs real
+        // resolution, because the hairlines are horizontal.
+        let sw = 8u32;
         let mut img = image::RgbaImage::new(sw, strip_h);
         for py in 0..strip_h { for px in 0..sw {
             img.put_pixel(px, py, image::Rgba([10, 28, 50, 180]));
         }}
         draw_rect(&mut img, 0, 0, sw, 3, [60, 100, 160, 180]);
         draw_rect(&mut img, 0, strip_h - 3, sw, 3, [60, 100, 160, 180]);
+        let sw = bg_w as u32;
         let mut obj = GameObject::new_rect(ctx, "shop_card_strip".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (sw as f32, strip_h as f32), 0.0), image: img.into(), color: None }),
             (sw as f32, strip_h as f32),
@@ -1040,6 +1087,49 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         obj.visible = false;
         obj
     };
+    // Carousel arrows. REAL OBJECTS with their own click events, not a region
+    // of a bigger widget: the shop half sits at world y 0..VH with the camera at
+    // y=0, so world and virtual coordinates coincide there and the engine's own
+    // hit testing works — which is why the category cards have always been
+    // tappable while everything hand-rolled was not.
+    //
+    // Sized for a thumb, not for the glyph. These are the only way to move
+    // through a category without a keyboard.
+    let arrow_w = 260.0f32;
+    let arrow_h = 360.0f32;
+    let arrow_y = CARD_CENTER_Y - arrow_h * 0.5;
+    let make_arrow = |ctx: &mut Context, name: &str, x: f32, left: bool| {
+        let (w, h) = (arrow_w as u32, arrow_h as u32);
+        let mut img = image::RgbaImage::new(w, h);
+        for py in 0..h { for px in 0..w {
+            img.put_pixel(px, py, image::Rgba([18, 40, 70, 150]));
+        }}
+        // A chevron, drawn as two strokes so it reads at a glance.
+        let cx = w as f32 * 0.5;
+        let cy = h as f32 * 0.5;
+        for t in 0..(h / 3) {
+            let dy = t as f32;
+            let dx = if left { dy } else { -dy };
+            for thick in 0..14i32 {
+                let px0 = (cx + dx * 0.8 + thick as f32 - 7.0).round();
+                for sign in [-1.0f32, 1.0] {
+                    let py0 = (cy + sign * dy).round();
+                    if px0 >= 0.0 && px0 < w as f32 && py0 >= 0.0 && py0 < h as f32 {
+                        img.put_pixel(px0 as u32, py0 as u32, image::Rgba([190, 225, 255, 255]));
+                    }
+                }
+            }
+        }
+        let mut obj = GameObject::new_rect(ctx, name.to_string().into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (arrow_w, arrow_h), 0.0), image: img.into(), color: None }),
+            (arrow_w, arrow_h), (x, arrow_y),
+            vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        obj.visible = false;
+        obj
+    };
+    let shop_prev_btn = make_arrow(ctx, "shop_prev_btn", 120.0, true);
+    let shop_next_btn = make_arrow(ctx, "shop_next_btn", VW - 120.0 - arrow_w, false);
+
     let mut select_text_obj = GameObject::build("shop_select_text")
         .size(380.0, 110.0)
         .position(VW / 2.0 - 190.0, strip_bottom_y + 30.0 + (110.0 - 36.0) / 2.0)
@@ -1077,6 +1167,8 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         .with_object("shop_card_strip",  card_strip)
         .with_object("shop_title_text",  title_obj)
         .with_object("shop_instr_text",  instr_obj)
+        .with_object("shop_prev_btn",    shop_prev_btn)
+        .with_object("shop_next_btn",    shop_next_btn)
         .with_object("shop_select_btn",  select_btn)
         .with_object("shop_select_text", select_text_obj)
         .with_object("shop_back_btn",    back_btn)
@@ -1101,11 +1193,39 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         preview_ball.layer = 46; // above the trail
         preview_ball.visible = false;
 
+        // The trail is a POOL OF DOTS, not one rasterised image.
+        //
+        // It used to allocate a fresh 700x300 RgbaImage every frame, draw
+        // eighteen circles into it on the CPU, and hand it to `set_image` as a
+        // NEW `Arc` — so the atlas saw an unfamiliar pointer each frame and
+        // uploaded 840 KB to the GPU and built a new bind group, sixty times a
+        // second, for a decoration. That is the whole reason the shop preview
+        // chugged.
+        //
+        // Pooled sprites share one cached circle texture and only move, which
+        // is also how the real in-game trail works.
         let mut preview_trail = GameObject::new_rect(ctx, "shop_preview_trail".into(),
             None::<Image>, (600.0, 300.0), (pcx - 300.0, pcy - 150.0),
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
         preview_trail.layer = 44; // behind the ball
         preview_trail.visible = false;
+
+        let mut trail_dots: Vec<(String, GameObject)> = Vec::new();
+        for i in 0..SHOP_TRAIL_DOTS {
+            let name = format!("shop_trail_dot_{i}");
+            let d = (TRAIL_DOT_TEX_R * 2) as f32;
+            let mut dot = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image {
+                    shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                    image: circle_cached(TRAIL_DOT_TEX_R, 255, 255, 255),
+                    color: Some(Color(255, 255, 255, 200)),
+                }),
+                (d, d), (pcx - d * 0.5, pcy - d * 0.5),
+                vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+            dot.layer = 44; // behind the ball, same as the old trail image
+            dot.visible = false;
+            trail_dots.push((name, dot));
+        }
 
         let mut preview_bg = GameObject::new_rect(ctx, "shop_preview_bg".into(),
             None::<Image>, (700.0, 260.0), (pcx - 350.0, pcy - 130.0),
@@ -1118,6 +1238,9 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
             .with_object("shop_preview_ball",  preview_ball)
             .with_object("shop_preview_trail", preview_trail)
             .with_object("shop_preview_bg",    preview_bg);
+        for (name, dot) in trail_dots {
+            scene = scene.with_object(&name, dot);
+        }
     }
 
     for s in 0..NUM_SLOTS {
@@ -1185,6 +1308,22 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
     }
 
     scene
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "shop_prev".into() },
+                target: Target::name("shop_prev_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("shop_prev_btn"),
+        )
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "shop_next".into() },
+                target: Target::name("shop_next_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("shop_next_btn"),
+        )
         .with_event(
             GameEvent::MousePress {
                 action: Action::Custom { name: "shop_back".into() },

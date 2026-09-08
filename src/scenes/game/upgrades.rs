@@ -285,6 +285,25 @@ fn ensure_exit_node(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 /// Handle a dialogue key press. Returns true if the key was consumed.
+/// Apply an upgrade-dialogue choice, 1-5 to buy and 6 to close.
+///
+/// Split out of `upgrade_dialogue_key` so a TAP can reach the same code. The
+/// dialogue was keyboard-only, which on a phone means an upgrade node holds
+/// the player in a menu with no way to choose anything or leave it.
+pub fn upgrade_dialogue_select(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) -> bool {
+    if !st.lock().unwrap().upgrade_dialogue_active {
+        return false;
+    }
+    if opt == 6 {
+        close_dialogue(c, st);
+        return true;
+    }
+    if !(1..=5).contains(&opt) { return false; }
+    buy_option(c, st, opt);
+    update_dialogue_text(c, st);
+    true
+}
+
 pub fn upgrade_dialogue_key(c: &mut Canvas, st: &Arc<Mutex<State>>, key: &Key) -> bool {
     if !st.lock().unwrap().upgrade_dialogue_active {
         return false;
@@ -299,13 +318,7 @@ pub fn upgrade_dialogue_key(c: &mut Canvas, st: &Arc<Mutex<State>>, key: &Key) -
         Key::Named(NamedKey::Escape) => 6,
         _ => return false,
     };
-    if opt == 6 {
-        close_dialogue(c, st);
-        return true;
-    }
-    buy_option(c, st, opt);
-    update_dialogue_text(c, st);
-    true
+    upgrade_dialogue_select(c, st, opt)
 }
 
 fn buy_option(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) {

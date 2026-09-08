@@ -373,7 +373,7 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     let (px, py, pvx, pvy) = { let s = st.lock().unwrap(); (s.px, s.py, s.vx, s.vy) };
     let centre = (arena_center_x(c), BOSS_Y_CENTER);
-    let buffed = { st.lock().unwrap().player_buff > 0 };
+    let buffed = { st.lock().unwrap().buff_active() };
 
     // ── Act director ─────────────────────────────────────────────────────
     let act = {
@@ -856,7 +856,7 @@ fn serpent_strike_player(
 
     if buffed {
         let mut s = st.lock().unwrap();
-        if s.player_buff > 0 {
+        if s.buff_active() {
             s.buff_absorbs = s.buff_absorbs.saturating_sub(1);
             if s.buff_absorbs == 0 { s.player_buff = 0; s.buff_timer = 0; }
         }
@@ -1103,7 +1103,7 @@ fn serpent_rift_strikes(c: &mut Canvas, st: &Arc<Mutex<State>>, ticks: u32, play
 
     // The eruption strikes anyone standing on the exit.
     if let Some(hole) = erupted {
-        let (px, py, buffed) = { let s = st.lock().unwrap(); (s.px, s.py, s.player_buff > 0) };
+        let (px, py, buffed) = { let s = st.lock().unwrap(); (s.px, s.py, s.buff_active()) };
         let r = SERPENT_RIFT_R + PLAYER_R;
         if (px - hole.0).powi(2) + (py - hole.1).powi(2) < r * r {
             // Erupting under someone is the body moving, not a strike aimed
@@ -1215,7 +1215,7 @@ fn serpent_tail_sweep(
     let cooling = { st.lock().unwrap().serpent_contact_cooldown > 0 };
     if cooling { return; }
     if point_segment_dist(player, head, pos) < th * 0.5 + PLAYER_R {
-        let buffed = { st.lock().unwrap().player_buff > 0 };
+        let buffed = { st.lock().unwrap().buff_active() };
         // The tail whip. A deliberate strike, so it cuts the rope.
         serpent_strike_player(
             c, st, (player.0, player.1 + 400.0), buffed,
@@ -1279,7 +1279,7 @@ fn serpent_tail_launch(c: &mut Canvas, st: &Arc<Mutex<State>>, ticks: u32, playe
 
     let (px, py, buffed, cooling) = {
         let s = st.lock().unwrap();
-        (s.px, s.py, s.player_buff > 0, s.serpent_contact_cooldown > 0)
+        (s.px, s.py, s.buff_active(), s.serpent_contact_cooldown > 0)
     };
     let r = SERPENT_TAIL_SIZE * SERPENT_CONTACT_R + PLAYER_R;
     if !cooling && (px - pos.0).powi(2) + (py - pos.1).powi(2) < r * r {
@@ -1402,7 +1402,7 @@ fn serpent_spine_lash(
     if cooling { return; }
     let d = point_segment_dist(player, a, b);
     if d < th * 0.5 + PLAYER_R {
-        let buffed = { st.lock().unwrap().player_buff > 0 };
+        let buffed = { st.lock().unwrap().buff_active() };
         // Thrown perpendicular to the spine, so the escape direction is the one
         // the player can see rather than "away from a point".
         let nx = -dy / len;
@@ -1615,7 +1615,7 @@ fn serpent_wormhole_gambit(
         }
     };
     if resolve == Some(true) {
-        let buffed = { st.lock().unwrap().player_buff > 0 };
+        let buffed = { st.lock().unwrap().buff_active() };
         // The bite at the end of the gambit.
         serpent_strike_player(c, st, head, buffed, serpent_cut_for(Strike::Bite));
     }

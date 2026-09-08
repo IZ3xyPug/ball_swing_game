@@ -10,8 +10,28 @@ use quartz::{AnimatedSprite, Image, ShapeType};
 /// Generate a gravity well image with concentric stepped-alpha rings.
 /// `visual_r` is the visual radius in pixels. The returned image is (2*visual_r) square.
 /// Rings fade from high alpha in the center to low alpha at the edge.
+/// Largest edge any generated sprite is rasterised at.
+///
+/// Nothing here is a photograph: these are soft radial patterns stretched to an
+/// object's WORLD size, so texel density well below 1:1 is invisible. Sizing
+/// them from a world radius instead meant the Colossus's 2600-unit clap ring
+/// rasterised a 5200x5200 buffer — 27 million pixels through a per-pixel loop,
+/// 108 MB of RGBA — during scene construction. That is a visible stall on a
+/// phone, and on top of it the GPU could not hold the result: phones commonly
+/// cap `max_texture_dimension_2d` at 4096, where desktops allow 8192+.
+///
+/// 2048 is comfortably under every device limit and still finer than these
+/// patterns can show.
+pub const MAX_GENERATED_TEX: u32 = 2048;
+
 pub fn gwell_ring_img(visual_r: f32, r: u8, g: u8, b: u8, ring_count: u32, base_alpha: f32) -> image::RgbaImage {
-    let d = (visual_r * 2.0).ceil().max(2.0) as u32;
+    // Rasterise at a capped resolution and scale the PATTERN to match, so a
+    // large ring is drawn softer rather than bigger. `visual_r` keeps meaning
+    // "radius in world units"; only the pixel budget is bounded.
+    let full = (visual_r * 2.0).ceil().max(2.0) as u32;
+    let d = full.min(MAX_GENERATED_TEX);
+    let px_per_unit = d as f32 / full as f32;
+    let visual_r = visual_r * px_per_unit;
     let mut img = image::RgbaImage::new(d, d);
     let ctr = visual_r;
     let rings = ring_count.max(1);
@@ -783,12 +803,16 @@ cached_image!(gate_top_image_cached, gate_img(GATE_W as u32, GATE_TOP_SEG_H as u
 cached_image!(gate_bot_image_cached, gate_img(GATE_W as u32, GATE_BOT_SEG_H as u32));
 
 pub fn pause_overlay_img() -> image::RgbaImage {
-    // Add horizontal overscan so the tint covers any safe-area padding.
-    const OVERSCAN: u32 = 400;
-    let w = VW as u32 + OVERSCAN * 2;
-    let h = VH as u32;
-    let mut img = image::RgbaImage::new(w, h);
-    draw_rect(&mut img, 0, 0, w, h, [0, 0, 0, 170]);
+    // A FLAT TINT. It is stretched to the overlay object's own size, which is
+    // where the safe-area overscan actually comes from — the texture does not
+    // need to be that size, and a single colour has nothing to resolve.
+    //
+    // This used to rasterise `VW + 800` by `VH`: 4640 x 2160, ten million
+    // pixels of identical black, built during scene construction. It was also
+    // the first thing to blow past a phone's 4096 texture limit, which is the
+    // validation error that aborted the Android build at launch.
+    let mut img = image::RgbaImage::new(2, 2);
+    draw_rect(&mut img, 0, 0, 2, 2, [0, 0, 0, 170]);
     img
 }
 

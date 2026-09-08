@@ -233,7 +233,9 @@ pub struct State {
     pub hud_coin_fade_ticks:    u32,
     pub hud_coin_alpha:         u8,
     pub hud_last_coin_alpha:    u8,
-    pub hud_coin_base_img:      Option<RgbaImage>,
+    /// The counter's texture at full opacity. The fade is a tint, so this is
+    /// built once per coin count rather than once per frame.
+    pub hud_coin_base_img:      Option<std::sync::Arc<RgbaImage>>,
 
     // ── Space zone ──────────────────────────────────────────────────────
     /// True while player is in the space zone.
@@ -534,6 +536,12 @@ pub struct State {
     /// attached-effect slot. The buff aura uses the same slot, so whichever
     /// system did not attach must not clear.
     pub shield_player_fx: bool,
+    /// Whether the BUFF aura currently owns the player's effect slot.
+    ///
+    /// That slot holds one effect and two systems want it — the buff aura and
+    /// the solar shield's dome. Each records what it attached so it only ever
+    /// releases its own.
+    pub buff_player_fx: bool,
     /// Node ids currently wearing an attached solar-shelter dome. Same reason
     /// as `buff_fx_attached`: an attached effect lives on the object until it
     /// is cleared, so the set has to be remembered to release it.
@@ -679,4 +687,39 @@ pub struct State {
     pub flares_fired: u32,
     pub flare_hearts_lost: u32,
     pub flare_ticks_sheltered: u32,
+}
+
+impl State {
+    /// Whether the boss-damage buff is actually in force.
+    ///
+    /// The buff is two fields — `player_buff` says which one, `buff_timer` says
+    /// how long is left — and every consumer used to test `player_buff > 0` on
+    /// its own. Only the code that ticks it down knew about the timer, so when
+    /// the buff lapsed it stopped being drawn while remaining in force
+    /// mechanically: the Colossus went on absorbing hits into an expired buff
+    /// and the player stopped taking damage.
+    ///
+    /// Reading it through here means the two cannot be believed separately.
+    /// Pair it with `retire_buff` for the write side.
+    pub fn buff_active(&self) -> bool {
+        buff_is_active(self.player_buff, self.buff_timer)
+    }
+
+    /// End the buff and everything that belongs to it.
+    ///
+    /// `buff_absorbs` goes too, or the next buff starts holding the previous
+    /// one's leftover shield.
+    pub fn retire_buff(&mut self) {
+        self.player_buff = 0;
+        self.buff_timer = 0;
+        self.buff_absorbs = 0;
+    }
+}
+
+/// The buff predicate itself, free of `State` so it can be tested directly.
+///
+/// Both halves matter: `player_buff` alone is what every consumer used to ask,
+/// and a stale one outlived its timer.
+pub fn buff_is_active(player_buff: u8, buff_timer: u32) -> bool {
+    player_buff > 0 && buff_timer > 0
 }

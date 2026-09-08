@@ -70,6 +70,51 @@ pub const HOOK_POOL_SIZE: usize = 68;
 /// instantly launching + grabbing.
 pub const START_HOLD_TICKS: i32 = 90;
 
+// ── Touch controls (Android) ─────────────────────────────────────────────────
+//
+// No on-screen buttons. A permanent PAUSE button sitting in the corner of every
+// frame is a UI element the player reads past a thousand times to use once, and
+// it costs the fight's atmosphere the whole time it is there. The screen is
+// divided instead, and the rarely-used actions are gestures.
+//
+// Everything here is in VIRTUAL coordinates (0..VW, 0..VH), which is the space
+// the engine hands to input callbacks — see `Canvas::screen_to_virtual`.
+
+#[inline]
+pub const fn mobile_controls_enabled() -> bool {
+    cfg!(target_os = "android")
+}
+
+/// The swing/tether half. Holding anywhere in it is the same as holding the
+/// mouse button: the entire right side is the control, so it can be used
+/// without looking and without a thumb covering anything that matters.
+#[inline]
+pub fn mobile_swing_zone_contains(x: f32, _y: f32) -> bool {
+    x >= VW * 0.5
+}
+
+/// The in-game pause control: a small, faint glyph in the BOTTOM-LEFT.
+///
+/// A control rather than a gesture, after three rounds of gesture recognition
+/// failed on device — and one that could be triggered by accident with no
+/// reliable way back. Being on the left keeps it clear of the swing half; being
+/// small and faint keeps it out of the way of the fight, which was the whole
+/// objection to the button it replaces.
+///
+/// BOTTOM-left, not top: the top-left is the HUD column — the coin counter
+/// starts at (26, 24) and its icon sits at (38, 52), so a button at (40, 40)
+/// covered the coins outright, and the momentum, gravity, Y and X readouts run
+/// down from there to y=528. The bottom-left corner is empty (the oxygen bar is
+/// top-centre), clear of the danger floor at `VH - 28`, and is where a thumb
+/// already rests when the phone is held in landscape.
+pub const PAUSE_TOUCH_BTN: (f32, f32, f32, f32) = (40.0, VH - 260.0, 190.0, 190.0);
+
+#[inline]
+pub fn point_in_rect(x: f32, y: f32, rect: (f32, f32, f32, f32)) -> bool {
+    let (rx, ry, rw, rh) = rect;
+    x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
+}
+
 /// World Y bounds for grab points.
 /// HOOK_Y_MIN is the top of the playable zone (negative = above the horizon).
 /// HOOK_Y_MAX is the bottom of the playable zone.
@@ -428,32 +473,49 @@ pub const START_HOOK_X: f32 = SPAWN_X + 160.0;
 pub const START_HOOK_Y: f32 = SPAWN_Y - 420.0;
 
 // ── Asset bytes ──────────────────────────────────────────────────────────────
+// ── Assets read at RUNTIME must be EMBEDDED, not pathed ──────────────────────
+//
+// `concat!(env!("CARGO_MANIFEST_DIR"), ...)` bakes an absolute path from the
+// BUILD machine into the binary. That is fine on the machine that compiled it
+// and impossible anywhere else — on Android the path does not exist, and there
+// is no filesystem path that would work: APK assets are reached through the
+// AssetManager, not through `std::fs`. A `std::fs::read(...).expect(...)` on
+// one of these is an unconditional crash on device, and with
+// `panic = "abort"` in the release profile it takes the whole process with it.
+//
+// Anything decoded at runtime therefore uses `include_bytes!`. Paths are left
+// including audio. Audio used to be the exception, on the theory that the sound
+// backend "opens lazily and survives failing to find" — it does survive, but
+// surviving is not playing. On a phone every one of these paths named the BUILD
+// machine, so every track failed to open, reported itself finished
+// immediately, and the menu's play-the-next-track-when-this-ends rule
+// re-spawned a sound every frame.
 pub const ASSET_COIN_GIF: &[u8] = include_bytes!("../assets/coin.gif");
 pub const ASSET_SCORE_X2_GIF: &[u8] = include_bytes!("../assets/2x.gif");
 pub const ASSET_TECH_BOUNCE_GIF: &[u8] = include_bytes!("../assets/techbouncernew.gif");
 pub const TECH_BOUNCE_FPS: f32 = 12.0;
-pub const ASSET_BGM_TRACK: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/synful_reach.mp3");
-pub const ASSET_SWOOSH_SFX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/swipe.mp3");
-pub const ASSET_COIN_SFX_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_collect.mp3");
-pub const ASSET_COIN_SFX_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_up.mp3");
-pub const ASSET_COIN_SFX_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_bling.mp3");
-pub const ASSET_COIN_SFX_4: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/coin_ambience.mp3");
-pub const ASSET_BGM_TRACK_1: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_1.mp3");
-pub const ASSET_BGM_TRACK_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_2.mp3");
-pub const ASSET_BGM_TRACK_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/music_3.mp3");
-pub const ASSET_MENU_BGM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Roses_new.mp3");
-pub const ASSET_MENU_BGM_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Pill.mp3");
-pub const ASSET_MENU_BGM_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/Menumusic.mp3");
+pub const ASSET_BGM_TRACK: &[u8] = include_bytes!("../assets/synful_reach.mp3");
+pub const ASSET_SWOOSH_SFX: &[u8] = include_bytes!("../assets/swipe.mp3");
+pub const ASSET_COIN_SFX_1: &[u8] = include_bytes!("../assets/coin_collect.mp3");
+pub const ASSET_COIN_SFX_2: &[u8] = include_bytes!("../assets/coin_up.mp3");
+pub const ASSET_COIN_SFX_3: &[u8] = include_bytes!("../assets/coin_bling.mp3");
+pub const ASSET_COIN_SFX_4: &[u8] = include_bytes!("../assets/coin_ambience.mp3");
+pub const ASSET_BGM_TRACK_1: &[u8] = include_bytes!("../assets/music_1.mp3");
+pub const ASSET_BGM_TRACK_2: &[u8] = include_bytes!("../assets/music_2.mp3");
+pub const ASSET_BGM_TRACK_3: &[u8] = include_bytes!("../assets/music_3.mp3");
+pub const ASSET_MENU_BGM: &[u8] = include_bytes!("../assets/Roses_new.mp3");
+pub const ASSET_MENU_BGM_2: &[u8] = include_bytes!("../assets/Pill.mp3");
+pub const ASSET_MENU_BGM_3: &[u8] = include_bytes!("../assets/Menumusic.mp3");
 pub const ASSET_BACKGROUND: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/background.png");
 pub const ASSET_BACKGROUND_2: &[u8] = include_bytes!("../assets/background_2.webp");
-pub const ASSET_AURORA_EARTH_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/aurora_earth.gif");
-pub const ASSET_MAN_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/man_game_over.mp3");
-pub const ASSET_ARCADE_GAME_OVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/arcade_game_over.mp3");
-pub const ASSET_WOBBLY_MEOW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wobbly_meow.mp3");
-pub const ASSET_CARTOON_CAT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/cartoon_cat.mp3");
-pub const ASSET_ASTEROID: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/asteroid.webp");
-pub const ASSET_HOOK_ARTIFACT_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact.gif");
-pub const ASSET_HOOK_ARTIFACT_GREEN_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hook_artifact_green.gif");
+pub const ASSET_AURORA_EARTH_GIF: &[u8] = include_bytes!("../assets/aurora_earth.gif");
+pub const ASSET_MAN_GAME_OVER: &[u8] = include_bytes!("../assets/man_game_over.mp3");
+pub const ASSET_ARCADE_GAME_OVER: &[u8] = include_bytes!("../assets/arcade_game_over.mp3");
+pub const ASSET_WOBBLY_MEOW: &[u8] = include_bytes!("../assets/wobbly_meow.mp3");
+pub const ASSET_CARTOON_CAT: &[u8] = include_bytes!("../assets/cartoon_cat.mp3");
+pub const ASSET_ASTEROID: &[u8] = include_bytes!("../assets/asteroid.webp");
+pub const ASSET_HOOK_ARTIFACT_GIF: &[u8] = include_bytes!("../assets/hook_artifact.gif");
+pub const ASSET_HOOK_ARTIFACT_GREEN_GIF: &[u8] = include_bytes!("../assets/hook_artifact_green.gif");
 /// Average ticks between automatic comet spawn attempts (at 60 fps ≈ 5 seconds).
 pub const COMET_SPAWN_INTERVAL: u32 = 300;
 /// Ticks each successive comet in a back-to-back burst is advanced by, so a
@@ -468,7 +530,7 @@ pub const ASSET_BLACKHOLE1_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ass
 pub const ASSET_WORMHOLE2_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wormhole2.gif");
 pub const ASSET_GWELLON_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwellon.gif");
 pub const ASSET_GWELLOFF_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/gwelloff.gif");
-pub const ASSET_ZERO_G_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/ZeroG.gif");
+pub const ASSET_ZERO_G_GIF: &[u8] = include_bytes!("../assets/ZeroG.gif");
 pub const ASSET_SPACE_RIP_GIF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/space_rip.gif");
 pub const CALICO_FPS: f32 = 12.0;
 pub const GWELL_FPS: f32 = 10.0;
@@ -728,6 +790,11 @@ pub fn boss_kind_names() -> Vec<&'static str> {
 /// debug warp still fights something.
 /// The shipped roster, in the order fights appear. The testing override below
 /// permutes THIS list, so the menu can never offer a boss that does not exist.
+///
+/// To fight a particular boss without playing to its slot, use the boss-order
+/// testing menu or the headless driver's `--boss-kind`. Reordering THIS list to
+/// reach one quickly changes the shipped run structure for everyone, and the
+/// override exists precisely so that is never necessary.
 pub const BOSS_ROSTER: [BossKind; crate::mode::BOSS_ROSTER_SIZE as usize] = [
     BossKind::Colossus,
     BossKind::Conductor,

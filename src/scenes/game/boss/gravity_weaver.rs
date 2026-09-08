@@ -49,7 +49,7 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
     drop(s);
 
-    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+    let buffed = { let g = st.lock().unwrap(); g.buff_active() };
 
     // ── Flip cycle ──
     // weakpoint window open (after a flip) → countdown → flip + open window.

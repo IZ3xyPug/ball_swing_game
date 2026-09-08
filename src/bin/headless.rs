@@ -94,6 +94,10 @@ fn main() {
         agg.episodes, agg.panics, agg.deaths, agg.space_entries, agg.boss_entries, agg.boss_kills, agg.max_zone
     );
     println!(
+        "buff_desync_frames={}  (frames where player_buff outlived buff_timer; must be 0)",
+        agg.buff_desync_frames
+    );
+    println!(
         "avg_dist={:.0} best_dist={:.0} avg_max_speed={:.1}",
         agg.avg_dist, agg.best_dist, agg.avg_max_speed
     );

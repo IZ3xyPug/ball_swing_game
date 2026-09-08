@@ -160,7 +160,7 @@ pub(crate) fn tick_core_vent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             .find(|p| p.id == "torso")
             .map(|p| p.state_ticks)
             .unwrap_or(0);
-        (venting, ticks, s.player_buff > 0, s.px, s.py)
+        (venting, ticks, s.buff_active(), s.px, s.py)
     };
 
     if !venting {
@@ -235,7 +235,7 @@ pub(crate) fn tick_core_vent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // The buff shields the heart and spends an absorption, as it does for
         // every other Colossus attack.
         let mut s = st.lock().unwrap();
-        if s.player_buff > 0 {
+        if s.buff_active() {
             s.buff_absorbs = s.buff_absorbs.saturating_sub(1);
             if s.buff_absorbs == 0 {
                 s.player_buff = 0;
@@ -343,7 +343,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
     drop(s);
 
-    let buffed = { let g = st.lock().unwrap(); g.player_buff > 0 };
+    let buffed = { let g = st.lock().unwrap(); g.buff_active() };
     let mut any_alive = false;
 
     // ── Colossus: per-part FSM (Idle → Telegraph → Attack → Recover) ──────
@@ -1346,7 +1346,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // The buff ate the hit: spend one absorption. When it runs out the
             // buff ends, so the shield is a limited resource.
             let mut s = st.lock().unwrap();
-            if s.player_buff > 0 {
+            if s.buff_active() {
                 s.buff_absorbs = s.buff_absorbs.saturating_sub(1);
                 if s.buff_absorbs == 0 {
                     s.player_buff = 0;

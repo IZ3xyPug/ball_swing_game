@@ -7,6 +7,7 @@ name = "KnightsOfQuartz"
 version = "0.1.0"
 dependencies = [
  "image 0.25.10",
+ "log",
  "quartz",
  "ramp2",
  "rand 0.9.4",
@@ -3040,6 +3041,7 @@ version = "0.1.0"
 dependencies = [
  "crystalline",
  "image 0.25.10",
+ "log",
  "prism2",
  "rand 0.8.6",
  "rodio",
@@ -3096,6 +3098,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 name = "ramp2"
 version = "0.1.6"
 dependencies = [
+ "log",
  "maverick_os",
  "prism2",
  "wgpu_canvas",
@@ -4592,6 +4595,7 @@ dependencies = [
  "fontdue",
  "image 0.25.10",
  "lazy_static",
+ "log",
  "wgpu",
 ]
 
