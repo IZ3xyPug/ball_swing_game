@@ -212,7 +212,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                     s.buff_absorbs = BUFF_ABSORB_MAX;
                     drop(s);
                     // The buff is shown by the round electricity mega-shader effect
-                    // (fx::push_electric_fx in tick_buff), not a square glow.
+                    // (an ELECTRICITY effect attached in tick_buff), not a square glow.
                 }
             }
             if let Some((ticks, anim_id)) = artifact_grab_info {
@@ -224,7 +224,10 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             }
 
             c.run(Action::Show { target: Target::name("rope") });
-            c.play_sound_bytes_with(ASSET_CARTOON_CAT, SoundOptions::new().volume(sfx_vol(c, 0.6)));
+            // NO sound on grab. This fired every time the player attached to a
+            // node — several times a second in normal play, at 0.6 against
+            // music at 0.16 — and grabbing is the one thing the player does
+            // constantly. It now marks IMPACTS instead; see `play_impact_sfx`.
         }
     });
 

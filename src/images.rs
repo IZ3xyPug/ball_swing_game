@@ -303,6 +303,172 @@ pub fn colossus_head(size: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
     img
 }
 
+/// The Conductor's core: a metronome case — a tapered body with a lit scale
+/// slot up its face, drawn so the swinging bob reads against it.
+///
+/// The bob is a SEPARATE object positioned along an arc each frame rather than
+/// part of this image. Baking it in would mean a new image per beat position,
+/// and an image rebuilt per frame is a texture upload per frame — the failure
+/// mode that cost this project three separate stalls.
+pub fn conductor_core(size: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
+    let s = size as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let c = [rgb.0, rgb.1, rgb.2, 255];
+    let dark = [rgb.0.saturating_sub(34), rgb.1.saturating_sub(34), rgb.2.saturating_sub(34), 255];
+    let cx = s * 0.5;
+
+    // Tapered case: stacked rows narrowing toward the top give the metronome
+    // its wedge without needing a polygon fill.
+    let top_y = s * 0.16;
+    let bot_y = s * 0.92;
+    let half_top = s * 0.13;
+    let half_bot = s * 0.34;
+    for py in (top_y as u32)..(bot_y as u32).min(size) {
+        let t = (py as f32 - top_y) / (bot_y - top_y).max(1.0);
+        let half = half_top + (half_bot - half_top) * t;
+        let x0 = (cx - half).max(0.0) as u32;
+        let x1 = (cx + half).min(s - 1.0) as u32;
+        for px in x0..=x1 {
+            img.put_pixel(px, py, image::Rgba(c));
+        }
+    }
+    // Base plinth.
+    fill_rounded_rect(&mut img, cx - s * 0.38, s * 0.88, s * 0.76, s * 0.10, s * 0.03, dark);
+    // Scale slot the bob travels against — dark, so a bright bob reads on it.
+    fill_rounded_rect(&mut img, cx - s * 0.035, s * 0.22, s * 0.07, s * 0.60, s * 0.03,
+                      [14, 18, 30, 255]);
+    // Tick marks down the slot: the scale is what makes the swing legible as a
+    // POSITION and not just motion.
+    for i in 0..5 {
+        let y = s * 0.28 + i as f32 * s * 0.11;
+        fill_rounded_rect(&mut img, cx - s * 0.10, y, s * 0.05, s * 0.012, s * 0.006, dark);
+        fill_rounded_rect(&mut img, cx + s * 0.05, y, s * 0.05, s * 0.012, s * 0.006, dark);
+    }
+    img
+}
+
+/// A tuning-fork spar: two tines on a stem. Six of these ring the core and
+/// flash on the beat, which is one of the fight's two visual beat channels.
+pub fn conductor_spar(size: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
+    let s = size as f32;
+    let mut img = image::RgbaImage::new(size.max(2), size.max(2));
+    let c = [rgb.0, rgb.1, rgb.2, 255];
+    let cx = s * 0.5;
+    // Two tines.
+    fill_rounded_rect(&mut img, cx - s * 0.26, s * 0.06, s * 0.14, s * 0.52, s * 0.07, c);
+    fill_rounded_rect(&mut img, cx + s * 0.12, s * 0.06, s * 0.14, s * 0.52, s * 0.07, c);
+    // Yoke joining them, and the stem.
+    fill_rounded_rect(&mut img, cx - s * 0.26, s * 0.52, s * 0.52, s * 0.14, s * 0.07, c);
+    fill_rounded_rect(&mut img, cx - s * 0.07, s * 0.62, s * 0.14, s * 0.32, s * 0.07, c);
+    img
+}
+
+/// The beat ring: a hollow annulus that expands out of the core on every
+/// downbeat. A tell only — it never damages, so it can be read without fear.
+pub fn conductor_beat_ring(radius: u32, rgb: (u8, u8, u8), alpha: u8) -> image::RgbaImage {
+    let d = (radius * 2).max(2);
+    let mut img = image::RgbaImage::new(d, d);
+    let c = radius as f32;
+    // Thickness scales with radius so the ring stays visible as it grows
+    // instead of thinning to nothing at the edge of the arena.
+    let thick = (c * 0.06).max(3.0);
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 - c + 0.5;
+            let dy = py as f32 - c + 0.5;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if (dist - (c - thick)).abs() <= thick {
+                // Soften the edges so the ring does not alias into a polygon.
+                let edge = 1.0 - ((dist - (c - thick)).abs() / thick).min(1.0);
+                let a = (alpha as f32 * edge) as u8;
+                img.put_pixel(px, py, image::Rgba([rgb.0, rgb.1, rgb.2, a]));
+            }
+        }
+    }
+    img
+}
+
+/// The Conductor's weakpoint marker: a bright target ring drawn at exactly the
+/// radius a hit lands in, so the circle the player sees is the circle that
+/// works. Concentric rings plus crosshair ticks, to read as "strike here"
+/// rather than as another glow.
+pub fn conductor_weakpoint(radius: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
+    let d = (radius * 2).max(2);
+    let mut img = image::RgbaImage::new(d, d);
+    let c = radius as f32;
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 - c + 0.5;
+            let dy = py as f32 - c + 0.5;
+            let dist = (dx * dx + dy * dy).sqrt() / c; // 0..1
+            if dist > 1.0 { continue; }
+            // Two rings: the outer edge of the strike zone, and an inner one.
+            let outer = 1.0 - ((dist - 0.97).abs() / 0.035).min(1.0);
+            let inner = 1.0 - ((dist - 0.55).abs() / 0.030).min(1.0);
+            // Crosshair ticks at the cardinals, short so they do not become a
+            // cross over the boss art.
+            let tick = if (dx.abs() < c * 0.012 || dy.abs() < c * 0.012)
+                && dist > 0.80 && dist < 1.0 { 1.0 } else { 0.0 };
+            // A faint wash inside, enough to separate the zone from the sky
+            // without hiding what is in it.
+            let wash = if dist < 0.97 { 0.10 } else { 0.0 };
+            let a = ((outer.max(inner).max(tick) * 0.95 + wash) * 255.0).min(255.0) as u8;
+            if a > 0 {
+                img.put_pixel(px, py, image::Rgba([rgb.0, rgb.1, rgb.2, a]));
+            }
+        }
+    }
+    img
+}
+
+/// One Resonance pip: a filled or hollow dot. Three of these show the stack
+/// count, which was previously tracked only in a variable the player could not
+/// see.
+pub fn conductor_pip(size: u32, rgb: (u8, u8, u8), filled: bool) -> image::RgbaImage {
+    let d = size.max(2);
+    let mut img = image::RgbaImage::new(d, d);
+    let c = d as f32 * 0.5;
+    for py in 0..d {
+        for px in 0..d {
+            let dx = px as f32 - c + 0.5;
+            let dy = py as f32 - c + 0.5;
+            let dist = (dx * dx + dy * dy).sqrt() / c;
+            if dist > 1.0 { continue; }
+            let a = if filled {
+                if dist < 0.82 { 255 } else { 90 }
+            } else if (dist - 0.85).abs() < 0.14 {
+                200
+            } else {
+                0
+            };
+            if a > 0 { img.put_pixel(px, py, image::Rgba([rgb.0, rgb.1, rgb.2, a])); }
+        }
+    }
+    img
+}
+
+/// A bar-line segment: the sweeping standing wave, drawn as a vertical band
+/// with a soft sinusoidal edge so it reads as a wave rather than a wall.
+pub fn conductor_bar_segment(w: u32, h: u32, rgb: (u8, u8, u8)) -> image::RgbaImage {
+    let mut img = image::RgbaImage::new(w.max(2), h.max(2));
+    let fw = w as f32;
+    for py in 0..h {
+        // A standing wave: the band breathes in and out along its length.
+        let wave = ((py as f32 / 46.0).sin() * 0.5 + 0.5) * 0.35 + 0.65;
+        let half = fw * 0.5 * wave;
+        let cx = fw * 0.5;
+        for px in 0..w {
+            let dx = (px as f32 - cx).abs();
+            if dx <= half {
+                let edge = 1.0 - (dx / half.max(1.0));
+                let a = (150.0 + 105.0 * edge) as u8;
+                img.put_pixel(px, py, image::Rgba([rgb.0, rgb.1, rgb.2, a]));
+            }
+        }
+    }
+    img
+}
+
 /// Gravity-well visual for the head attack: a large translucent pull zone with
 /// faint concentric rings and a bright core, so the player can see the area the
 /// head's gravity reaches. `radius` is in pixels.

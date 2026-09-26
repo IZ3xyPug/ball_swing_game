@@ -15,6 +15,9 @@ ramp = { package = "ramp2", path = "../ramp" }
 quartz = { path = "../quartz"}
 rodio = "0.21.1"
 rand = "0.9.2"
+# So the headless harness can print the engine's tick profile, which is
+# emitted through `log` and is otherwise a no-op with no logger installed.
+env_logger = "0.11"
 rgb = "0.8.52"
 log = "0.4.27"
 
@@ -87,3 +90,7 @@ maintainer-scripts = "debian/"
 
 [patch.crates-io]
 prism2 = { path = "../prism" }
+
+[dev-dependencies]
+pollster = "0.4"
+prism = { package = "prism2", path = "../prism" }

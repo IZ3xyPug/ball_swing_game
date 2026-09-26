@@ -20,7 +20,6 @@ use std::sync::{Arc, Mutex};
 use crate::constants::*;
 use crate::difficulty::ramp;
 use crate::state::*;
-use super::fx;
 
 // ── Phase helpers ────────────────────────────────────────────────────────────
 
@@ -291,13 +290,13 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             (std::mem::take(&mut s.shield_fx_attached), std::mem::take(&mut s.shield_player_fx))
         };
         for id in stale {
-            fx::clear_object_fx(c, &id);
+            c.clear_effect(&id);
         }
         // Only if the shelter dome was the one using it. The buff aura shares
         // the player's single slot, and a boss fight is exactly when the buff
         // is up — clearing unconditionally here would erase it every frame.
         if had_player {
-            fx::clear_object_fx(c, "player");
+            c.clear_effect("player");
         }
         return;
     }
@@ -347,14 +346,15 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // is occluded by what occludes the node. The coordinates are converted
         // exactly as before.
         let _ = (hx, hy); // only used for the cull above
-        fx::attach_mega_fx(
-            c,
+        c.attach_effect(
             id,
-            crate::images::shield_dome_img(),
+            Effect::Image {
+                image: crate::images::shield_dome_img(),
+                looks: LookFlags::NONE,
+                alpha,
+            },
+            EffectColor::linear(1.0, 0.86, 0.42),
             (d, d),
-            (1.0, 0.86, 0.42, alpha),
-            [0; 4],
-            0,
         );
         shielded_now.push(id.clone());
     }
@@ -362,7 +362,7 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // shelter has to be released explicitly.
     for id in previously_shielded {
         if !shielded_now.contains(&id) {
-            fx::clear_object_fx(c, &id);
+            c.clear_effect(&id);
         }
     }
     st.lock().unwrap().shield_fx_attached = shielded_now;
@@ -373,21 +373,18 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // protection).
     if sheltered {
         let d = PLAYER_R * 2.0 * 2.6;
-        fx::attach_mega_fx(
-            c,
+        c.attach_effect(
             "player",
-            fx::flat_white(),
+            Effect::EnergyDome { strength: 0.85 },
+            EffectColor::linear(0.55, 0.85, 1.0),
             (d, d),
-            (0.55, 0.85, 1.0, 0.85),
-            [MEGA_BIT_ENERGY_DOME, 0, 0, 0],
-            1,
         );
         st.lock().unwrap().shield_player_fx = true;
     } else {
         // The buff aura shares this slot, so only release what we attached.
         let had_player = std::mem::take(&mut st.lock().unwrap().shield_player_fx);
         if had_player && !buffed {
-            fx::clear_object_fx(c, "player");
+            c.clear_effect("player");
         }
     }
 }
@@ -440,13 +437,15 @@ fn draw_flare_overlay(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let px = st.lock().unwrap().px;
         let sweep_x = px - VW * 0.6 + VW * 1.2 * t;
         let py = st.lock().unwrap().py;
-        fx::push_mega_fx(
-            c,
-            crate::images::flare_front_img(),
+        c.push_effect(
+            Effect::Image {
+                image: crate::images::flare_front_img(),
+                looks: LookFlags::NONE,
+                alpha: 0.5,
+            },
+            EffectColor::linear(1.0, 0.92, 0.62),
             (sweep_x, py),
             (VW * 0.18, VH * 2.4),
-            (1.0, 0.92, 0.62, 0.5),
-            0,
         );
     }
 }

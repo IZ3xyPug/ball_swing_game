@@ -191,6 +191,8 @@ fn build_canvas(ctx: &mut prism::Context, start_minute: f32) -> Canvas {
     let tmp = std::env::temp_dir().join("ball_swing_headless_saves");
     crate::profile::set_saves_dir(tmp.to_str().unwrap_or("saves"));
     let mut canvas = Canvas::new(ctx, CanvasMode::Landscape);
+    // Same switch the game uses, so a headless run can be profiled by stage.
+    canvas.set_tick_profiling(std::env::var("QUARTZ_TICK_PROFILE").is_ok_and(|v| v != "0"));
     if start_minute > 0.0 {
         canvas.set_var(
             "debug_start_distance",
@@ -535,6 +537,19 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
                 if pb > 0 && bt <= 0 {
                     buff_desync_frames += 1;
                 }
+            }
+
+            // Count what the draw tree would actually emit, mirroring what
+            // ramp does each frame, so the offscreen cull can be measured
+            // rather than asserted.
+            if std::env::var("QUARTZ_COUNT_ITEMS").is_ok() && frames % 300 == 0 {
+                use prism::drawable::Drawable;
+                let screen = (crate::constants::VW, crate::constants::VH);
+                let req = canvas.request_size();
+                let sized = canvas.build(screen, req);
+                let items = canvas.draw(&sized, (0.0, 0.0), (0.0, 0.0, screen.0, screen.1));
+                let objects = canvas.object_count();
+                eprintln!("[ITEMS] frame={frames} objects={objects} items={}", items.len());
             }
 
             let in_space = matches!(canvas.get_var("in_space_mode"), Some(Value::Bool(true)));

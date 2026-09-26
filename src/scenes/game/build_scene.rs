@@ -303,6 +303,8 @@ fn pause_button_at(c: &Canvas, pos: (f32, f32)) -> Option<&'static str> {
 }
 
 fn resume_from_pause(c: &mut Canvas) {
+    // Back in phase with the tick loop, which restarts just below.
+    crate::audio_state::resume_game_bgm();
     let from_stasis = matches!(c.get_var("pause_came_from_stasis"), Some(Value::Bool(true)));
     c.set_var("pause_came_from_stasis", false);
     c.resume();
@@ -444,7 +446,7 @@ const PAUSE_BTN_LAYOUT: [(&str, f32, f32); 5] = [
     ("pause_menu_btn",     (VW - 700.0) / 2.0, 1440.0),
 ];
 
-fn switch_game_bgm(c: &mut Canvas, track_idx: i32, asset: &'static [u8], base_vol: f32) {
+pub(crate) fn switch_game_bgm(c: &mut Canvas, track_idx: i32, asset: &'static [u8], base_vol: f32) {
     if c.get_i32("bgm_track_index") != track_idx {
         let handle = c.play_sound_bytes_with(asset, SoundOptions::new().volume(music_volume(c, base_vol)).looping(true));
         audio_state::replace_game_bgm(handle);
@@ -837,7 +839,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
         space_coin_free, space_blue_coin_free, space_bh_free,
         space_asteroid_free, space_red_coin_free, cannon_free,
         space_oxygen_pickup_free, upgrade_free,
-        boss_bolt_free, boss_asteroid_ids, comet_free, warn_free,
+        boss_bolt_free, impact_free, boss_asteroid_ids, comet_free, warn_free,
     } = pools;
 
     let starter_hooks = crate::level_gen::starter_hooks();
@@ -1400,10 +1402,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_phase:        0.0, boss_vx:           0.0,
                 boss_vy:           0.0, boss_shoot_timer:  crate::constants::BOSS_SHOOT_INTERVAL,
                 boss_bolt_live:    Vec::new(), boss_bolt_free:    boss_bolt_free.clone(),
+                impact_live: Vec::new(), impact_free: impact_free.clone(),
                 boss_asteroids:    boss_asteroid_ids.clone(), hud_last_boss_hp:  -999,
                 boss_dark_cooldown: BOSS_DARK_INTERVAL, boss_dark_ticks: 0,
                 boss_dark_active:   false,
                 boss_generators:    Vec::new(), boss_generator_hp: Vec::new(),
+                boss_generator_snap: Vec::new(), boss_generator_flash: Vec::new(),
                 boss_barrier_up:    true, boss_final_phase: false,
                 boss_lunge_telegraph: BOSS_LUNGE_TELEGRAPH, boss_lunge_ticks: 0,
                 boss_lunge_target:  (0.0, 0.0),
@@ -1415,6 +1419,30 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_pattern_cooldown: 0,
                 boss_meteor_lock_ticks: 0,
                 boss_contact_cooldown: 0,
+                conductor_beat_phase: 0.0,
+                conductor_beat_clock: None,
+                conductor_beat_in_bar: 0,
+                conductor_loop_bar: 0,
+                conductor_bar_hits: 0,
+                conductor_last_kick: -1,
+                conductor_cue_delay: 0,
+                impact_sfx_cd: 0,
+                conductor_wave_shape: 0,
+                conductor_rng: 0x9E37_79B9_7F4A_7C15,
+                conductor_eq: [0.0; 4],
+                conductor_eq_cd: 0,
+                conductor_core_vuln: false,
+                boss_hp_max: BOSS_MAX_HP,
+                conductor_beat_fx: Vec::new(),
+                conductor_attack: 0,
+                conductor_attack_ticks: 0,
+                conductor_telegraph: 0,
+                conductor_bar_dir: 1.0,
+                conductor_bar_gap_y: BOSS_Y_CENTER,
+                conductor_wave_count: 1,
+                conductor_wave_hit: 0,
+                conductor_bar_hit: false,
+                conductor_ring_fx: Vec::new(),
                 boss_part_invuln_ticks: 0,
                 beam_explode_live: Vec::new(), buff_fx_attached:  Vec::new(),
                 shield_fx_attached: Vec::new(), shield_player_fx:  false,
@@ -2016,6 +2044,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 c.set_var("pause_animating", false);
                                 c.set_var("game_paused", true);
                                 c.set_var("pause_menu_open", true);
+                                // Hold the music with the clock. `c.pause()`
+                                // below stops the tick, and a track that keeps
+                                // running past it comes back out of phase with
+                                // the beat the fight is scored on.
+                                crate::audio_state::pause_game_bgm();
                                 // The pause menu must not be dimmed by a boss
                                 // darkness phase; restore full brightness.
                                 if c.has_lighting() {
@@ -2341,6 +2374,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     }
                     // ── Boss fight ────────────────────────────────────────
                     boss::tick_boss(c, &st);
+                    // Hit bursts, after the fight so a hit registered this
+                    // tick is already advancing on the frame it happens.
+                    // Outside the boss dispatch because the player can take
+                    // damage anywhere, not only in an arena.
+                    boss::common::tick_impacts(c, &st);
 
                     // ── Roguelike upgrade nodes (spend coins) ──────────────
                     upgrades::tick_upgrades(c, &st);
@@ -2728,6 +2766,16 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         {
                             obj.visible = false;
                         }
+                        // Hand the lane its music back BEFORE leaving.
+                        //
+                        // A boss loop is switched in by `switch_game_bgm`, which
+                        // is guarded on `bgm_track_index` — so once the
+                        // Conductor's track is playing, nothing on the death
+                        // path turns it off and the next run starts with boss
+                        // music over the lane. `hide_conductor` does this when
+                        // the fight ENDS, but dying is not the fight ending in
+                        // the way that function means.
+                        crate::scenes::game::boss::hide_conductor(c);
                         if died_to_sun {
                             c.set_var("died_to_sun", false);
                             c.set_var("died_to_oxygen", false);

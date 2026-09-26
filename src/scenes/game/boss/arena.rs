@@ -191,26 +191,32 @@ pub(crate) fn ensure_arena_shelter_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>)
 /// is no longer a buff node has to be cleared explicitly — a recycled pool slot
 /// would otherwise keep wearing an aura for something it is no longer.
 pub(crate) fn tick_buff_node_elec(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (candidates, previous) = {
+    let (candidates, previous, ringing) = {
         let s = st.lock().unwrap();
-        (s.live_hooks.clone(), s.buff_fx_attached.clone())
+        (s.live_hooks.clone(), s.buff_fx_attached.clone(), s.conductor_ring_fx.clone())
     };
 
     let mut attached: Vec<String> = Vec::new();
     for id in &candidates {
         let Some(obj) = c.get_game_object(id) else { continue; };
         if !obj.visible || !obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) { continue; }
-        crate::scenes::game::fx::attach_electric_fx(
-            c, id,
+        // A node has ONE attached-effect slot. While the Conductor's wave is
+        // ringing this node the wave owns it, or the two systems overwrite each
+        // other every frame and the warning the player needs flickers away.
+        if ringing.contains(id) { continue; }
+        let (r, g, b, a) = BUFF_NODE_FX_TINT;
+        c.attach_effect(
+            id,
+            Effect::Animated { flags: VfxFlags::ELECTRICITY, alpha: a },
+            EffectColor::linear(r, g, b),
             (HOOK_R * BUFF_NODE_FX_SCALE, HOOK_R * BUFF_NODE_FX_SCALE),
-            BUFF_NODE_FX_TINT,
         );
         attached.push(id.clone());
     }
 
     for id in &previous {
         if !attached.contains(id) {
-            crate::scenes::game::fx::clear_object_fx(c, id);
+            c.clear_effect(id);
         }
     }
 
@@ -315,6 +321,7 @@ pub(crate) fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.boss_entry_ticks = 0;
         s.boss_phase = 0.0;
         s.boss_hp = BOSS_MAX_HP;
+        s.boss_hp_max = BOSS_MAX_HP;
         s.boss_shoot_timer = BOSS_SHOOT_INTERVAL;
         drop(s);
         if let Some(obj) = c.get_game_object_mut("boss_hp_bar") {
@@ -619,7 +626,7 @@ pub(crate) fn spawn_arena_tether_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let col = i % cols;
         let row = i / cols;
         let frac = row as f32 / (rows - 1).max(1) as f32;
-        let hy = 300.0 - frac * 4400.0; // +300 … −4100
+        let hy = BOSS_ARENA_NODE_Y_TOP - frac * BOSS_ARENA_PLAY_H;
         let hx = zx1 + zone_w * (0.5 + (col as f32 - (cols as f32 - 1.0) * 0.5) * 0.22);
         // Every third node is a buff node so the player can get a buff mid-fight.
         activate_arena_tether_node(c, &mut *s, id, hx, hy, i % 3 == 0);
@@ -890,21 +897,11 @@ pub(crate) fn tick_boss_lights(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         c.set_light_enabled(&lid, vis);
     }
 
-    // Arena tether nodes: faint cyan light so the player can navigate in the dark.
-    let hooks: Vec<String> = {
-        let s = st.lock().unwrap();
-        s.live_hooks.clone()
-    };
-    for id in &hooks {
-        let lid = format!("boss_node_light_{id}");
-        if c.get_light(&lid).is_none() {
-            let mut ls = LightSource::new(lid.clone(), (0.0, 0.0), Color(110, 230, 255, 255), 520.0, 0.45);
-            ls.casts_shadows = false;
-            c.add_light(ls);
-            c.attach_light(&lid, id, (0.0, 0.0));
-        }
-        c.set_light_enabled(&lid, true);
-    }
+    // No per-node lights. There used to be one per live hook, always on,
+    // stacked on top of the darkness's own node markers — 17-22 lights in
+    // daylight, where ambient is already 1.0 and they changed nothing visible,
+    // costing 5-12 ms a frame on the test phone. Nodes stay readable in the
+    // dark by being drawn unlit instead; see `eclipse::show_nodes_in_dark`.
 }
 
 /// Count down and hide the boss-arena wormhole warp overlay. The cannon
@@ -960,8 +957,13 @@ pub(crate) fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         generator_ids = s.boss_generators.clone();
     }
     c.set_var("boss_darkness", false);
+    // Put the Conductor's pieces away here as well as in its own tick: the
+    // fight stops being ticked the moment the boss dies, so anything it left on
+    // screen would have nothing to clean it up. Same lesson as the darkness
+    // post-pass two lines down.
+    hide_conductor(c);
     crate::scenes::game::eclipse::end_night_mode(c);
-    crate::scenes::game::eclipse::kill_node_lights(c);
+    crate::scenes::game::eclipse::release_nodes_from_dark(c);
     if c.has_lighting() {
         c.set_ambient(Color(255, 255, 255, 255), 1.0);
     }
@@ -1111,9 +1113,12 @@ pub(crate) fn tick_boss_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let dirty = hp != s.hud_last_boss_hp;
     if !dirty { return; }
     s.hud_last_boss_hp = hp;
+    let hp_max = s.boss_hp_max;
     drop(s);
 
-    let fill = (hp as f32 / BOSS_MAX_HP as f32).clamp(0.0, 1.0);
+    // Against the boss's OWN maximum, not the global constant — see
+    // `State::boss_hp_max`.
+    let fill = (hp as f32 / hp_max.max(1) as f32).clamp(0.0, 1.0);
     let w = BOSS_HP_BAR_W as u32;
     let h = BOSS_HP_BAR_H as u32;
     let fill_px = (fill * w as f32).round() as u32;

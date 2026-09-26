@@ -126,10 +126,28 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     // ── Contact-rule inversion ──
     {
-        let s = st.lock().unwrap();
-        let touching = !s.dead
-            && (px - bcx).powi(2) + (py - bcy).powi(2) < (PLAYER_R + BOSS_SIZE * 0.5).powi(2);
-        drop(s);
+        // Contact costs a heart at most once per cooldown.
+        //
+        // `lose_heart` has no invulnerability of its own, so an overlap test
+        // calling it straight took a heart EVERY FRAME you were touching the
+        // body — the whole run in well under a second. Matches the Colossus's
+        // and the Serpent's 45-tick gate.
+        let touching = {
+            let mut s = st.lock().unwrap();
+            if s.boss_contact_cooldown > 0 {
+                s.boss_contact_cooldown -= 1;
+                false
+            } else if s.dead {
+                false
+            } else {
+                let r = PLAYER_R + BOSS_SIZE * 0.5;
+                let hit = (px - bcx).powi(2) + (py - bcy).powi(2) < r * r;
+                if hit {
+                    s.boss_contact_cooldown = CONDUCTOR_CONTACT_COOLDOWN;
+                }
+                hit
+            }
+        };
         if touching {
             crate::scenes::game::hearts::lose_heart(c, st);
         }

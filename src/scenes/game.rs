@@ -23,3 +23,4 @@ pub mod space_zone;
 mod build_scene;
 
 pub use build_scene::{build_game_scene, register_pause_ui_handlers};
+pub(crate) use build_scene::switch_game_bgm;

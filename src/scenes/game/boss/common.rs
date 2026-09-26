@@ -194,3 +194,166 @@ pub(crate) fn leash_clamp(from: (f32, f32), to: (f32, f32), max: f32) -> (f32, f
     let f = max / d;
     (from.0 + dx * f, from.1 + dy * f)
 }
+
+
+/// Register a hit at `pos`, `size` across.
+///
+/// ## Why hits need their own effect
+///
+/// Damage used to be reported by a camera flash and a health bar moving. Both
+/// are AWAY from the thing that was hit, and the health bar is a slow readout
+/// at the top of the screen — so a landed hit and a missed one felt almost the
+/// same in the moment, which is the moment that matters in a boss fight.
+///
+/// Silently does nothing when the pool is empty rather than stealing the
+/// oldest burst: the hit that gets dropped in a busy frame is the one the
+/// player is least likely to be watching, and cutting a burst short mid-flash
+/// looks like a rendering fault.
+pub fn spawn_impact(
+    c: &mut quartz::Canvas,
+    st: &std::sync::Arc<std::sync::Mutex<crate::state::State>>,
+    pos: (f32, f32),
+    size: f32,
+    rgb: (f32, f32, f32),
+    taken: bool,
+) {
+    use crate::constants::*;
+    let kind = if taken { IMPACT_KIND_TAKEN } else { IMPACT_KIND_DEALT };
+    spawn_pooled_fx(c, st, pos, size * IMPACT_SCALE, rgb, kind, IMPACT_TICKS);
+}
+
+/// A sonic pulse at `pos` — the player's own beat feedback.
+///
+/// Green when a release scores, red when a stack is lost. A PULSE rather than
+/// the hit burst: scoring a beat is not an impact, and giving it the same
+/// shatter as landing a hit on the boss would make the two read alike in a
+/// fight where both happen seconds apart.
+pub fn spawn_beat_pulse(
+    c: &mut quartz::Canvas,
+    st: &std::sync::Arc<std::sync::Mutex<crate::state::State>>,
+    pos: (f32, f32),
+    hit: bool,
+) {
+    use crate::constants::*;
+    let rgb = if hit { BEAT_HIT_RGB } else { BEAT_MISS_RGB };
+    spawn_pooled_fx(c, st, pos, PLAYER_R * 2.0 * BEAT_PULSE_SCALE, rgb,
+                    IMPACT_KIND_PULSE, BEAT_PULSE_TICKS);
+}
+
+fn spawn_pooled_fx(
+    c: &mut quartz::Canvas,
+    st: &std::sync::Arc<std::sync::Mutex<crate::state::State>>,
+    pos: (f32, f32),
+    d: f32,
+    rgb: (f32, f32, f32),
+    kind: u32,
+    ticks: u32,
+) {
+    let id = {
+        let mut s = st.lock().unwrap();
+        match s.impact_free.pop() {
+            Some(id) => {
+                s.impact_live.push((id.clone(), ticks, d, rgb, kind));
+                id
+            }
+            None => return,
+        }
+    };
+    if let Some(o) = c.get_game_object_mut(&id) {
+        o.size = (d, d);
+        o.position = (pos.0 - d * 0.5, pos.1 - d * 0.5);
+        o.visible = true;
+    }
+}
+
+/// Advance every live hit burst, and hand expired ones back to the pool.
+pub fn tick_impacts(
+    c: &mut quartz::Canvas,
+    st: &std::sync::Arc<std::sync::Mutex<crate::state::State>>,
+) {
+    use crate::constants::*;
+    let live = { st.lock().unwrap().impact_live.clone() };
+    if live.is_empty() {
+        return;
+    }
+    let mut keep = Vec::with_capacity(live.len());
+    let mut freed = Vec::new();
+    for (id, ticks, d, rgb, kind) in live {
+        let left = ticks.saturating_sub(1);
+        if left == 0 {
+            if let Some(o) = c.get_game_object_mut(&id) {
+                o.visible = false;
+                o.size = (8.0, 8.0);
+                o.position = (-9000.0, -9000.0);
+            }
+            c.clear_effect(&id);
+            freed.push(id);
+            continue;
+        }
+        // Age is normalised against whatever this effect's own lifetime was,
+        // recovered from the tick it started at — a pulse lives fewer ticks
+        // than a burst, and dividing both by the burst's length would make a
+        // pulse start at 70% and never reach full brightness.
+        let total = if kind == IMPACT_KIND_PULSE { BEAT_PULSE_TICKS } else { IMPACT_TICKS };
+        let age = left as f32 / total as f32;
+        if kind == IMPACT_KIND_PULSE {
+            c.attach_effect(
+                &id, Effect::SonicRing { intensity: age },
+                crate::scenes::game::fx::lin(rgb), (d, d));
+        } else {
+            let side = if kind == IMPACT_KIND_TAKEN { ImpactSide::Taken } else { ImpactSide::Dealt };
+            c.attach_effect(
+                &id, Effect::Impact { age, side },
+                crate::scenes::game::fx::lin(rgb), (d, d));
+        }
+        keep.push((id, left, d, rgb, kind));
+    }
+    let mut s = st.lock().unwrap();
+    s.impact_live = keep;
+    s.impact_free.extend(freed);
+}
+
+#[cfg(test)]
+mod impact_tests {
+    use crate::constants::*;
+
+    /// The pool must be big enough for the worst honest case: the Colossus can
+    /// lose a part while two more are striking and the player is being hit.
+    #[test]
+    fn the_pool_covers_a_busy_frame() {
+        assert!(IMPACT_POOL_SIZE >= 4,
+                "a pool of {IMPACT_POOL_SIZE} will drop hits in a busy frame, \
+                 and a hit that does not draw teaches the player it missed");
+    }
+
+    /// Short enough to read as an instant. Much past a third of a second and a
+    /// burst stops being an event and starts being a state the part is in.
+    #[test]
+    fn a_burst_is_brief() {
+        assert!(IMPACT_TICKS <= 30,
+                "{IMPACT_TICKS} ticks is over half a second — too long to read \
+                 as the moment of impact");
+        assert!(IMPACT_TICKS >= 8,
+                "{IMPACT_TICKS} ticks may not survive a dropped frame");
+    }
+
+    /// Drawn bigger than the thing it happened to, or the burst hides inside
+    /// the sprite it is meant to be confirming.
+    #[test]
+    fn a_burst_is_bigger_than_what_was_hit() {
+        assert!(IMPACT_SCALE > 1.0, "impacts draw no larger than the target");
+    }
+
+    /// Damage TAKEN is red and nothing else in the fight's state vocabulary
+    /// is, so it cannot be mistaken for a wind-up warning at a glance.
+    #[test]
+    fn taken_damage_is_unmistakable() {
+        let (r, g, b) = IMPACT_TAKEN_RGB;
+        assert!(r > 0.8 && g < 0.4 && b < 0.4, "taken damage is not clearly red");
+        // And clearly distinct from the colour a hit DEALT uses.
+        let (dr, dg, db) = IMPACT_DEALT_RGB;
+        let dist = (r - dr).abs() + (g - dg).abs() + (b - db).abs();
+        assert!(dist > 0.8,
+                "dealt and taken damage are too close in colour ({dist:.2})");
+    }
+}

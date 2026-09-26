@@ -631,14 +631,28 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // top-left corner as the sprite gets smaller.
         let half = piece.draw * 0.5;
         let seam_step = (piece.seam * crate::images::SERPENT_SEAM_STEPS as f32).round() as u32;
-        let img = match piece.id {
-            "head" => crate::images::serpent_head_cached(piece.size as u32),
-            "tail" => crate::images::serpent_tail_cached(
-                piece.size as u32,
-                if act == SerpentAct::TailLaunch { crate::images::SERPENT_SEAM_STEPS } else { seam_step },
-            ),
-            _ => crate::images::serpent_segment_cached(piece.size as u32, seam_step),
+        // Generated art for the head and the body; the tail keeps its drawn
+        // version, which animates its seam as it detaches and so cannot be a
+        // single static sprite.
+        // The tail now has its own sprite. It is stored already rotated so
+        // its point trails to the LEFT, because the engine turns every piece
+        // to face along the trail and treats sprite-right as forward — a tail
+        // drawn pointing down would lead with its tip.
+        let pl = match piece.id {
+            "head" => Some(ASSET_PL_SERPENT_HEAD),
+            "tail" => Some(ASSET_PL_SERPENT_TAIL),
+            _ => Some(ASSET_PL_SERPENT_SEGMENT),
         };
+        let img = pl
+            .and_then(|b| crate::scenes::game::helpers::pl_image_cached(b, piece.size))
+            .unwrap_or_else(|| match piece.id {
+                "head" => crate::images::serpent_head_cached(piece.size as u32),
+                "tail" => crate::images::serpent_tail_cached(
+                    piece.size as u32,
+                    if act == SerpentAct::TailLaunch { crate::images::SERPENT_SEAM_STEPS } else { seam_step },
+                ),
+                _ => crate::images::serpent_segment_cached(piece.size as u32, seam_step),
+            });
         if let Some(obj) = c.get_game_object_mut(&name) {
             // Ellipse, not Rectangle: `GameObject::highlight_shape` copies the
             // drawable's ShapeType, so a rectangular sprite gets a rectangular
@@ -659,17 +673,17 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         // The energised forcefield, attached so it takes the segment's own
-        // depth and position — see `fx::attach_mega_fx`.
+        // depth and position — see `Canvas::attach_effect`.
         if piece.shielded && piece.id == "seg" {
             let energy = 1.0 - piece.seam;
-            crate::scenes::game::fx::attach_mega_fx(
-                c, &name, crate::scenes::game::fx::flat_white(),
+            c.attach_effect(
+                &name,
+                Effect::SegmentShield { energy },
+                EffectColor::linear(0.45, 1.0, 0.75),
                 (piece.draw * 1.12, piece.draw * 1.12),
-                (0.45, 1.0, 0.75, energy),
-                [MEGA_BIT_SEGMENT_SHIELD, 0, 0, 0], 1,
             );
         } else {
-            crate::scenes::game::fx::clear_object_fx(c, &name);
+            c.clear_effect(&name);
         }
     }
     // Hide any destroyed piece's object and release its shield.
@@ -679,7 +693,7 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         for i in 0..total {
             if live.contains(&i) { continue; }
             let name = format!("serpent_part_{i}");
-            crate::scenes::game::fx::clear_object_fx(c, &name);
+            c.clear_effect(&name);
             if let Some(obj) = c.get_game_object_mut(&name) { obj.visible = false; }
         }
     }
@@ -689,6 +703,9 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // ── Damage: buffed hits on an exposed piece ──────────────────────────
     if buffed {
         let mut killed = false;
+        // Where the hit landed, so the burst can be spawned once the state
+        // lock is released — `spawn_impact` takes the canvas and the state.
+        let mut hit_at: Option<((f32, f32), f32)> = None;
         let mut s = st.lock().unwrap();
         for piece in &pieces {
             if !piece.open { continue; }
@@ -703,12 +720,18 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         killed = true;
                     }
                     s.buff_hit_flash = 20;
+                    hit_at = Some((piece.pos, piece.draw));
                 }
                 break;
             }
         }
         let _ = killed;
         if s.boss_part_invuln_ticks > 0 { s.boss_part_invuln_ticks -= 1; }
+        drop(s);
+        if let Some((pos, size)) = hit_at {
+            crate::scenes::game::boss::common::spawn_impact(
+                c, st, pos, size, SERPENT_MARKER_VULNERABLE_RGB, false);
+        }
     } else {
         let mut s = st.lock().unwrap();
         if s.boss_part_invuln_ticks > 0 { s.boss_part_invuln_ticks -= 1; }
@@ -756,11 +779,12 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         s.boss_hp = boss_total_hp(&s);
+        s.boss_hp_max = s.boss_hp.max(1);
     }
     let dead = { let s = st.lock().unwrap(); s.boss_parts.iter().all(|p| !p.alive) };
     if dead {
         for i in 0..pieces.len().max(SERPENT_SEGMENTS + 2) {
-            crate::scenes::game::fx::clear_object_fx(c, &format!("serpent_part_{i}"));
+            c.clear_effect(&format!("serpent_part_{i}"));
             if let Some(obj) = c.get_game_object_mut(&format!("serpent_part_{i}")) {
                 obj.visible = false;
             }

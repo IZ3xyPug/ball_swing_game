@@ -9,6 +9,10 @@ use crate::state::*;
 use super::helpers::*;
 
 pub fn tick_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    {
+        let mut g = st.lock().unwrap();
+        g.impact_sfx_cd = g.impact_sfx_cd.saturating_sub(1);
+    }
     tick_spinner_collision(c, st);
     tick_gate_collision(c, st);
     tick_pad_bounce(c, st);
@@ -117,6 +121,7 @@ fn tick_spinner_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
                 let unhook_ops = begin_unhook(&mut s);
                 drop(s);
+                crate::scenes::game::helpers::play_impact_sfx(c, st);
 
                 if let Some(obj) = c.get_game_object_mut(&name) {
                     obj.set_glow(GlowConfig { color: Color(255, 100, 80, 220), width: 8.0 });
@@ -324,6 +329,7 @@ pub fn tick_rocket_pad_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Floating asteroid collision ──────────────────────────────────────────────
 
 fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let mut impacts = 0u32;
     let mut s = st.lock().unwrap();
     let live = s.space_asteroid_live.clone();
 
@@ -351,6 +357,7 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         };
 
         if let Some((push_x, push_y, ast_vx, ast_vy)) = hit_info {
+            impacts += 1;
             // Push player out of overlap.
             s.px += push_x;
             s.py += push_y;
@@ -393,6 +400,10 @@ fn tick_asteroid_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
             s = st.lock().unwrap();
         }
+    }
+    drop(s);
+    if impacts > 0 {
+        crate::scenes::game::helpers::play_impact_sfx(c, st);
     }
 }
 

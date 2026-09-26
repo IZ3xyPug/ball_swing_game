@@ -74,7 +74,7 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if let Some(p) = c.get_game_object_mut("player") {
                 p.clear_glow();
             }
-            super::fx::clear_object_fx(c, "player");
+            c.clear_effect("player");
         }
         return;
     }
@@ -88,10 +88,12 @@ fn tick_buff(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             .get_game_object("player")
             .map(|p| p.size.0.max(p.size.1).max(PLAYER_R * 2.0))
             .unwrap_or(PLAYER_R * 2.0);
-        super::fx::attach_electric_fx(
-            c, "player",
+        let (r, g, b, a) = BUFF_PLAYER_FX_TINT;
+        c.attach_effect(
+            "player",
+            Effect::Animated { flags: VfxFlags::ELECTRICITY, alpha: a },
+            EffectColor::linear(r, g, b),
             (d * BUFF_PLAYER_FX_SCALE, d * BUFF_PLAYER_FX_SCALE),
-            BUFF_PLAYER_FX_TINT,
         );
         // Through the guard we already hold. `st.lock()` here re-locked the
         // SAME std::sync::Mutex on the same thread while `s` was still alive —
@@ -146,6 +148,18 @@ pub fn checkpoint_save(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// Remove one heart (and any active buff/power-ups). Returns true if the run is
 /// over (no hearts left). Keeps the `hearts`/`heart_losses` vars current.
 pub fn lose_heart(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    // Register the hit ON THE PLAYER, first thing, whatever happens next.
+    //
+    // Every route out of this function — a free respawn, a lost heart, a
+    // death — is the player being hit, and all three used to report it only
+    // with a camera flash. A burst at the player's own position says WHERE it
+    // landed, and its shape (a rim biting inward) says the damage was taken
+    // rather than dealt, which a colour alone cannot in a busy frame.
+    {
+        let (px, py) = { let s = st.lock().unwrap(); (s.px, s.py) };
+        crate::scenes::game::boss::common::spawn_impact(
+            c, st, (px, py), PLAYER_R * 2.0, IMPACT_TAKEN_RGB, true);
+    }
     // SECOND WIND spends a free respawn instead of a heart. Power-ups are still
     // lost — the upgrade buys the life, not the run state, so a rank never
     // makes a mistake free.

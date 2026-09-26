@@ -18,17 +18,30 @@ pub(crate) fn tick_boss_weakpoints(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.boss_active && s.boss_spawned && s.boss_hp > 0
     };
     let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
-    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
-    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    let bcx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
+    let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
     for (i, (ox, oy)) in BOSS_WEAKPOINT_OFFSETS.iter().enumerate() {
         let id = format!("boss_weak_{i}");
-        let Some(obj) = c.get_game_object_mut(&id) else { continue; };
-        if active {
+        let mut place = false;
+        if let Some(obj) = c.get_game_object_mut(&id) {
             let r = BOSS_WEAKPOINT_R;
-            obj.position = (bcx + ox - r, bcy + oy - r);
-            obj.visible = true;
+            if active {
+                obj.size = (r * 2.0, r * 2.0);
+                obj.position = (bcx + ox - r, bcy + oy - r);
+                obj.visible = true;
+                place = true;
+            } else {
+                obj.visible = false;
+            }
+        }
+        // Outside the borrow: the effect helper needs the canvas too.
+        if place {
+            let d = BOSS_WEAKPOINT_R * 2.0;
+            crate::scenes::game::fx::attach_state_marker(
+                c, &id, (d, d), DEVOURER_MARKER_VULNERABLE_RGB, 1.0,
+                MarkerMode::Vulnerable);
         } else {
-            obj.visible = false;
+            c.clear_effect(&id);
         }
     }
 }
@@ -61,14 +74,14 @@ pub(crate) fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if ending {
             c.set_var("boss_darkness", false);
             crate::scenes::game::eclipse::end_night_mode(c);
-            crate::scenes::game::eclipse::kill_node_lights(c);
+            crate::scenes::game::eclipse::release_nodes_from_dark(c);
             if c.has_lighting() {
                 c.set_ambient(Color(255, 255, 255, 255), 1.0);
             }
         } else {
-            // Hold the markers lit for the whole attack. They are attached
-            // per pool slot, so this only has to match `enabled` to `visible`.
-            crate::scenes::game::eclipse::drive_node_lights(c, ECLIPSE_NODE_LIGHT_INTENSITY);
+            // Keep the nodes readable for the whole attack (hooks come and
+            // go) — unlit, not lights; see `show_nodes_in_dark`.
+            crate::scenes::game::eclipse::show_nodes_in_dark(c, 1.0);
         }
     } else {
         s.boss_dark_cooldown = s.boss_dark_cooldown.saturating_sub(1);
@@ -80,9 +93,8 @@ pub(crate) fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         drop(s);
         if starting {
             c.set_var("boss_darkness", true);
-            crate::scenes::game::eclipse::ensure_node_lights(c);
             crate::scenes::game::eclipse::begin_night_mode(c, crate::scenes::game::eclipse::NightPost::boss_dark());
-            crate::scenes::game::eclipse::drive_node_lights(c, ECLIPSE_NODE_LIGHT_INTENSITY);
+            crate::scenes::game::eclipse::show_nodes_in_dark(c, 1.0);
             if c.has_lighting() {
                 c.set_ambient(Color(10, 10, 25, 255), BOSS_DARK_AMBIENT);
             }
@@ -98,9 +110,13 @@ pub(crate) fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>
         let mut s = st.lock().unwrap();
         s.boss_generators.clear();
         s.boss_generator_hp.clear();
+        s.boss_generator_snap.clear();
+        s.boss_generator_flash.clear();
         for _ in 0..BOSS_GENERATOR_COUNT {
             s.boss_generators.push(String::new());
             s.boss_generator_hp.push(BOSS_GENERATOR_HP);
+            s.boss_generator_snap.push(0);
+            s.boss_generator_flash.push(0);
         }
         s.boss_barrier_up = true;
         s.boss_final_phase = false;
@@ -137,10 +153,13 @@ pub(crate) fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>
 /// Show the boss forcefield ring while the generators are still up, and the
 /// arena boundary forcefield while the boss fight is active.
 pub(crate) fn tick_boss_forcefield(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let (active, spawned, generators_up, hp) = {
+    let (active, spawned, generators_up, hp, live_frac, snapping) = {
         let s = st.lock().unwrap();
         let gens_up = !s.boss_generator_hp.is_empty() && s.boss_generator_hp.iter().any(|&hp| hp > 0);
-        (s.boss_active, s.boss_spawned, gens_up, s.boss_hp)
+        let live = s.boss_generator_hp.iter().filter(|&&hp| hp > 0).count();
+        let frac = live as f32 / s.boss_generator_hp.len().max(1) as f32;
+        (s.boss_active, s.boss_spawned, gens_up, s.boss_hp, frac,
+         s.boss_generator_snap.iter().copied().max().unwrap_or(0))
     };
     let fighting = active && hp > 0;
 
@@ -151,22 +170,38 @@ pub(crate) fn tick_boss_forcefield(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     let boss_center = c.get_game_object("boss")
-        .map(|o| (o.position.0 + BOSS_SIZE * 0.5, o.position.1 + BOSS_SIZE * 0.5));
+        .map(|o| (o.position.0 + DEVOURER_BODY_SIZE * 0.5, o.position.1 + DEVOURER_BODY_SIZE * 0.5));
 
+    let mut dome: Option<f32> = None;
     if let Some(obj) = c.get_game_object_mut("boss_forcefield") {
         if fighting && spawned && generators_up {
             if let Some((bcx, bcy)) = boss_center {
-                let d = BOSS_SIZE * 1.5;
+                let d = DEVOURER_BODY_SIZE * 1.5;
                 obj.position = (bcx - d * 0.5, bcy - d * 0.5);
                 obj.size = (d, d);
                 obj.update_image_shape();
                 obj.visible = true;
+                dome = Some(d);
             } else {
                 obj.visible = false;
             }
         } else {
             obj.visible = false;
         }
+    }
+    // The shield itself: a live energy dome rather than a painted ring.
+    match dome {
+        Some(d) => {
+            // The dome reports progress: it weakens with each generator lost,
+            // and stutters while a severed line is snapping back into it.
+            // The snap countdown doubles as the flicker clock.
+            let flicker = if snapping > 0 && (snapping / 3) % 2 == 0 { 0.45 } else { 1.0 };
+            let strength = (0.40 + 0.40 * live_frac) * flicker;
+            c.attach_effect(
+                "boss_forcefield", Effect::EnergyDome { strength },
+                EffectColor::linear(0.55, 0.85, 1.0), (d, d));
+        }
+        None => c.clear_effect("boss_forcefield"),
     }
 }
 
@@ -183,8 +218,8 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             c.get_game_object("boss").map(|o| o.position).unwrap_or((-9999.0, -9999.0)),
         )
     };
-    let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
-    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    let bcx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
+    let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
 
     let gens: Vec<String> = st.lock().unwrap().boss_generators.clone();
     let mut damaged: Vec<usize> = Vec::new();
@@ -207,9 +242,24 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // Boss crashing into the generator damages it (the "lure" path).
         let dx = bcx - gx;
         let dy = bcy - gy;
-        let r = BOSS_SIZE * 0.5 + BOSS_GENERATOR_R;
+        let r = DEVOURER_BODY_SIZE * 0.5 + BOSS_GENERATOR_R;
         if dx * dx + dy * dy < r * r {
             damaged.push(i);
+        }
+    }
+    // DEVOURER_GEN_CHECK=1 (headless): knock one live generator down a point
+    // every 45 ticks, so the hit / damaged-art / tether-snap / barrier-drop
+    // paths run in a real fight loop — the auto-player never lands a hit on
+    // a generator on its own.
+    if std::env::var("DEVOURER_GEN_CHECK").is_ok() {
+        let tick = match c.get_var("devourer_gen_check_tick") { Some(Value::I32(v)) => v, _ => 0 } + 1;
+        c.set_var("devourer_gen_check_tick", tick);
+        if tick % 45 == 0 {
+            let hp = st.lock().unwrap().boss_generator_hp.clone();
+            if let Some(i) = hp.iter().position(|&h| h > 0) {
+                damaged.push(i);
+                eprintln!("gen-check: hit generator {i} (hp {} -> {})", hp[i], hp[i] - 1);
+            }
         }
     }
     if damaged.is_empty() {
@@ -220,6 +270,46 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         for i in damaged {
             if i < s.boss_generator_hp.len() {
                 s.boss_generator_hp[i] -= 1;
+                // Every hit registers on the generator itself...
+                if let Some(f) = s.boss_generator_flash.get_mut(i) {
+                    *f = GENERATOR_FLASH_TICKS;
+                }
+                // ...and the killing one cuts its line to the shield.
+                if s.boss_generator_hp[i] == 0 {
+                    if let Some(sn) = s.boss_generator_snap.get_mut(i) {
+                        *sn = DEVOURER_TETHER_SNAP_TICKS;
+                    }
+                }
+            }
+        }
+    }
+    // A generator that has taken its first hit SHOWS it: the damaged art,
+    // still, where the intact one pulsed. The fight's progress is then
+    // readable off the generators themselves.
+    {
+        let (hp, gens) = {
+            let s = st.lock().unwrap();
+            (s.boss_generator_hp.clone(), s.boss_generators.clone())
+        };
+        let (_, damaged_art, _) = devourer_generator_assets();
+        for (i, id) in gens.iter().enumerate() {
+            if hp.get(i).copied() == Some(1) {
+                if let Some(obj) = c.get_game_object_mut(id) {
+                    if obj.animated_sprite.is_some() {
+                        let d = BOSS_GENERATOR_R * 2.0;
+                        if let Some(img) = crate::scenes::game::helpers::pl_image_cached(damaged_art, d) {
+                            if std::env::var("DEVOURER_GEN_CHECK").is_ok() {
+                                eprintln!("gen-check: generator {i} shows its damaged art");
+                            }
+                            obj.animated_sprite = None;
+                            obj.set_image(Image {
+                                shape: ShapeType::Rectangle(0.0, (d, d), 0.0),
+                                image: img,
+                                color: None,
+                            });
+                        }
+                    }
+                }
             }
         }
     }
@@ -239,6 +329,9 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
     if all_down {
+        if std::env::var("DEVOURER_GEN_CHECK").is_ok() {
+            eprintln!("gen-check: all generators down, barrier dropped");
+        }
         let mut s = st.lock().unwrap();
         s.boss_barrier_up = false;
         s.boss_final_phase = true;
@@ -246,6 +339,114 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut("boss_barrier") {
             obj.visible = false;
         }
+    }
+}
+
+/// How long a generator's hit flash lasts.
+const GENERATOR_FLASH_TICKS: i32 = 18;
+
+/// Draw each generator's power line into the dome, its hit flashes, and the
+/// line snapping back when a generator dies.
+///
+/// The fight's objective is "destroy the generators, then the boss is open".
+/// Before this the generators were three objects with nothing tying them to
+/// the shield — the player had to be told what they were for. A line that
+/// visibly FEEDS the dome, and lets go of it the moment its generator dies,
+/// teaches the objective without a word, and shows progress as the dome
+/// loses its lines one by one.
+pub(crate) fn tick_generator_tethers(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (fighting, gens, hp, snap, flash) = {
+        let s = st.lock().unwrap();
+        (
+            s.boss_active && s.boss_spawned && s.boss_hp > 0,
+            s.boss_generators.clone(),
+            s.boss_generator_hp.clone(),
+            s.boss_generator_snap.clone(),
+            s.boss_generator_flash.clone(),
+        )
+    };
+    let dome = c.get_game_object("boss").map(|o| (
+        o.position.0 + DEVOURER_BODY_SIZE * 0.5,
+        o.position.1 + DEVOURER_BODY_SIZE * 0.5,
+    ));
+    // Plug in just inside the dome's rim (the dome is 1.5x the body).
+    let dome_r = DEVOURER_BODY_SIZE * 1.5 * 0.5 * 0.92;
+
+    for i in 0..BOSS_GENERATOR_COUNT {
+        let tether = format!("boss_gen_tether_{i}");
+        let gen_id = gens.get(i).cloned().unwrap_or_default();
+        let alive = hp.get(i).copied().unwrap_or(0) > 0;
+        let snapping = snap.get(i).copied().unwrap_or(0);
+
+        // ── The line ─────────────────────────────────────────────────────
+        let gen_centre = c.get_game_object(&gen_id)
+            .map(|o| (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5));
+        let line = match (fighting, dome, gen_centre) {
+            (true, Some(bc), Some(gc)) if alive || snapping > 0 => {
+                let (dx, dy) = (bc.0 - gc.0, bc.1 - gc.1);
+                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+                let end = (bc.0 - dx / dist * dome_r, bc.1 - dy / dist * dome_r);
+                // Start at the generator's crystal, not its rim.
+                let (sx, sy) = gc;
+                let (lx, ly) = (end.0 - sx, end.1 - sy);
+                let len = (lx * lx + ly * ly).sqrt().max(1.0);
+                Some((sx, sy, lx, ly, len))
+            }
+            _ => None,
+        };
+        let mut shown: Option<(f32, f32)> = None;
+        if let Some(obj) = c.get_game_object_mut(&tether) {
+            match line {
+                Some((sx, sy, lx, ly, len)) => {
+                    let w = DEVOURER_TETHER_WIDTH;
+                    obj.size = (len, w);
+                    obj.rotation = ly.atan2(lx).to_degrees();
+                    let mid = (sx + lx * 0.5, sy + ly * 0.5);
+                    obj.position = (mid.0 - len * 0.5, mid.1 - w * 0.5);
+                    obj.visible = true;
+                    shown = Some((len, w));
+                }
+                None => obj.visible = false,
+            }
+        }
+        match shown {
+            Some(size) if alive => {
+                c.attach_effect(
+                    &tether, Effect::EnergyTether { intensity: 0.95, snap: None },
+                    crate::scenes::game::fx::lin(DEVOURER_TETHER_RGB), size);
+            }
+            Some(size) => {
+                if snapping == DEVOURER_TETHER_SNAP_TICKS && std::env::var("DEVOURER_GEN_CHECK").is_ok() {
+                    eprintln!("gen-check: tether {i} snapping");
+                }
+                let t = 1.0 - snapping as f32 / DEVOURER_TETHER_SNAP_TICKS as f32;
+                c.attach_effect(
+                    &tether, Effect::EnergyTether { intensity: 1.0, snap: Some(t) },
+                    crate::scenes::game::fx::lin(DEVOURER_TETHER_RGB), size);
+            }
+            None => c.clear_effect(&tether),
+        }
+
+        // ── The hit flash ────────────────────────────────────────────────
+        let f = flash.get(i).copied().unwrap_or(0);
+        if f > 0 && !gen_id.is_empty() {
+            let d = BOSS_GENERATOR_R * 2.0 * 1.7;
+            c.attach_effect(
+                &gen_id,
+                Effect::Impact {
+                    age: f as f32 / GENERATOR_FLASH_TICKS as f32,
+                    side: ImpactSide::Dealt,
+                },
+                crate::scenes::game::fx::lin(DEVOURER_TETHER_RGB), (d, d));
+        } else if !gen_id.is_empty() {
+            c.clear_effect(&gen_id);
+        }
+    }
+
+    let mut guard = st.lock().unwrap();
+    let s = &mut *guard;
+    for v in s.boss_generator_snap.iter_mut().chain(s.boss_generator_flash.iter_mut()) {
+        *v = (*v - 1).max(0);
     }
 }
 
@@ -272,11 +473,11 @@ pub(crate) fn tick_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     // Keep the boss on the safe side of the barrier too.
     let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((0.0, 0.0));
-    let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+    let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
     if bcy < BOSS_BARRIER_Y {
         drop(s);
         if let Some(obj) = c.get_game_object_mut("boss") {
-            obj.position.1 = BOSS_BARRIER_Y - BOSS_SIZE * 0.5;
+            obj.position.1 = BOSS_BARRIER_Y - DEVOURER_BODY_SIZE * 0.5;
         }
     }
 }
@@ -313,8 +514,8 @@ pub(crate) fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.boss_lunge_ticks -= 1;
         let (tx, ty) = s.boss_lunge_target;
         let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((0.0, 0.0));
-        let bcx = boss_pos.0 + BOSS_SIZE * 0.5;
-        let bcy = boss_pos.1 + BOSS_SIZE * 0.5;
+        let bcx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
+        let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
         let dx = tx - bcx;
         let dy = ty - bcy;
         let d = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -328,7 +529,7 @@ pub(crate) fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let done = s.boss_lunge_ticks == 0;
         drop(s);
         if let Some(obj) = c.get_game_object_mut("boss") {
-            obj.position = (nx - BOSS_SIZE * 0.5, ny - BOSS_SIZE * 0.5);
+            obj.position = (nx - DEVOURER_BODY_SIZE * 0.5, ny - DEVOURER_BODY_SIZE * 0.5);
         }
         // NOTE: no sun-line kill here any more. The boss overshooting the top
         // of the arena used to end the fight instantly, which short-circuited
@@ -336,7 +537,7 @@ pub(crate) fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // Clamp instead, so a lunge cannot carry it out of the arena.
         let ny = ny.max(BOSS_ARENA_TOP_Y);
         if let Some(obj) = c.get_game_object_mut("boss") {
-            obj.position.1 = ny - BOSS_SIZE * 0.5;
+            obj.position.1 = ny - DEVOURER_BODY_SIZE * 0.5;
         }
         if done {
             let mut s = st.lock().unwrap();
@@ -372,18 +573,32 @@ pub(crate) fn tick_boss_appearance(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     // Place boss at its initial lissajous position (top-center).
-    let spawn_x = arena_center_x(c) - BOSS_SIZE * 0.5;
-    let spawn_y = BOSS_Y_CENTER - BOSS_SIZE * 0.5;
+    let spawn_x = arena_center_x(c) - DEVOURER_BODY_SIZE * 0.5;
+    let spawn_y = BOSS_Y_CENTER - DEVOURER_BODY_SIZE * 0.5;
     if let Some(obj) = c.get_game_object_mut("boss") {
         obj.position = (spawn_x, spawn_y);
         obj.visible = true;
+        // DEVOURER_DEBUG=1 prints which image the body actually ended up
+        // carrying. It exists because "the new art did not appear" and "the
+        // new art was never wired up" look identical on a screen, and this
+        // fight in particular spent a round being argued about from
+        // screenshots. It compares the drawable's Arc against the one the
+        // asset cache hands out, so MATCH=true is proof, not inference.
+        if std::env::var("DEVOURER_DEBUG").is_ok() {
+            let got = obj.drawable_image_ptr_for_test();
+            let want = crate::scenes::game::helpers::pl_image_cached(
+                ASSET_PL_DEVOURER_BODY, DEVOURER_BODY_SIZE)
+                .map(|a| std::sync::Arc::as_ptr(&a) as usize);
+            eprintln!("DBG boss spawn: size={:?} visible={} got={:?} want={:?} MATCH={}",
+                obj.size, obj.visible, got, want, got.is_some() && got == want);
+        }
     }
 }
 
 pub(crate) fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (zx1, zx2) = arena_bounds(c);
     let (cur_x, cur_y) = if let Some(obj) = c.get_game_object("boss") {
-        (obj.position.0 + BOSS_SIZE * 0.5, obj.position.1 + BOSS_SIZE * 0.5)
+        (obj.position.0 + DEVOURER_BODY_SIZE * 0.5, obj.position.1 + DEVOURER_BODY_SIZE * 0.5)
     } else {
         (arena_center_x(c), BOSS_Y_CENTER)
     };
@@ -430,9 +645,9 @@ pub(crate) fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         
         // Guide to opposite corner/edge
         let opposite_corner_x = if escape_dx > 0.0 {
-            zx1 + BOSS_SIZE * 0.5
+            zx1 + DEVOURER_BODY_SIZE * 0.5
         } else {
-            zx2 - BOSS_SIZE * 0.5
+            zx2 - DEVOURER_BODY_SIZE * 0.5
         };
         let opposite_corner_y = if escape_dy > 0.0 {
             y_min
@@ -473,8 +688,8 @@ pub(crate) fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut nx = cur_x + s.boss_vx;
     let mut ny = cur_y + s.boss_vy;
 
-    let x_min = zx1 + BOSS_SIZE * 0.5;
-    let x_max = zx2 - BOSS_SIZE * 0.5;
+    let x_min = zx1 + DEVOURER_BODY_SIZE * 0.5;
+    let x_max = zx2 - DEVOURER_BODY_SIZE * 0.5;
     if nx < x_min {
         nx = x_min;
         s.boss_vx = s.boss_vx.abs() * 0.65;
@@ -495,7 +710,7 @@ pub(crate) fn tick_boss_movement(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     drop(s);
 
     if let Some(obj) = c.get_game_object_mut("boss") {
-        obj.position = (nx - BOSS_SIZE * 0.5, ny - BOSS_SIZE * 0.5);
+        obj.position = (nx - DEVOURER_BODY_SIZE * 0.5, ny - DEVOURER_BODY_SIZE * 0.5);
     }
 }
 
@@ -549,8 +764,8 @@ pub(crate) fn tick_boss_shooting(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     };
 
     let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-9999.0, -9999.0));
-    let boss_cx = boss_pos.0 + BOSS_SIZE * 0.5;
-    let boss_cy = boss_pos.1 + BOSS_SIZE * 0.5;
+    let boss_cx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
+    let boss_cy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
 
     let px = s.px;
     let py = s.py;
@@ -565,6 +780,10 @@ pub(crate) fn tick_boss_shooting(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     if let Some(obj) = c.get_game_object_mut(&bolt_id) {
         obj.position = (boss_cx - BOSS_BOLT_W * 0.5, boss_cy - BOSS_BOLT_H * 0.5);
+        // Aimed from the frame it appears, not from the first frame it moves —
+        // otherwise every bolt is drawn pointing right for one frame before
+        // snapping onto its heading.
+        obj.rotation = vy.atan2(vx).to_degrees();
         obj.visible = true;
     }
 }
@@ -595,6 +814,13 @@ pub(crate) fn tick_boss_bolts(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.position.0 += vx;
             obj.position.1 += vy;
+            // Point along the direction of travel. The bolt sprite is an
+            // arrowhead drawn pointing RIGHT, so its rotation IS its heading —
+            // without this it flew sideways and backwards, which reads as a
+            // sprite pasted on rather than as something fired at you.
+            if vx.abs() > 1e-4 || vy.abs() > 1e-4 {
+                obj.rotation = vy.atan2(*vx).to_degrees();
+            }
         }
     }
 
@@ -687,9 +913,9 @@ pub(crate) fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>)
     let boss_pos = c.get_game_object("boss").map(|o| o.position);
     let Some(bpos) = boss_pos else { return };
 
-    let bcx = bpos.0 + BOSS_SIZE * 0.5;
-    let bcy = bpos.1 + BOSS_SIZE * 0.5;
-    let hit_r = PLAYER_R + BOSS_SIZE * 0.5;
+    let bcx = bpos.0 + DEVOURER_BODY_SIZE * 0.5;
+    let bcy = bpos.1 + DEVOURER_BODY_SIZE * 0.5;
+    let hit_r = PLAYER_R + DEVOURER_BODY_SIZE * 0.5;
 
     let dx = px - bcx;
     let dy = py - bcy;
@@ -808,5 +1034,55 @@ pub(crate) fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>)
         // player tethers out — the frontier rewind and the schedule advance that
         // arms the next fight.
         finish_boss(c, st);
+    }
+}
+
+#[cfg(test)]
+mod devourer_layout_tests {
+    use crate::constants::*;
+
+    /// The weakpoints must sit ON the body, spread around it.
+    ///
+    /// They were laid out from the shared `BOSS_SIZE` while the body used
+    /// `DEVOURER_BODY_SIZE`, so growing the body left four discs clustered in
+    /// the middle of the sprite — which is what read as "the old art layered
+    /// over the new".
+    #[test]
+    fn the_weakpoints_are_spread_across_the_body() {
+        let body_r = DEVOURER_BODY_SIZE * 0.5;
+        for (i, (ox, oy)) in BOSS_WEAKPOINT_OFFSETS.iter().enumerate() {
+            let d = (ox * ox + oy * oy).sqrt();
+            assert!(d > body_r * 0.5,
+                    "weakpoint {i} is {d:.0} from centre, inside half the \
+                     body radius ({:.0}) — they pile up in the middle", body_r * 0.5);
+            assert!(d + BOSS_WEAKPOINT_R <= body_r * 1.25,
+                    "weakpoint {i} reaches {:.0}, well past the body edge \
+                     ({body_r:.0})", d + BOSS_WEAKPOINT_R);
+        }
+    }
+
+    /// And they must not overlap each other.
+    #[test]
+    fn the_weakpoints_do_not_overlap() {
+        let o = BOSS_WEAKPOINT_OFFSETS;
+        for i in 0..o.len() {
+            for j in (i + 1)..o.len() {
+                let d = ((o[i].0 - o[j].0).powi(2) + (o[i].1 - o[j].1).powi(2)).sqrt();
+                assert!(d >= BOSS_WEAKPOINT_R,
+                        "weakpoints {i} and {j} are {d:.0} apart but \
+                         {BOSS_WEAKPOINT_R:.0} across — they overlap");
+            }
+        }
+    }
+
+    /// A bolt's rotation is its heading, because the sprite points right.
+    #[test]
+    fn a_bolt_points_where_it_is_going() {
+        for (vx, vy, want) in [(1.0_f32, 0.0_f32, 0.0_f32), (0.0, 1.0, 90.0),
+                               (-1.0, 0.0, 180.0), (0.0, -1.0, -90.0)] {
+            let got = vy.atan2(vx).to_degrees();
+            assert!((got - want).abs() < 0.01,
+                    "travelling ({vx}, {vy}) should face {want}, got {got}");
+        }
     }
 }

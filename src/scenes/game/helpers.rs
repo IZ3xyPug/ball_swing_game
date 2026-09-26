@@ -30,6 +30,168 @@ pub fn play_death_sound(c: &mut Canvas) {
     c.play_sound_bytes_with(asset, SoundOptions::new().volume(vol));
 }
 
+/// Decode a PixelLab PNG to an image scaled to `size`, nearest-neighbour.
+///
+/// NEAREST, not a smooth filter: these are pixel art generated at 128px and
+/// drawn at 150-360px in world space. Any interpolating filter turns the hard
+/// pixel edges into mush, which is the one thing that makes generated pixel art
+/// look cheap in motion.
+pub fn pl_image(bytes: &'static [u8], size: f32) -> Option<image::RgbaImage> {
+    let d = size.round().max(2.0) as u32;
+    let src = image::load_from_memory(bytes).ok()?.to_rgba8();
+    Some(image::imageops::resize(
+        &src, d, d, image::imageops::FilterType::Nearest))
+}
+
+/// `pl_image_cached`, optionally flipped VERTICALLY to swap handedness.
+///
+/// Vertically, not horizontally, and that is the whole point. The hands are
+/// drawn in profile pointing RIGHT because the engine rotates them to aim, so
+/// a horizontal flip would make the left hand point LEFT and every aim would
+/// come out 180 degrees wrong. Flipping top-to-bottom swaps which hand it
+/// looks like while leaving the direction it points alone.
+///
+/// Flipped in the CACHE rather than at the draw site, so the result keeps a
+/// stable `Arc` and the atlas still uploads it once.
+pub fn pl_image_cached_mirrored(bytes: &'static [u8], size: f32, mirror: bool)
+    -> Option<std::sync::Arc<image::RgbaImage>>
+{
+    if !mirror {
+        return pl_image_cached(bytes, size);
+    }
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    static CACHE: OnceLock<Mutex<HashMap<(usize, u32), Option<Arc<image::RgbaImage>>>>> =
+        OnceLock::new();
+    let key = (bytes.as_ptr() as usize, size.round().max(2.0) as u32);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(g) = cache.lock() {
+        if let Some(hit) = g.get(&key) {
+            return hit.clone();
+        }
+    }
+    let built = pl_image(bytes, size)
+        .map(|img| Arc::new(image::imageops::flip_vertical(&img)));
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, built.clone());
+    }
+    built
+}
+
+/// `pl_image` for a NON-SQUARE target, cached by (asset, w, h).
+///
+/// Trims the sprite to its opaque bounds before resizing. The generated art is
+/// drawn on a square canvas with transparent padding, so stretching the whole
+/// 128x128 into an 80x30 bolt would squash the padding along with the art and
+/// leave the bolt a third of the height it should be.
+pub fn pl_image_fit_cached(bytes: &'static [u8], w: f32, h: f32)
+    -> Option<std::sync::Arc<image::RgbaImage>>
+{
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    static CACHE: OnceLock<Mutex<HashMap<(usize, u32, u32), Option<Arc<image::RgbaImage>>>>> =
+        OnceLock::new();
+    let (tw, th) = (w.round().max(2.0) as u32, h.round().max(2.0) as u32);
+    let key = (bytes.as_ptr() as usize, tw, th);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(g) = cache.lock() {
+        if let Some(hit) = g.get(&key) {
+            return hit.clone();
+        }
+    }
+
+    let built = (|| {
+        let src = image::load_from_memory(bytes).ok()?.to_rgba8();
+        // Opaque bounding box.
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0u32, 0u32);
+        for (x, y, p) in src.enumerate_pixels() {
+            if p.0[3] > 0 {
+                x0 = x0.min(x); y0 = y0.min(y);
+                x1 = x1.max(x); y1 = y1.max(y);
+            }
+        }
+        if x0 > x1 || y0 > y1 {
+            return None; // fully transparent
+        }
+        let cropped = image::imageops::crop_imm(
+            &src, x0, y0, x1 - x0 + 1, y1 - y0 + 1).to_image();
+        Some(Arc::new(image::imageops::resize(
+            &cropped, tw, th, image::imageops::FilterType::Nearest)))
+    })();
+
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, built.clone());
+    }
+    built
+}
+
+/// `pl_image`, cached by (asset, size).
+///
+/// The serpent rebuilds every piece's image inside its draw loop, so an
+/// uncached decode-and-resize would run a PNG decode per segment per frame.
+/// Keyed on the slice's ADDRESS rather than its contents: these are all
+/// `include_bytes!` statics, so the pointer is a stable identity and hashing
+/// 7KB of PNG per lookup would cost more than the decode saved.
+/// Returns an `Arc`, and the same `Arc` for the same (asset, size) every time.
+///
+/// That matters beyond avoiding the decode: the renderer's texture atlas is
+/// keyed by `Arc::as_ptr`, so handing back a fresh allocation each call would
+/// re-upload the texture to the GPU every frame. A stable pointer means one
+/// upload for the life of the process.
+pub fn pl_image_cached(bytes: &'static [u8], size: f32)
+    -> Option<std::sync::Arc<image::RgbaImage>>
+{
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    static CACHE: OnceLock<Mutex<HashMap<(usize, u32), Option<Arc<image::RgbaImage>>>>> =
+        OnceLock::new();
+    let key = (bytes.as_ptr() as usize, size.round().max(2.0) as u32);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    // Decode OUTSIDE the lock. Holding it across the resize would serialise
+    // every caller behind the first one, and this runs in a draw loop.
+    if let Ok(g) = cache.lock() {
+        if let Some(hit) = g.get(&key) {
+            return hit.clone();
+        }
+    }
+    let built = pl_image(bytes, size).map(Arc::new);
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, built.clone());
+    }
+    built
+}
+
+/// Build an `AnimatedSprite` from PixelLab's numbered frame PNGs.
+///
+/// Returns `None` if ANY frame fails to decode, rather than a short loop: a
+/// sprite quietly missing three of its nine frames animates at the wrong speed
+/// and looks like a timing bug rather than a missing asset.
+pub fn pl_sprite(frames: &[&'static [u8]], size: f32, fps: f32) -> Option<AnimatedSprite> {
+    let decoded: Vec<image::RgbaImage> =
+        frames.iter().filter_map(|b| pl_image(b, size)).collect();
+    if decoded.len() != frames.len() {
+        return None;
+    }
+    Some(AnimatedSprite::from_frames(decoded, (size, size), fps))
+}
+
+/// Play the player's impact sound, at most once every few ticks.
+///
+/// This is the sound that used to fire on every hook GRAB. Moving it to real
+/// impacts is the difference between a noise that marks something happening
+/// and one that marks the player doing the thing the game is about.
+pub fn play_impact_sfx(c: &mut Canvas, st: &std::sync::Arc<std::sync::Mutex<crate::state::State>>) {
+    {
+        let mut s = st.lock().unwrap();
+        if s.impact_sfx_cd > 0 {
+            return;
+        }
+        s.impact_sfx_cd = IMPACT_SFX_COOLDOWN;
+    }
+    let vol = sfx_vol(c, IMPACT_SFX_VOL);
+    c.play_sound_bytes_with(ASSET_CARTOON_CAT, SoundOptions::new().volume(vol));
+}
+
 /// Compute effective SFX volume: base * vol_master * vol_sound.
 pub fn sfx_vol(c: &Canvas, base: f32) -> f32 {
     let master = match c.get_var("vol_master") {

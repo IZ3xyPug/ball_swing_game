@@ -1628,7 +1628,13 @@ fn a_short_override_still_finishes_the_run() {
         // agree with any reordering of it, which is the one thing it is here to
         // catch — the shipped run structure is a design decision, not whatever
         // the array happens to say today.
-        boss_kind_for_index(1), BossKind::Conductor,
+        //
+        // Updated 2026-09-24 when the run was deliberately reordered to open
+        // with the Sun Devourer (the eclipse builds on the approach to a fight,
+        // so its own boss going first explains the effect), putting the
+        // Colossus in slot 2. The assertion caught that reorder, which is
+        // exactly what it is for — it is re-pointed here, never relaxed.
+        boss_kind_for_index(1), BossKind::Colossus,
         "past the override, the shipped order resumes"
     );
     assert!(boss_order_is_overridden());

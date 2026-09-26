@@ -2,6 +2,9 @@
 // Usage: cargo run --bin headless -- --episodes 5 --frames 3600
 
 fn main() {
+    // Off unless RUST_LOG asks for it, so normal runs stay quiet.
+    let _ = env_logger::try_init();
+
     let mut episodes: u64 = 5;
     let mut frames: u64 = 3600;
     let mut boss_mode = false;

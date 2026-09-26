@@ -114,6 +114,7 @@ pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
             ("menu_stats_btn", "goto_stats"),
             ("menu_daily_btn", "goto_daily_reward"),
             ("menu_profile_btn", "goto_profile"),
+            ("menu_boss_order_btn", "goto_boss_order"),
         ];
         for (name, event) in BTNS {
             if let Some(obj) = c.get_game_object(name) {
@@ -136,6 +137,7 @@ pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
                         "menu_stats_btn" => c.set_var("queue_scene", "stats"),
                         "menu_daily_btn" => c.set_var("queue_scene", "daily_reward"),
                         "menu_profile_btn" => c.set_var("queue_scene", "profile"),
+                        "menu_boss_order_btn" => c.set_var("queue_scene", "boss_order"),
                         _ => {}
                     }
                     return;
@@ -1050,7 +1052,20 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
     let stats_btn        = make_row_btn(ctx, "menu_stats_btn",         VW/2.0 - 140.0, [160, 90, 40, 230],  [240, 180, 40, 230]);
     let daily_btn        = make_row_btn(ctx, "menu_daily_btn",         VW/2.0 + 160.0, [40, 120, 80, 230],  [40, 220, 180, 230]);
     let profile_btn      = make_row_btn(ctx, "menu_profile_btn",       VW/2.0 + 460.0, [70, 70, 100, 230], [170, 200, 240, 230]);
+    // BOSS ORDER: the testing roster menu.
+    //
+    // MOBILE ONLY. On desktop it is the `B` key on this screen; a phone has no
+    // keyboard, so without a button the menu is simply unreachable there. It is
+    // a test instrument rather than a feature, so it is not added to the
+    // desktop menu where a shortcut already exists.
+    //
+    // At VW/2 - 740 it extends the row symmetrically: the five buttons then
+    // span -740..+740 about the centre.
+    let mut boss_order_btn = make_row_btn(ctx, "menu_boss_order_btn", VW/2.0 - 740.0, [120, 40, 60, 230], [255, 120, 140, 230]);
+    boss_order_btn.visible = mobile_controls_enabled();
 
+    let mut menu_boss_order_text = GameObject::build("menu_boss_order_text").size(280.0, 90.0).position(VW/2.0 - 740.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
+    menu_boss_order_text.visible = mobile_controls_enabled();
     let menu_achievements_text = GameObject::build("menu_achievements_text").size(280.0, 90.0).position(VW/2.0 - 440.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
     let menu_stats_text = GameObject::build("menu_stats_text").size(280.0, 90.0).position(VW/2.0 - 140.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
     let menu_daily_text = GameObject::build("menu_daily_text").size(280.0, 90.0).position(VW/2.0 + 160.0, MENU_Y + VH * 0.88 + 30.0).tag("ui").build(ctx);
@@ -1077,10 +1092,12 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
         .with_object("menu_stats_btn",           stats_btn)
         .with_object("menu_daily_btn",           daily_btn)
         .with_object("menu_profile_btn",         profile_btn)
+        .with_object("menu_boss_order_btn",      boss_order_btn)
         .with_object("menu_achievements_text",   menu_achievements_text)
         .with_object("menu_stats_text",          menu_stats_text)
         .with_object("menu_daily_text",          menu_daily_text)
-        .with_object("menu_profile_text",        menu_profile_text);
+        .with_object("menu_profile_text",        menu_profile_text)
+        .with_object("menu_boss_order_text",     menu_boss_order_text);
 
     // Embed shop objects at y=0..VH (camera pans from VH to 0 to reveal them)
     shop::extend_with_shop(ctx, scene)
@@ -1343,6 +1360,7 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                                 ("menu_stats_text",        "STATS",                                   26.0, Color(255, 210, 160, 255),      280.0),
                                 ("menu_daily_text",        "DAILY REWARD",                            22.0, Color(180, 255, 200, 255),      280.0),
                                 ("menu_profile_text",      "PROFILES",                                26.0, Color(200, 225, 250, 255),      280.0),
+                                ("menu_boss_order_text",   "BOSS ORDER",                              22.0, Color(255, 170, 190, 255),      280.0),
                             ] {
                                 if let Some(obj) = c.get_game_object_mut(id) {
                                     obj.set_drawable(Box::new(ui_text_spec(text, &font, sz * s, col, w * s)));

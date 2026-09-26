@@ -361,6 +361,9 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         offset: (f32, f32),
         state_ticks: u32,
         zone_visible: bool,
+        /// True in the last few ticks of a wind-up, while the telegraph is
+        /// being taken down so the strike has a clean frame to land in.
+        telegraph_clearing: bool,
         zone_solid: bool,
         zone_pos: (f32, f32),
         zone_r: f32,
@@ -411,7 +414,8 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if !s.boss_parts[i].alive {
                 frames.push(PartFrame {
                     id: pid, alive: false, shielded: s.boss_parts[i].shielded,
-                    weak_open: false, offset: home, state_ticks: 0, zone_visible: false, zone_solid: false,
+                    weak_open: false, offset: home, state_ticks: 0, zone_visible: false,
+                    telegraph_clearing: false, zone_solid: false,
                     zone_pos: (bcx + home.0, bcy + home.1), zone_r,
                     path_visible: false, path_start: (bcx + home.0, bcy + home.1),
                     strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
@@ -431,7 +435,8 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 s.boss_parts[i].post_attack = false;
                 frames.push(PartFrame {
                     id: pid, alive: true, shielded: true, weak_open: false,
-                    offset: home, state_ticks: 0, zone_visible: false, zone_solid: false,
+                    offset: home, state_ticks: 0, zone_visible: false,
+                    telegraph_clearing: false, zone_solid: false,
                     zone_pos: (bcx + home.0, bcy + home.1), zone_r,
                     path_visible: false, path_start: (bcx + home.0, bcy + home.1),
                     strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
@@ -852,6 +857,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             };
             // The path telegraph (trajectory) is shown while the part winds up,
             // from where it started the telegraph to where it will strike.
+            let mut clearing = false;
             let (path_visible, path_start) = {
                 let p = &s.boss_parts[i];
                 // The head shows its path through the wind-up and while a beam
@@ -863,7 +869,20 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 // shot. The charge orb covers the "recharging" read.
                 let head_showing = p.id == "head"
                     && (p.state == PartState::Telegraph || beam_t.is_some());
+                // The lane clears just BEFORE the strike, not as it lands.
+                //
+                // A telegraph's job is finished the moment the player has read
+                // it; holding it through the attack leaves a bright quad lying
+                // across the fist as it travels, so the hit — the thing the
+                // whole wind-up was building to — arrives behind the warning
+                // for it. Dropping it in the last `COLOSSUS_TELEGRAPH_CLEAR`
+                // ticks gives the strike a clean frame to land in.
+                let nearly_out = p.state == PartState::Telegraph
+                    && p.state_ticks + COLOSSUS_TELEGRAPH_CLEAR
+                        >= COLOSSUS_TELEGRAPH_TICKS;
+                clearing = nearly_out;
                 (!torso_frame
+                 && !nearly_out
                  && (head_showing
                      || (p.id != "head" && p.state == PartState::Telegraph)),
                  p.path_start)
@@ -908,7 +927,8 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
             frames.push(PartFrame {
                 id: pid, alive: true, shielded: false, weak_open, offset: off,
-                state_ticks: s.boss_parts[i].state_ticks, zone_visible, zone_solid, zone_pos, zone_r,
+                state_ticks: s.boss_parts[i].state_ticks, zone_visible,
+                telegraph_clearing: clearing, zone_solid, zone_pos, zone_r,
                 path_visible, path_start,
                 strike_unhook, strike_kick, strike_heart, strike_consume_absorb,
                 strike_big_throw, storm: storm_frame, vent: vent_frame,
@@ -1094,6 +1114,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if (px - sx).powi(2) + (py - sy).powi(2) < (PLAYER_R + hit_r).powi(2) {
                 let mut s = st.lock().unwrap();
                 if s.boss_part_invuln_ticks == 0 {
+                    let mut landed = false;
                     if let Some(p) = s.boss_parts.iter_mut().find(|p| p.id == f.id && p.alive) {
                         p.hp -= 1;
                         if p.hp <= 0 {
@@ -1101,7 +1122,19 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             s.boss_part_invuln_ticks = COLOSSUS_PART_INVULN_TICKS;
                         }
                         s.buff_hit_flash = 20;
+                        landed = true;
                     }
+                    drop(s);
+                    if landed {
+                        // On the PART that was hit, in the Colossus's own
+                        // vulnerable colour, so the confirmation appears where
+                        // the player was aiming.
+                        crate::scenes::game::boss::common::spawn_impact(
+                            c, st, (sx, sy), part_size,
+                            COLOSSUS_MARKER_VULNERABLE_RGB, false);
+                    }
+                    let mut s = st.lock().unwrap();
+                    let _ = &mut s;
                 }
             }
         }
@@ -1113,37 +1146,93 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.size = (part_size, part_size);
                 obj.position = (sx - half, sy - half);
                 obj.visible = true;
-                if f.shielded {
-                    obj.set_glow(GlowConfig { color: Color(120, 220, 255, 90), width: 22.0 });
-                } else if f.weak_open {
-                    // VULNERABLE: a bright, pulsing gold glow — the "hit me now"
-                    // cue. Takes priority so the strike window is unmistakable.
-                    let pulse = 170 + (((f.zone_pos.0 as i32 / 4) + (f.zone_pos.1 as i32 / 4)).rem_euclid(6) as u8) * 14;
-                    obj.set_glow(GlowConfig { color: Color(255, 224, 70, pulse), width: 42.0 });
-                } else if f.vent {
-                    // Hot orange while the chest is open: the torso is
-                    // dangerous here, but it is ALSO the only moment it can be
-                    // hurt, so the cue has to say "come here" and "carefully"
-                    // at once — which is why it is neither the storm's cold
-                    // violet nor the plain strike red.
-                    obj.set_glow(GlowConfig { color: Color(255, 170, 80, 220), width: 52.0 });
-                } else if f.storm {
-                    // Summoning glow: cold violet-white, deliberately NOT the
-                    // red-orange of an incoming strike. The two torso attacks
-                    // have to be distinguishable during the wind-up, because
-                    // one is a beat to dodge and the other is the only beat
-                    // where the torso can be hurt — reading it late costs the
-                    // player the window entirely.
-                    obj.set_glow(GlowConfig { color: Color(190, 150, 255, 200), width: 46.0 });
-                } else if f.zone_visible {
-                    // Wind-up glow: pulsing red-orange while it commits to the strike.
-                    let wide = if f.strike_unhook || f.strike_heart || f.strike_kick.0 != 0.0 || f.strike_kick.1 != 0.0 { 190 } else { 110 };
-                    obj.set_glow(GlowConfig { color: Color(255, 80, 30, wide), width: 30.0 });
-                } else {
-                    obj.clear_glow();
+
+                // Hands AIM. While a hand is committed to a strike it turns to
+                // point along its own lane, and eases back to rest afterwards.
+                // A fist that lines up before it throws tells you where the
+                // punch is going with the thing that is going to hit you,
+                // which is one fewer separate cue to read.
+                //
+                // Only the hands: the torso and head are anchored, and a
+                // rotating head reads as damage rather than as intent.
+                if f.id != "torso" && f.id != "head" {
+                    let want = if f.path_visible || f.zone_visible {
+                        let dx = f.zone_pos.0 - sx;
+                        let dy = f.zone_pos.1 - sy;
+                        if dx * dx + dy * dy > 1.0 {
+                            dy.atan2(dx).to_degrees()
+                        } else {
+                            obj.rotation
+                        }
+                    } else {
+                        COLOSSUS_HAND_REST_DEG
+                    };
+                    // Shortest way round, so a hand never spins the long way
+                    // to reach an angle a few degrees away.
+                    let mut delta = (want - obj.rotation).rem_euclid(360.0);
+                    if delta > 180.0 { delta -= 360.0; }
+                    obj.rotation += delta * COLOSSUS_HAND_AIM_LERP;
+                }
+                // State is carried by a MARKER, not by a glow — see the block
+                // just below, which runs outside this borrow.
+                //
+                // `set_glow` draws a stroke in the object's own shape (see
+                // `highlight_shape` in quartz), so on a rectangular part every
+                // one of these states rendered as the same square outline in a
+                // different colour. Five states, one shape, and the single most
+                // important cue in the fight — "you can hurt this now" — was a
+                // yellow square.
+                obj.clear_glow();
+                // The torso swaps to its blazing-vent sprite while the chest
+                // is open. A state the art itself carries, so the part reads
+                // correctly even with every effect switched off.
+                if f.id == "torso" {
+                    let want = if f.vent {
+                        ASSET_PL_COLOSSUS_TORSO_VENT
+                    } else {
+                        ASSET_PL_COLOSSUS_TORSO
+                    };
+                    if let Some(img) =
+                        crate::scenes::game::helpers::pl_image_cached(want, part_size)
+                    {
+                        obj.set_image(Image {
+                            shape: ShapeType::Rectangle(0.0, (part_size, part_size), 0.0),
+                            image: img, color: None,
+                        });
+                    }
                 }
             } else {
                 obj.visible = false;
+            }
+        }
+        // Attach or clear the marker OUTSIDE the object borrow above: both
+        // take `&mut Canvas`, and the effect helpers look the object up again.
+        {
+            let name = format!("colossus_part_{idx}");
+            let part_wh = (part_size, part_size);
+            let marker = if !f.alive {
+                None
+            } else if f.shielded {
+                Some((COLOSSUS_MARKER_SHIELDED_RGB, 0.85, MarkerMode::Shielded))
+            } else if f.weak_open {
+                // Highest priority after shielded: the strike window is the
+                // one thing that must never be ambiguous.
+                Some((COLOSSUS_MARKER_VULNERABLE_RGB, 1.0, MarkerMode::Vulnerable))
+            } else if f.vent {
+                // Vulnerable geometry in the vent's own hot colour: the chest
+                // is open, which means "come here" AND "carefully" at once.
+                Some((MARKER_VENT_RGB, 0.95, MarkerMode::Vulnerable))
+            } else if f.storm {
+                Some((MARKER_STORM_RGB, 0.9, MarkerMode::WindingUp))
+            } else if f.zone_visible {
+                Some((COLOSSUS_MARKER_WINDUP_RGB, 0.95, MarkerMode::WindingUp))
+            } else {
+                None
+            };
+            match marker {
+                Some((rgb, i, mode)) => crate::scenes::game::fx::attach_state_marker(
+                    c, &name, part_wh, rgb, i, mode),
+                None => c.clear_effect(&name),
             }
         }
 
@@ -1174,6 +1263,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 hide_beam_strip(c, "colossus_beam_tel");
             }
         }
+        let mut lane: Option<(f32, f32, f32)> = None;
         if let Some(obj) = c.get_game_object_mut(&format!("colossus_path_{idx}")) {
             if f.alive && f.path_visible && f.id != "head" {
                 let (ax, ay) = f.path_start;
@@ -1187,12 +1277,29 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 // `rotation_adjusted_offset` keeps the rendered centre locked at
                 // `position + size/2`, so positioning by the strip's centre is
                 // enough — the engine handles the rotated AABB compensation.
+                // Wider than the old flat strip: the lane TAPERS in the
+                // shader, so its drawn width is the width at the target end.
+                let th = th * 2.2;
                 obj.size = (len, th);
                 obj.rotation = deg;
                 obj.position = (mid.0 - len * 0.5, mid.1 - th * 0.5);
                 obj.visible = true;
+                lane = Some((len, th, (f.state_ticks as f32
+                    / COLOSSUS_TELEGRAPH_TICKS as f32).clamp(0.0, 1.0)));
             } else {
                 obj.visible = false;
+            }
+        }
+        // Outside the borrow: the effect helpers take `&mut Canvas` too.
+        {
+            let name = format!("colossus_path_{idx}");
+            match lane {
+                Some((len, th, progress)) => {
+                    c.attach_effect(
+                        &name, Effect::StrikeLane { intensity: 1.0, progress },
+                        crate::scenes::game::fx::lin(COLOSSUS_MARKER_WINDUP_RGB), (len, th));
+                }
+                None => c.clear_effect(&name),
             }
         }
 
@@ -1252,7 +1359,8 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
 
-        // Danger-zone telegraph disc (only while a part telegraphs / strikes).
+        // Impact marker where the strike will land (only while telegraphing).
+        let mut impact: Option<(f32, bool)> = None;
         if let Some(obj) = c.get_game_object_mut(&format!("colossus_zone_{idx}")) {
             if f.id == "head" {
                 // Head: a small targeting reticle that runs the course of the
@@ -1269,14 +1377,27 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 } else {
                     obj.visible = false;
                 }
-            } else if f.alive && f.zone_visible {
+            } else if f.alive && f.zone_visible && !f.telegraph_clearing {
                 obj.position = (f.zone_pos.0 - f.zone_r, f.zone_pos.1 - f.zone_r);
-                // Zone flickers during the telegraph, then goes solid for the strike.
-                let on = f.zone_solid
-                    || ((f.zone_pos.0 as i32 / 5) + (f.zone_pos.1 as i32 / 5)).rem_euclid(6) < 4;
-                obj.visible = on;
+                obj.size = (f.zone_r * 2.0, f.zone_r * 2.0);
+                // No flicker, and no flat disc: the marker below carries it.
+                // The old version faded a translucent circle in and out under
+                // the path strip, which put two flat shapes on top of each
+                // other and read as a rendering artefact rather than a threat.
+                obj.visible = true;
+                obj.set_tint(Color(255, 255, 255, 0));
+                impact = Some((f.zone_r * 2.0, f.zone_solid));
             } else {
                 obj.visible = false;
+            }
+        }
+        {
+            let name = format!("colossus_zone_{idx}");
+            match impact {
+                Some((d, solid)) => crate::scenes::game::fx::attach_state_marker(
+                    c, &name, (d, d), COLOSSUS_MARKER_WINDUP_RGB,
+                    if solid { 1.0 } else { 0.8 }, MarkerMode::WindingUp),
+                None => c.clear_effect(&name),
             }
         }
 
@@ -1380,6 +1501,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         s.boss_hp = boss_total_hp(&s);
+        s.boss_hp_max = s.boss_hp.max(1);
     }
 
     // Simple shield dome glow while any part is still shielded (the full
@@ -1445,5 +1567,63 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.position = (-6000.0, -6000.0);
         }
         finish_boss(c, st);
+    }
+}
+
+/// Place each part's propulsion plume on its opening and set how hard it
+/// burns. The Colossus is a floating titan with no body joining its parts;
+/// without something visibly holding them up, a fist hanging in space reads as
+/// a sprite, not a limb. A jet from each opening says "this is powered, and
+/// it is flying" — and the jet flaring as a hand swings says the swing is
+/// being DRIVEN, which is the tell a player reads before the hit.
+pub(crate) fn tick_colossus_plumes(c: &mut Canvas) {
+    use std::sync::Mutex;
+    // Last frame's centre per part, to measure how fast it is moving.
+    static PREV: Mutex<[(f32, f32); 4]> = Mutex::new([(f32::NAN, f32::NAN); 4]);
+    let mut prev = PREV.lock().unwrap_or_else(|e| e.into_inner());
+
+    for idx in 0..4usize {
+        let part = c.get_game_object(&format!("colossus_part_{idx}"))
+            .filter(|o| o.visible)
+            .map(|o| (
+                (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5),
+                o.size.0,
+                o.rotation,
+            ));
+        let plume = format!("colossus_plume_{idx}");
+        let Some((centre, size, rot_deg)) = part else {
+            if let Some(obj) = c.get_game_object_mut(&plume) { obj.visible = false; }
+            c.clear_effect(&plume);
+            prev[idx] = (f32::NAN, f32::NAN);
+            continue;
+        };
+        let ((ox, oy), (dx, dy), len_f, w_f) = COLOSSUS_PLUMES[idx];
+        // Into the part's rotation — y-down, the same sense sprites rotate.
+        let (sin, cos) = rot_deg.to_radians().sin_cos();
+        let turn = |x: f32, y: f32| (x * cos - y * sin, x * sin + y * cos);
+        let off = turn(ox * size, oy * size);
+        let dir = turn(dx, dy);
+        let nozzle = (centre.0 + off.0, centre.1 + off.1);
+        let (len, w) = (len_f * size, w_f * size);
+        let mid = (nozzle.0 + dir.0 * len * 0.5, nozzle.1 + dir.1 * len * 0.5);
+
+        // Thrust: a steady burn at rest, flaring with speed.
+        let speed = if prev[idx].0.is_nan() {
+            0.0
+        } else {
+            ((centre.0 - prev[idx].0).powi(2) + (centre.1 - prev[idx].1).powi(2)).sqrt()
+        };
+        prev[idx] = centre;
+        let thrust = (0.55 + speed / 60.0).min(1.0);
+
+        if let Some(obj) = c.get_game_object_mut(&plume) {
+            obj.size = (len, w);
+            obj.rotation = dir.1.atan2(dir.0).to_degrees();
+            obj.position = (mid.0 - len * 0.5, mid.1 - w * 0.5);
+            obj.visible = true;
+        }
+        c.attach_effect(
+            &plume, Effect::ThrustPlume { thrust },
+            crate::scenes::game::fx::lin(COLOSSUS_PLUME_RGB), (len, w));
     }
 }

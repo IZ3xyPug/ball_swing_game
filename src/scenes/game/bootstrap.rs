@@ -109,6 +109,7 @@ pub struct PoolSets {
     pub cannon_free:       Vec<String>,
     // ── Boss fight
     pub boss_bolt_free: Vec<String>,
+    pub impact_free: Vec<String>,
     pub boss_asteroid_ids: Vec<String>,
     // ── Comets
     pub comet_free: Vec<String>,
@@ -1223,9 +1224,14 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     // ── Boss body ─────────────────────────────────────────────────────────
     {
-        let s = BOSS_SIZE;
+        // The Sun Devourer's own size — see `DEVOURER_BODY_SIZE`. This object
+        // is only used by that fight; the other bosses build their own parts.
+        let s = DEVOURER_BODY_SIZE;
+        let body = crate::scenes::game::helpers::pl_image_cached(ASSET_PL_DEVOURER_BODY, s)
+            .unwrap_or_else(|| std::sync::Arc::new(
+                solid(C_BOSS_BODY.0, C_BOSS_BODY.1, C_BOSS_BODY.2, 255)));
         let mut boss_obj = GameObject::new_rect(ctx, "boss".into(),
-            Some(Image { shape: ShapeType::Rectangle(0.0, (s, s), 0.0), image: solid(C_BOSS_BODY.0, C_BOSS_BODY.1, C_BOSS_BODY.2, 255).into(), color: None }),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (s, s), 0.0), image: body, color: None }),
             (s, s), (-6000.0, -6000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         boss_obj.layer = LAYER_SPACE_HOOK;
         boss_obj.gravity = 0.0;
@@ -1251,15 +1257,40 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             let name = format!("colossus_part_{i}");
             let s = colossus_part_size(i as u32);
             let su = s.round().max(2.0) as u32;
-            let img = match i {
-                0 | 1 => crate::images::colossus_hand(su, *col),
-                2     => crate::images::colossus_torso(su, *col),
-                _     => crate::images::colossus_head(su, *col),
+            // Generated art where it decodes, the drawn composite otherwise.
+            let pl = match i {
+                0 | 1 => ASSET_PL_COLOSSUS_HAND,
+                2     => ASSET_PL_COLOSSUS_TORSO,
+                _     => ASSET_PL_COLOSSUS_HEAD,
             };
+            // Part 1 is the LEFT hand and gets a mirrored copy of the sprite.
+            // Without this the Colossus has two right hands, which is the kind
+            // of thing nobody can un-see once they have noticed it.
+            let img = crate::scenes::game::helpers::pl_image_cached_mirrored(pl, s, i == 1)
+                .unwrap_or_else(|| std::sync::Arc::new(match i {
+                    0 | 1 => crate::images::colossus_hand(su, *col),
+                    2     => crate::images::colossus_torso(su, *col),
+                    _     => crate::images::colossus_head(su, *col),
+                }));
             let mut obj = GameObject::new_rect(ctx, name.clone().into(),
                 Some(Image { shape: ShapeType::Rectangle(0.0, (s, s), 0.0), image: img.into(), color: None }),
                 (s, s), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
             obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        // Colossus propulsion plumes: one per part, the energy jetting from
+        // its openings that holds it up. Transparent strips; the THRUST PLUME
+        // effect draws them; colossus.rs places them on the parts each frame.
+        // Behind the parts, so the jet emerges from INSIDE the opening.
+        for i in 0..4 {
+            let name = format!("colossus_plume_{i}");
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, 50.0), 0.0),
+                             image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                (100.0, 50.0), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 1;
             obj.gravity = 0.0;
             obj.visible = false;
             scene = scene.with_object(&name, obj);
@@ -1326,6 +1357,237 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             obj.set_glow(GlowConfig { color: Color(255, 210, 110, 200), width: 34.0 });
             scene = scene.with_object(name, obj);
         }
+        // ── Conductor ────────────────────────────────────────────────
+        // A metronome core, a ring of tuning-fork spars, an expanding beat ring
+        // and two sweeping bar lines.
+        //
+        // Every one of these is parked offscreen with gravity and momentum at
+        // zero. A manually-positioned object left with the default gravity
+        // accumulates engine momentum while parked and flies off the moment it
+        // is revealed.
+        {
+            // Core: the metronome case. The bob is separate so it can be moved
+            // along its arc without rebuilding an image every frame.
+            //
+            // The Conductor has its OWN size, larger than the shared one — see
+            // `CONDUCTOR_CORE_SIZE`.
+            let d = CONDUCTOR_CORE_SIZE;
+            // Generated art if it decodes, the drawn one if it does not. The
+            // procedural version stays the fallback rather than being deleted:
+            // it is correct, it costs nothing, and it is what renders if an
+            // asset is ever missing from a build.
+            let img = crate::scenes::game::helpers::pl_image(ASSET_PL_CORE, d)
+                .unwrap_or_else(|| {
+                    crate::images::conductor_core(d.round().max(2.0) as u32, (86, 200, 190))
+                });
+            let mut obj = GameObject::new_rect(ctx, "conductor_core".into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0), image: img.into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            // The idle loop. Set here so the core breathes from the moment it
+            // appears; `update_animation` only advances it while visible.
+            obj.animated_sprite =
+                crate::scenes::game::helpers::pl_sprite(
+                    &ASSET_PL_CORE_IDLE, d, PL_CORE_IDLE_FPS);
+            obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.momentum = (0.0, 0.0);
+            obj.visible = false;
+            scene = scene.with_object("conductor_core", obj);
+
+            // The bob: swings across the case's scale slot, one beat per side.
+            let bd = CONDUCTOR_CORE_SIZE * 0.17;
+            let mut bob = GameObject::new_rect(ctx, "conductor_bob".into(),
+                Some(Image {
+                    shape: ShapeType::Ellipse(0.0, (bd, bd), 0.0),
+                    image: crate::images::circle_cached((bd * 0.5) as u32, 255, 236, 150),
+                    color: None,
+                }),
+                (bd, bd), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            bob.layer = LAYER_SPACE_HOOK + 1;
+            bob.gravity = 0.0;
+            bob.momentum = (0.0, 0.0);
+            bob.visible = false;
+            scene = scene.with_object("conductor_bob", bob);
+
+            // Spars: the first visual beat channel.
+            for i in 0..CONDUCTOR_SPARS {
+                let name = format!("conductor_spar_{i}");
+                let sd = CONDUCTOR_SPAR_SIZE;
+                let img = crate::scenes::game::helpers::pl_image(ASSET_PL_SPAR, sd)
+                    .unwrap_or_else(|| {
+                        crate::images::conductor_spar(
+                            sd.round().max(2.0) as u32, (120, 225, 215))
+                    });
+                let mut o = GameObject::new_rect(ctx, name.clone().into(),
+                    Some(Image { shape: ShapeType::Rectangle(0.0, (sd, sd), 0.0), image: img.into(), color: None }),
+                    (sd, sd), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                // Each spar rings on its own phase so the ring travels round
+                // the circle instead of all six flashing as one.
+                o.animated_sprite = crate::scenes::game::helpers::pl_sprite(
+                    &ASSET_PL_SPAR_RING, sd, PL_SPAR_RING_FPS);
+                if let Some(sp) = o.animated_sprite.as_mut() {
+                    sp.set_frame(i % ASSET_PL_SPAR_RING.len());
+                }
+                o.layer = LAYER_SPACE_HOOK;
+                o.gravity = 0.0;
+                o.momentum = (0.0, 0.0);
+                o.visible = false;
+                scene = scene.with_object(&name, o);
+            }
+
+            // Beat ring: the second visual beat channel. Drawn at full size and
+            // SCALED down per frame rather than redrawn, so its texture is
+            // uploaded once for the whole fight.
+            // Rasterised SMALL and displayed large. A ring at its full 900px
+            // radius is 3.2 million pixels each doing a sqrt, and the game
+            // crate's own loops are not optimised in a test build (opt-level 3
+            // covers dependencies only) — it pushed the test suite from 16
+            // seconds to over ninety. A ring is smooth, so nothing about it
+            // needs texel-per-pixel detail.
+            const RING_TEX_R: u32 = 192;
+            // Born SMALL. `obj.size` is both the drawn extent and the physics
+            // AABB (`update_image_shape` rescales the shape from it), so an
+            // object parked at its display size puts a 1800x1800 body into the
+            // solver every frame for the whole run. Measured: four oversized
+            // decorations took the test suite from 16s to 40s while invisible.
+            // The fight sets the real size on the frames it is shown.
+            let rd = CONDUCTOR_DORMANT;
+            let ring_img = crate::images::conductor_beat_ring(RING_TEX_R, (150, 240, 235), 210);
+            let mut ring = GameObject::new_rect(ctx, "conductor_beat_ring".into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (rd, rd), 0.0), image: ring_img.into(), color: None }),
+                (rd, rd), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            ring.layer = LAYER_SPACE_HOOK - 1;
+            ring.gravity = 0.0;
+            ring.momentum = (0.0, 0.0);
+            ring.visible = false;
+            scene = scene.with_object("conductor_beat_ring", ring);
+
+            // Bar lines: two segments each, above and below a moving safe gap.
+            // Two objects rather than one image with a hole, because the gap
+            // moves every bar and an image rebuilt per bar is a texture upload
+            // per bar.
+            for i in 0..2 {
+                for half in ["top", "bot"] {
+                    let name = format!("conductor_bar_{i}_{half}");
+                    // Small texture, and a small dormant size for the same
+                    // reason as the ring above.
+                    let (w, h) = (CONDUCTOR_DORMANT, CONDUCTOR_DORMANT);
+                    let img = crate::images::conductor_bar_segment(24, 384, (170, 245, 255));
+                    let mut o = GameObject::new_rect(ctx, name.clone().into(),
+                        Some(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: img.into(), color: None }),
+                        (w, h), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                    o.layer = LAYER_SPACE_HOOK;
+                    o.gravity = 0.0;
+                    o.momentum = (0.0, 0.0);
+                    o.visible = false;
+                    scene = scene.with_object(&name, o);
+                }
+            }
+        }
+
+        // Conductor weakpoint marker + Resonance pips.
+        {
+            // The marker is drawn at the REAL strike radius and parked small,
+            // for the same reason as the ring above: size is the physics AABB
+            // as well as the drawn extent.
+            let wd = CONDUCTOR_WEAK_R * 2.0;
+            let img = crate::images::conductor_weakpoint(
+                (wd * 0.5).round().max(2.0) as u32, (255, 236, 150));
+            let mut o = GameObject::new_rect(ctx, "conductor_weak_zone".into(),
+                Some(Image { shape: ShapeType::Ellipse(0.0, (wd, wd), 0.0), image: img.into(), color: None }),
+                (CONDUCTOR_DORMANT, CONDUCTOR_DORMANT), (-9000.0, -9000.0),
+                vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            o.layer = LAYER_SPACE_HOOK - 1;
+            o.gravity = 0.0;
+            o.momentum = (0.0, 0.0);
+            o.visible = false;
+            o.ignore_zoom = true;
+            scene = scene.with_object("conductor_weak_zone", o);
+
+            // The close-range guard. A WORLD object (not ignore_zoom) because
+            // it has to sit on the core and scale with the arena the way the
+            // boss does, and it is parked small for the usual reason: `size`
+            // is the physics AABB as well as the drawn extent.
+            let ed = CONDUCTOR_EQ_R * 2.0;
+            let mut g = GameObject::new_rect(ctx, "conductor_eq".into(),
+                Some(Image {
+                    shape: ShapeType::Rectangle(0.0, (ed, ed), 0.0),
+                    // TRANSPARENT. The guard is drawn entirely by its mega
+                    // effect; the object is only the rectangle that effect is
+                    // resolved onto. An opaque drawable here renders as a
+                    // white box over the whole boss whenever the guard is
+                    // live — which is exactly what it did.
+                    image: crate::images::solid(0, 0, 0, 0).into(),
+                    color: None,
+                }),
+                (CONDUCTOR_DORMANT, CONDUCTOR_DORMANT), (-9000.0, -9000.0),
+                vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            g.layer = LAYER_SPACE_HOOK - 2;
+            g.gravity = 0.0;
+            g.momentum = (0.0, 0.0);
+            g.visible = false;
+            // Purely a visual: the damage is a radius test in `tick_eq_guard`,
+            // not a contact, because it has to fire on a BAND of the arc
+            // rather than anywhere inside the rectangle.
+            g.collision_mode = CollisionMode::NonPlatform;
+            scene = scene.with_object("conductor_eq", g);
+
+            // The Resonance meter: one strip carrying the waveform effect.
+            //
+            // Replaced three pips. A count says how many; the wave says how
+            // close, and on a fight scored by rhythm the honest picture of the
+            // charge is a sound wave — which is also what changes colour when
+            // the boss becomes vulnerable.
+            {
+                let mut o = GameObject::new_rect(ctx, "conductor_meter".into(),
+                    Some(Image {
+                        shape: ShapeType::Rectangle(0.0, (CONDUCTOR_METER_W, CONDUCTOR_METER_H), 0.0),
+                        image: crate::images::solid(0, 0, 0, 0).into(),
+                        color: None,
+                    }),
+                    (CONDUCTOR_METER_W, CONDUCTOR_METER_H), (-9000.0, -9000.0),
+                    vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                o.layer = 10_000;
+                o.gravity = 0.0;
+                o.momentum = (0.0, 0.0);
+                o.visible = false;
+                o.ignore_zoom = true;
+                scene = scene.with_object("conductor_meter", o);
+            }
+        }
+
+        // The Conductor's beat field: four edge strips.
+        //
+        // Not one full-screen quad — the effect is a vignette, so a
+        // full-screen pass pays fill for fragments it renders invisible.
+        // Measured at +1.70ms a frame (+33%) at phone resolution.
+        for (i, name) in ["conductor_field_top", "conductor_field_bot",
+                          "conductor_field_left", "conductor_field_right"]
+            .iter().enumerate()
+        {
+            let (w, h) = if i < 2 {
+                (VW, VH * BEAT_FIELD_DEPTH)
+            } else {
+                (VW * BEAT_FIELD_DEPTH, VH)
+            };
+            let mut o = GameObject::new_rect(ctx, (*name).into(),
+                Some(Image {
+                    shape: ShapeType::Rectangle(0.0, (w, h), 0.0),
+                    image: crate::images::solid(0, 0, 0, 0).into(),
+                    color: None,
+                }),
+                (CONDUCTOR_DORMANT, CONDUCTOR_DORMANT), (-9000.0, -9000.0),
+                vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            // Under the HUD, over the world: never on top of a number the
+            // player needs to read.
+            o.layer = 9_400;
+            o.gravity = 0.0;
+            o.momentum = (0.0, 0.0);
+            o.visible = false;
+            o.ignore_zoom = true;
+            scene = scene.with_object(*name, o);
+        }
+
         // Colossus danger zones: translucent discs that show exactly where each
         // part's attack will land, for ~1s before it fires. Sized to match the
         // part's zone radius (hand / torso / head). Hidden until a telegraph.
@@ -1531,7 +1793,13 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     {
         let wpr = BOSS_WEAKPOINT_R;
         let d = (wpr * 2.0).round().max(2.0) as u32;
-        let ring = gwell_ring_cached(wpr, 255, 210, 80, GWELL_RING_COUNT, 235.0);
+        // Transparent. These used to be filled gold rings drawn ON TOP of the
+        // boss body — four opaque discs over the art. The marker attached each
+        // frame carries them now, in the same reticle geometry every other
+        // boss uses for "hit here".
+        let ring: std::sync::Arc<image::RgbaImage> =
+            std::sync::Arc::new(solid(0, 0, 0, 0));
+        let _ = gwell_ring_cached(wpr, 255, 210, 80, GWELL_RING_COUNT, 235.0);
         for (i, _) in BOSS_WEAKPOINT_OFFSETS.iter().enumerate() {
             let id = format!("boss_weak_{i}");
             let mut wp = GameObject::new_rect(
@@ -1543,7 +1811,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             wp.layer = LAYER_SPACE_HOOK;
             wp.gravity = 0.0;
             wp.visible = false;
-            wp.set_glow(GlowConfig { color: Color(255, 210, 80, 255), width: 22.0 });
+            // NO GLOW. Making the image transparent was not enough: a glow is
+            // drawn from the object's SHAPE, not its image, so four gold halos
+            // kept sitting over the boss art after the discs behind them were
+            // gone. This was the "old image layered on top" all along.
+            wp.clear_glow();
             scene = scene.with_object(&id, wp);
         }
     }
@@ -1600,7 +1872,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     {
         let gr = BOSS_GENERATOR_R;
         let gd = (gr * 2.0).round().max(2.0) as u32;
-        let gen_img = circle_img(gr as u32, C_BOSS_GENERATOR.0, C_BOSS_GENERATOR.1, C_BOSS_GENERATOR.2);
+        let (gen_intact, _, gen_idle) = devourer_generator_assets();
+        let gen_img: std::sync::Arc<image::RgbaImage> =
+            crate::scenes::game::helpers::pl_image_cached(gen_intact, gd as f32)
+            .unwrap_or_else(|| std::sync::Arc::new(circle_img(
+                gr as u32, C_BOSS_GENERATOR.0, C_BOSS_GENERATOR.1, C_BOSS_GENERATOR.2)));
         for i in 0..BOSS_GENERATOR_COUNT {
             let id = format!("boss_gen_{i}");
             let mut gen = GameObject::new_rect(
@@ -1612,8 +1888,41 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             gen.layer = LAYER_SPACE_HOOK;
             gen.gravity = 0.0;
             gen.visible = false;
-            gen.set_glow(GlowConfig { color: Color(C_BOSS_GENERATOR.0, C_BOSS_GENERATOR.1, C_BOSS_GENERATOR.2, 255), width: 16.0 });
+            // Self-powered, and the fight's objective: drawn as authored in
+            // every phase instead of dimming with the arena in a darkness.
+            // (In daylight the ambient is 1.0, so unlit looks identical.)
+            gen.unlit = true;
+            // Idle loop: the core pulsing is what says "this is live".
+            if let Some(anim) = crate::scenes::game::helpers::pl_sprite(
+                gen_idle, gd as f32, DEVOURER_GENERATOR_IDLE_FPS)
+            {
+                gen.animated_sprite = Some(anim);
+            }
+            // A cyan halo that follows the machine's own outline and blooms —
+            // the same energy as the dome it feeds.
+            gen.set_glow(GlowConfig { color: Color(C_BOSS_GENERATOR.0, C_BOSS_GENERATOR.1, C_BOSS_GENERATOR.2, 200), width: 10.0 });
             scene = scene.with_object(&id, gen);
+        }
+        // Shield tethers: one per generator, the power line it feeds into the
+        // boss's dome. Transparent strip; the ENERGY TETHER effect draws it,
+        // and sun_devourer.rs stretches and turns it between the two each
+        // frame. Behind the generators, so the line plugs INTO them.
+        for i in 0..BOSS_GENERATOR_COUNT {
+            let id = format!("boss_gen_tether_{i}");
+            let mut t = GameObject::new_rect(
+                ctx, id.clone().into(),
+                Some(Image {
+                    shape: ShapeType::Rectangle(0.0, (100.0, DEVOURER_TETHER_WIDTH), 0.0),
+                    image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(),
+                    color: None,
+                }),
+                (100.0, DEVOURER_TETHER_WIDTH), (-6000.0, -6000.0),
+                vec!["boss_gen".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
+            );
+            t.layer = LAYER_SPACE_HOOK - 1;
+            t.gravity = 0.0;
+            t.visible = false;
+            scene = scene.with_object(&id, t);
         }
         // Barrier: a wide glowing band near the sun edge.
         let bw = BOSS_ZONE_X2 - BOSS_ZONE_X1;
@@ -1634,7 +1943,12 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         // are still up (the boss is invulnerable until they are destroyed).
         {
             let d = (BOSS_SIZE * 1.5).round() as u32;
-            let ring = gwell_ring_cached(BOSS_SIZE * 0.75, C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 3, 150.0);
+            // Transparent: the shield is drawn by the ENERGY DOME effect,
+            // attached each frame. A static ring image reads as a decal
+            // painted over the boss rather than as a field holding it.
+            let ring: std::sync::Arc<image::RgbaImage> =
+                std::sync::Arc::new(solid(0, 0, 0, 0));
+            let _ = gwell_ring_cached(BOSS_SIZE * 0.75, C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 3, 150.0);
             let mut ff = GameObject::new_rect(ctx, "boss_forcefield".into(),
                 Some(Image { shape: ShapeType::Ellipse(0.0, (d as f32, d as f32), 0.0), image: ring, color: None }),
                 (d as f32, d as f32), (-6000.0, -6000.0),
@@ -1729,12 +2043,42 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         }
     }
 
+    // ── Hit-registration pool ─────────────────────────────────────────────
+    //
+    // Transparent objects that exist only to carry an impact effect. Parked
+    // far off screen when idle, like every other pool here.
+    let mut impact_free: Vec<String> = Vec::new();
+    for i in 0..IMPACT_POOL_SIZE {
+        let id = format!("impact_{i}");
+        let mut obj = GameObject::new_rect(ctx, id.clone(),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (64.0, 64.0), 0.0),
+                image: solid(0, 0, 0, 0).into(),
+                color: None,
+            }),
+            (8.0, 8.0), (-9000.0, -9000.0),
+            vec!["impact".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        obj.gravity = 0.0;
+        obj.visible = false;
+        // Above the bosses: a hit has to be visible over the thing it hit.
+        obj.layer = LAYER_SPACE_HOOK + 4;
+        impact_free.push(id.clone());
+        scene = scene.with_object(&id, obj);
+    }
+
     // ── Boss bolt pool ────────────────────────────────────────────────────
     let mut boss_bolt_free: Vec<String> = Vec::new();
     for i in 0..BOSS_BOLT_POOL_SIZE {
         let id = format!("boss_bolt_{i}");
         let mut obj = GameObject::new_rect(ctx, id.clone(),
-            Some(Image { shape: ShapeType::Rectangle(0.0, (BOSS_BOLT_W, BOSS_BOLT_H), 0.0), image: solid(C_BOSS_BOLT.0, C_BOSS_BOLT.1, C_BOSS_BOLT.2, 255).into(), color: None }),
+            Some(Image {
+                shape: ShapeType::Rectangle(0.0, (BOSS_BOLT_W, BOSS_BOLT_H), 0.0),
+                image: crate::scenes::game::helpers::pl_image_fit_cached(
+                    ASSET_PL_DEVOURER_BOLT, BOSS_BOLT_W, BOSS_BOLT_H)
+                    .unwrap_or_else(|| std::sync::Arc::new(
+                        solid(C_BOSS_BOLT.0, C_BOSS_BOLT.1, C_BOSS_BOLT.2, 255))),
+                color: None,
+            }),
             (BOSS_BOLT_W, BOSS_BOLT_H), (-7000.0, -7000.0),
             vec!["boss_bolt".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.gravity = 0.0; obj.visible = false;
@@ -1799,7 +2143,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         space_coin_free, space_blue_coin_free, space_bh_free,
         space_asteroid_free, space_red_coin_free, cannon_free,
         space_oxygen_pickup_free, upgrade_free,
-        boss_bolt_free, boss_asteroid_ids, comet_free, warn_free,
+        boss_bolt_free, impact_free, boss_asteroid_ids, comet_free, warn_free,
     };
 
     (scene, pools)

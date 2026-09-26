@@ -78,6 +78,27 @@ pub fn menu_bgm_playable() -> bool {
         .unwrap_or(false)
 }
 
+/// Hold the game's music where it is.
+///
+/// A boss whose fight is scored against a beat has TWO clocks: the tick loop
+/// and the track. `Canvas::pause` stops tick callbacks, so the beat freezes
+/// while rodio keeps playing on its own thread — and the two come back out of
+/// phase by exactly however long the pause lasted. On the Conductor that moves
+/// the scoring window away from the sound the player is timing against, which
+/// makes a correct release read as a miss.
+pub fn pause_game_bgm() {
+    if let Ok(slot) = game_bgm_slot().lock() {
+        if let Some(h) = slot.as_ref() { h.pause(); }
+    }
+}
+
+/// Start it again, in phase with where the tick loop resumes.
+pub fn resume_game_bgm() {
+    if let Ok(slot) = game_bgm_slot().lock() {
+        if let Some(h) = slot.as_ref() { h.resume(); }
+    }
+}
+
 pub fn set_game_bgm_volume(vol: f32) {
     if let Ok(slot) = game_bgm_slot().lock() {
         if let Some(h) = slot.as_ref() {

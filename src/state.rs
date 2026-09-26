@@ -408,6 +408,11 @@ pub struct State {
     pub boss_generators: Vec<String>,
     /// Remaining HP per generator (aligns with boss_generators).
     pub boss_generator_hp: Vec<i32>,
+    /// Ticks left of each generator's tether snapping back into the dome
+    /// after it dies (aligns with boss_generators). 0 = not snapping.
+    pub boss_generator_snap: Vec<i32>,
+    /// Ticks left of each generator's hit flash. 0 = none.
+    pub boss_generator_flash: Vec<i32>,
     /// True while the protective barrier is up (blocks the sun).
     pub boss_barrier_up: bool,
     /// True once all generators are down — the final (bait-and-bail) phase.
@@ -529,6 +534,138 @@ pub struct State {
     /// the player gets a short grace before it can trigger again, so lingering on
     /// the boss cannot drain every heart in a couple of frames.
     pub boss_contact_cooldown: u32,
+
+    // ── Conductor ────────────────────────────────────────────────────────────
+    /// How far through the current beat, 0..1.
+    ///
+    /// The beat is advanced by REAL elapsed time rather than by counting
+    /// ticks. Counting ticks assumes every tick is 1/60s, so a dropped frame
+    /// makes the beat fall permanently behind the music — and on a boss scored
+    /// against a +/-100ms window, a drifting clock eventually marks correct
+    /// releases as misses with nothing to resynchronise it.
+    pub conductor_beat_phase: f32,
+    /// When the beat clock was last advanced.
+    pub conductor_beat_clock: Option<std::time::Instant>,
+    /// Which beat of the bar just landed, 0..CONDUCTOR_BEATS_PER_BAR-1.
+    ///
+    /// The bar is the fight's attack cadence as well as its rhythm, so the
+    /// attack director reads this rather than keeping a second timer that could
+    /// drift out of phase with the music.
+    pub conductor_beat_in_bar: u32,
+    /// Which bar of the 8-bar music loop is playing, 0..CONDUCTOR_BEATMAP_BARS-1.
+    ///
+    /// Scoring targets are the KICK DRUM hits, and which sixteenths are kicks
+    /// changes bar to bar — so the fight has to know where in the loop the song
+    /// is, not merely where in the bar. Advanced on the downbeat alongside
+    /// `conductor_beat_in_bar`, from the same clock, so the two cannot disagree.
+    pub conductor_loop_bar: u32,
+    /// Scoring releases landed in the current bar. The per-bar drain reads it:
+    /// a bar in which the player hit nothing costs a stack, a bar in which they
+    /// hit anything does not.
+    pub conductor_bar_hits: u32,
+    /// Global sixteenth index (bar * 16 + slot) of the last kick scored, or -1.
+    ///
+    /// One kick can only be claimed once. Without this, two releases either
+    /// side of the same kick both land inside its window and score twice, which
+    /// rewards exactly the mashing the kick map exists to stop.
+    pub conductor_last_kick: i32,
+    /// Ticks until the queued wave warning sound plays, or 0.
+    ///
+    /// The warning is quantised to the off-beat rather than played the instant
+    /// a volley is chosen, so it lands in the music instead of across it.
+    pub conductor_cue_delay: u32,
+    /// Ticks until the player-impact sound may play again.
+    ///
+    /// The impact sound used to be the HOOK GRAB sound, fired every time the
+    /// player attached to a node — which in a game about grabbing and
+    /// releasing constantly is several times a second, at nearly four times
+    /// the volume of the music. It now marks actually hitting something, and
+    /// this stops a multi-contact bounce firing it once per frame.
+    pub impact_sfx_cd: u32,
+    /// Index into `CONDUCTOR_WAVE_SHAPES` for the running volley.
+    pub conductor_wave_shape: u8,
+    /// The Conductor's own RNG stream, advanced once per attack decision.
+    ///
+    /// Its choices used to be rolled from `boss_phase`, which the Sun Devourer
+    /// and the Serpent advance but the Conductor NEVER DOES — it is set to 0.0
+    /// when the arena is built and left there. Every roll was therefore `0`,
+    /// which meant the sustain and crescendo attacks never fired once in the
+    /// whole fight and every volley was a single wave. Three attacks and four
+    /// volley shapes existed, were telegraphed, tested and drawn, and the
+    /// player only ever saw one of each.
+    pub conductor_rng: u64,
+    /// Level of each of the guard's four quadrant arcs, 0..1.
+    pub conductor_eq: [f32; 4],
+    /// Ticks until the guard may hit the player again.
+    pub conductor_eq_cd: u32,
+    /// Whether the core is currently showing its vulnerable sprite.
+    ///
+    /// Tracked so the image is swapped on the TRANSITION only. Setting it every
+    /// frame would rebuild and re-upload the texture sixty times a second for a
+    /// picture that did not change.
+    pub conductor_core_vuln: bool,
+    /// The boss's FULL health for this fight, for the HP bar.
+    ///
+    /// The bar used to divide by `BOSS_MAX_HP`, a global constant. That is
+    /// right for the bosses whose health IS that constant, and wrong for the
+    /// part-based ones — the Serpent's health is the sum of its pieces, which
+    /// starts at 17, so its bar opened the fight already 15% drained. Recorded
+    /// when the fight starts, from whatever the boss actually has.
+    pub boss_hp_max: i32,
+    /// Tether nodes currently showing the scoring-beat cue.
+    ///
+    /// Tracked so the cue can be cleared from a node that stops qualifying —
+    /// a pooled node handed back and re-issued elsewhere would otherwise carry
+    /// the effect with it.
+    pub conductor_beat_fx: Vec<String>,
+    /// Live hit bursts: (object id, ticks left, drawn size, colour, taken).
+    ///
+    /// A pool rather than an effect attached to the part that was hit: an
+    /// object carries only ONE mega effect, and a boss part is usually already
+    /// carrying its state marker when it takes a hit. Attaching the burst to
+    /// the part would silently replace the "vulnerable" reticle at the exact
+    /// moment the player is looking for confirmation.
+    /// (id, ticks left, drawn size, colour, kind) where kind is
+    /// `IMPACT_KIND_*`. One pool serves hit bursts and the player's own
+    /// beat feedback: both are short-lived effects at a world position, and a
+    /// second pool would be the same code with a different name.
+    pub impact_live: Vec<(String, u32, f32, (f32, f32, f32), u32)>,
+    pub impact_free: Vec<String>,
+    /// Which attack is running: 0 none, 1 bar line, 2 sustain, 3 crescendo.
+    pub conductor_attack: u8,
+    /// Ticks the running attack has been going, or the telegraph has been up.
+    pub conductor_attack_ticks: u32,
+    /// Ticks of telegraph left before the queued attack fires. While non-zero
+    /// the tell is up and the attack itself has not started.
+    pub conductor_telegraph: u32,
+    /// Bar-line sweep: +1 sweeps left-to-right, -1 right-to-left.
+    pub conductor_bar_dir: f32,
+    /// World Y of the centre of the bar line's safe gap.
+    pub conductor_bar_gap_y: f32,
+    /// Tether nodes currently wearing the sonic-ring effect.
+    ///
+    /// A node has ONE attached-effect slot, shared with the buff aura, so the
+    /// two systems have to agree about who owns it: `tick_buff_node_elec`
+    /// skips anything listed here, and this list is released unconditionally
+    /// when the attack ends. Without that the wave's rings would be erased by
+    /// the buff aura on the next frame, or survive on a recycled node.
+    pub conductor_ring_fx: Vec<String>,
+    /// How many waves this bar-line attack is bringing, 1..=CONDUCTOR_WAVE_MAX.
+    pub conductor_wave_count: u8,
+    /// Per-wave strike latch, one bit each.
+    ///
+    /// A bitmask rather than a bool: with several waves in flight each one may
+    /// strike at most once, but a later wave must still be able to catch a
+    /// player who survived the first. One shared flag would make every wave
+    /// after the first harmless.
+    pub conductor_wave_hit: u8,
+    /// Whether the current bar-line sweep has already hit the player.
+    ///
+    /// A sweep crosses the arena over 96 ticks while the contact cooldown is
+    /// 45, so without this a player who misses the gap is struck twice by one
+    /// wave. Measured: four hearts gone in eleven seconds. One mistake should
+    /// cost one heart.
+    pub conductor_bar_hit: bool,
     /// Colossus: after a part is destroyed the whole boss is briefly invulnerable,
     /// so the player can't chain-kill two parts within the same second.
     pub boss_part_invuln_ticks: u32,

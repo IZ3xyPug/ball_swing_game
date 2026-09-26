@@ -26,6 +26,8 @@ pub fn constants_gen_ahead() -> f32 { constants::GEN_AHEAD }
 
 #[cfg(test)]
 mod sim_tests;
+#[cfg(test)]
+mod render_tests;
 
 use menu::{
     build_profile_scene,
