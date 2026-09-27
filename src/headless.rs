@@ -110,6 +110,11 @@ pub struct EpisodeReport {
     pub flare_hearts_lost: i32,
     pub flare_saves: i32,
     pub flares_without_shelter: i32,
+    /// Distance (px, along x) from the player to the nearest shelter at each
+    /// flare's start, summed and worst: how far the player has to go, which
+    /// the pass/fail count above cannot say.
+    pub shelter_dx_sum: f32,
+    pub shelter_dx_worst: f32,
     /// Largest gap ever seen between the chain frontier and the player. Healthy
     /// steady state hovers just above GEN_AHEAD; a large value means world
     /// generation was switched off and the player was crossing empty world.
@@ -174,6 +179,11 @@ pub struct AggregateReport {
     pub flare_hearts_lost: i32,
     pub flare_saves: i32,
     pub flares_without_shelter: i32,
+    /// Distance (px, along x) from the player to the nearest shelter at each
+    /// flare's start, summed and worst: how far the player has to go, which
+    /// the pass/fail count above cannot say.
+    pub shelter_dx_sum: f32,
+    pub shelter_dx_worst: f32,
     pub worst_frontier_overshoot: f32,
     pub frontier_repairs: i32,
     pub census: HazardCensus,
@@ -198,6 +208,17 @@ fn build_canvas(ctx: &mut prism::Context, start_minute: f32) -> Canvas {
             "debug_start_distance",
             Value::F32(start_minute * crate::difficulty::DIFFICULTY_PX_PER_MINUTE),
         );
+    }
+    // Looks for captures: HEADLESS_CHAR / HEADLESS_ROPE_STYLE /
+    // HEADLESS_ROPE_COLOR (indices), applied before the game scene builds.
+    for (env, var) in [
+        ("HEADLESS_CHAR", "player_char_selected"),
+        ("HEADLESS_ROPE_STYLE", "player_rope_style_selected"),
+        ("HEADLESS_ROPE_COLOR", "player_rope_selected"),
+    ] {
+        if let Some(v) = std::env::var(env).ok().and_then(|v| v.parse::<i32>().ok()) {
+            canvas.set_var(var, v);
+        }
     }
     canvas.add_scene(build_tutorial_scene(ctx));
     canvas.add_scene(build_menu_scene(ctx));
@@ -235,6 +256,109 @@ fn get_i32_or(c: &Canvas, name: &str, default: i32) -> i32 {
     match c.get_var(name) {
         Some(Value::I32(v)) => v,
         _ => default,
+    }
+}
+
+/// `HEADLESS_SHOT_DIR=<dir>` (every `HEADLESS_SHOT_EVERY` frames, default
+/// 600): render the frame through the real draw tree — the same items the
+/// device draws, post-processing included — and save it half size as
+/// `<dir>/frame_NNNNNN.png`. So visual work can be looked at without a
+/// device in hand.
+/// `HEADLESS_SHOP=<dir>`: open the shop the way the menu does and capture
+/// the look screens — the cat carousel, and two rope styles with the colour
+/// row — so shop changes can be reviewed without a device. Saves go to the
+/// headless temp dir (see `build_canvas`), never a real profile.
+pub fn capture_shop(dir: &str) {
+    let (mut ctx, _recv) = prism::Context::new();
+    let mut canvas = build_canvas(&mut ctx, 0.0);
+    let sized = SizedTree::default();
+    canvas.load_scene("menu");
+    {
+        let g = crate::profile::profile();
+        g.lock().unwrap().meta_currency = 500;
+    }
+    canvas.set_var("menu_cam_target_y", 0.0f32);
+    canvas.set_var("menu_in_shop", true);
+    crate::shop::init_shop(&mut canvas);
+    // `HEADLESS_SHOP_SEQ=<rope style>`: instead of the four stills, film that
+    // style's ROPES preview — 24 frames, one every 2 ticks — to judge its
+    // motion (loop pops, stutters, seams) frame by frame.
+    if let Some(style) = std::env::var("HEADLESS_SHOP_SEQ").ok().and_then(|v| v.parse::<i32>().ok()) {
+        crate::shop::show_carousel(&mut canvas, 1);
+        canvas.set_var("player_rope_selected", 0i32);
+        canvas.set_var("shop_selected", style);
+        crate::shop::refresh_carousel(&mut canvas, 1, style as usize);
+        for i in 0..(30 + 24 * 2) {
+            OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
+            if i >= 30 && (i - 30) % 2 == 0 {
+                shoot_frame(&mut canvas, dir, (i - 30) as u64 / 2 + 1);
+            }
+        }
+        return;
+    }
+    let shots: [(i32, i32, i32, u64); 4] = [(0, 15, 0, 1), (0, 8, 0, 2), (1, 1, 5, 3), (1, 7, 8, 4)];
+    for (cat, sel, color, n) in shots {
+        crate::shop::show_carousel(&mut canvas, cat);
+        canvas.set_var("player_rope_selected", color);
+        canvas.set_var("shop_selected", sel);
+        crate::shop::refresh_carousel(&mut canvas, cat, sel as usize);
+        for _ in 0..90 {
+            OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
+        }
+        shoot_frame(&mut canvas, dir, n);
+    }
+}
+
+fn shoot_frame(canvas: &mut Canvas, dir: &str, frame: u64) {
+    use prism::drawable::Drawable;
+    thread_local! {
+        static RENDERER: std::cell::RefCell<Option<prism::canvas::HeadlessRenderer>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let screen = (crate::constants::VW, crate::constants::VH);
+    let req = canvas.request_size();
+    let sized = canvas.build(screen, req);
+    let items = canvas.draw(&sized, (0.0, 0.0), (0.0, 0.0, screen.0, screen.1));
+    let rgba = RENDERER.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = block_on(prism::canvas::HeadlessRenderer::new(screen.0 as u32, screen.1 as u32)).ok();
+        }
+        slot.as_mut().map(|r| r.render(items))
+    });
+    let Some((w, h, px)) = rgba else {
+        eprintln!("[SHOT] no GPU available; frame {frame} not captured");
+        return;
+    };
+    let Some(img) = image::RgbaImage::from_raw(w, h, px) else { return };
+    let half = image::imageops::resize(&img, w / 2, h / 2, image::imageops::FilterType::Triangle);
+    let _ = std::fs::create_dir_all(dir);
+    let path = format!("{dir}/frame_{frame:06}.png");
+    match half.save(&path) {
+        Ok(()) => eprintln!("[SHOT] {path}"),
+        Err(e) => eprintln!("[SHOT] {path}: {e}"),
+    }
+}
+
+/// Drive a future to completion on this thread. `pollster` is a
+/// dev-dependency only, and this is all of it that the capture needs.
+fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+    struct Unpark(std::thread::Thread);
+    impl Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = std::pin::pin!(fut);
+    loop {
+        if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+            return v;
+        }
+        std::thread::park();
     }
 }
 
@@ -465,6 +589,11 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         // implemented).
         canvas.set_var("debug_boss_kind_sundev", true);
     }
+    if std::env::var("HEADLESS_IMMORTAL").is_ok() {
+        // Screenshots of a long run need the run to last: falls respawn
+        // instead of ending it.
+        canvas.set_var("debug_immortal", true);
+    }
     if stasis_down {
         // Start whichever boss occupies the current roster slot (e.g. the
         // Colossus at index 0) deterministically, without forcing the Sun
@@ -507,11 +636,24 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
     let mut starve_streak: u64 = 0;
     let mut worst_starve_streak: u64 = 0;
     let mut flares_without_shelter: i32 = 0;
+    let mut shelter_dx_sum = 0.0f32;
+    let mut shelter_dx_worst = 0.0f32;
     let mut prev_flare_count: i32 = 0;
     let mut census = HazardCensus::default();
     let mut worst_overshoot = 0.0f32;
 
+    let shot_dir = std::env::var("HEADLESS_SHOT_DIR").ok();
+    let shot_every: u64 = std::env::var("HEADLESS_SHOT_EVERY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600)
+        .max(1);
     while frames < max_frames {
+        if let Some(dir) = &shot_dir {
+            if frames > 0 && frames % shot_every == 0 {
+                shoot_frame(&mut canvas, dir, frames);
+            }
+        }
         // Observe (borrows canvas immutably, then released).
         let Some(o) = observe(&canvas) else {
             break;
@@ -595,20 +737,30 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
             let count = get_i32_or(&canvas, "flares_fired", 0);
             if count > prev_flare_count {
                 prev_flare_count = count;
-                let shelter_near = canvas
+                // Every pooled hook, hidden or not: a node spawns hidden,
+                // off-screen, and animates in as the player nears it, so a
+                // visibility-filtered search reported live shelters 5 000 px
+                // ahead as missing (and nearly every late-run flare as a
+                // violation). A hidden node's x is already its final x.
+                let px = canvas
                     .get_game_object("player")
-                    .map(|p| {
-                        let px = p.position.0 + p.size.0 * 0.5;
-                        canvas
-                            .objects_in_radius(p, crate::constants::FLARE_SHELTER_SEARCH_AHEAD)
-                            .into_iter()
-                            .any(|o| {
-                                o.tags.iter().any(|t| t == crate::constants::SHIELD_HOOK_TAG)
-                                    && (o.position.0 + o.size.0 * 0.5) - px
-                                        <= crate::constants::FLARE_SHELTER_SEARCH_AHEAD
-                            })
+                    .map(|p| p.position.0 + p.size.0 * 0.5)
+                    .unwrap_or(0.0);
+                let nearest = (0..crate::constants::HOOK_POOL_SIZE)
+                    .filter_map(|i| canvas.get_game_object(&format!("hook_{i}")))
+                    .filter(|o| o.tags.iter().any(|t| t == crate::constants::SHIELD_HOOK_TAG))
+                    .map(|o| o.position.0 + o.size.0 * 0.5 - px)
+                    .filter(|dx| {
+                        *dx <= crate::constants::FLARE_SHELTER_SEARCH_AHEAD
+                            && *dx >= -crate::constants::FLARE_SHELTER_SEARCH_BEHIND
                     })
-                    .unwrap_or(false);
+                    .map(f32::abs)
+                    .fold(None, |best: Option<f32>, d| Some(best.map_or(d, |b| b.min(d))));
+                let shelter_near = nearest.is_some();
+                if let Some(d) = nearest {
+                    shelter_dx_sum += d;
+                    shelter_dx_worst = shelter_dx_worst.max(d);
+                }
                 if !shelter_near {
                     flares_without_shelter += 1;
                 }
@@ -810,6 +962,8 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         flare_hearts_lost: get_i32_or(&canvas, "flare_hearts_lost", 0),
         flare_saves: get_i32_or(&canvas, "flare_saves", 0),
         flares_without_shelter,
+        shelter_dx_sum,
+        shelter_dx_worst,
         worst_frontier_overshoot: worst_overshoot,
         frontier_repairs: get_i32_or(&canvas, "frontier_repairs", 0),
         census,
@@ -857,6 +1011,8 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
                 flare_hearts_lost: 0,
                 flare_saves: 0,
                 flares_without_shelter: 0,
+                shelter_dx_sum: 0.0,
+                shelter_dx_worst: 0.0,
                 worst_frontier_overshoot: 0.0,
                 frontier_repairs: 0,
                 census: HazardCensus::default(),
@@ -901,6 +1057,8 @@ pub fn run(episodes: u64, max_frames: u64, boss_mode: bool, force_fall: bool, bo
         agg.flare_hearts_lost += ep.flare_hearts_lost;
         agg.flare_saves += ep.flare_saves;
         agg.flares_without_shelter += ep.flares_without_shelter;
+        agg.shelter_dx_sum += ep.shelter_dx_sum;
+        agg.shelter_dx_worst = agg.shelter_dx_worst.max(ep.shelter_dx_worst);
         agg.census.absorb(&ep.census);
         agg.worst_frontier_overshoot = agg.worst_frontier_overshoot.max(ep.worst_frontier_overshoot);
         agg.frontier_repairs += ep.frontier_repairs;

@@ -15,6 +15,12 @@ use super::helpers::*;
 /// the HUD + `hearts`/`heart_losses` vars current (the headless harness reads
 /// these vars).
 pub fn tick_hearts(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Headless captures (HEADLESS_IMMORTAL): keep the run alive long enough
+    // to look at it. Never set by the game itself.
+    if matches!(c.get_var("debug_immortal"), Some(Value::Bool(true))) {
+        let mut s = st.lock().unwrap();
+        s.hearts = s.hearts.max(3);
+    }
     checkpoint_save(c, st);
     hearts_hud_update(c, st);
     tick_buff(c, st);

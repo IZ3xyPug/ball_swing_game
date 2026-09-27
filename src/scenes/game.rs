@@ -9,6 +9,7 @@ mod pickups;
 mod visuals;
 mod hud_update;
 mod background;
+mod decor;
 mod gravity_wells;
 mod turrets;
 mod gravity_cannon;

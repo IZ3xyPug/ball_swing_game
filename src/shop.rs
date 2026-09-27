@@ -38,8 +38,15 @@ pub const SHOP_ROPE_COLORS: &[(u8,u8,u8)] = &[
     ( 60, 200, 220), // 2 cyan
     (240, 200,  60), // 3 gold
     (160, 220, 100), // 4 lime
+    (255,  90, 150), // 5 rose
+    (170, 110, 255), // 6 violet
+    (255, 120,  40), // 7 ember
+    (160, 225, 255), // 8 ice
+    (225,  40,  60), // 9 crimson
 ];
-pub const SHOP_ROPE_NAMES: &[&str] = &["WHITE", "CLASSIC", "CYAN", "GOLD", "LIME"];
+/// Colour 0 is each style's own look (the energy rope's blue, each premium
+/// style's signature colour); the rest are gradient-mapped onto the style.
+pub const SHOP_ROPE_NAMES: &[&str] = &["ORIGINAL", "CLASSIC", "CYAN", "GOLD", "LIME", "ROSE", "VIOLET", "EMBER", "ICE", "CRIMSON"];
 
 pub const SHOP_BG_COLORS: &[(u8,u8,u8)] = &[
     ( 20,  15,  50), // 0 midnight
@@ -75,7 +82,8 @@ fn upgrade_cards() -> (&'static [(u8, u8, u8)], &'static [&'static str]) {
 fn cat_items(cat: i32) -> (&'static [(u8,u8,u8)], &'static [&'static str]) {
     match cat {
         0 => (PLAYER_CHAR_COLORS, PLAYER_CHAR_NAMES),
-        1 => (SHOP_ROPE_COLORS,   SHOP_ROPE_NAMES),
+        // Rope STYLES; the colour is its own row under the carousel.
+        1 => (crate::cosmetics::ROPE_STYLE_SWATCHES, crate::cosmetics::ROPE_STYLE_NAMES),
         2 => (SHOP_BG_COLORS,     SHOP_BG_NAMES),
         3 => (SHOP_TRAIL_COLORS,  SHOP_TRAIL_NAMES),
         4 => upgrade_cards(),
@@ -108,13 +116,53 @@ static TRAIL_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = 
 pub fn get_card_cache() -> &'static Vec<[std::sync::Arc<image::RgbaImage>; 2]> {
     CARD_CACHE.get_or_init(|| {
         (0..NUM_CHARS).map(|i| {
-            let (r, g, b) = SHOP_CHARS[i];
-            [
-                std::sync::Arc::new(shop_card_img(r, g, b, false)),
-                std::sync::Arc::new(shop_card_img(r, g, b, true)),
-            ]
+            // The calico and every breed show their own curled-up art; the
+            // plain colours keep their orb.
+            let art = if i == 0 {
+                first_gif_frame(include_bytes!("../assets/calicoball.gif"))
+            } else {
+                crate::cosmetics::cat_skin(i)
+                    .and_then(|s| image::load_from_memory(s.frames[0]).ok())
+                    .map(|img| img.to_rgba8())
+            };
+            match art {
+                Some(art) => [
+                    std::sync::Arc::new(art_card_img(&art, 2, false)),
+                    std::sync::Arc::new(art_card_img(&art, 2, true)),
+                ],
+                None => {
+                    let (r, g, b) = SHOP_CHARS[i];
+                    [
+                        std::sync::Arc::new(shop_card_img(r, g, b, false)),
+                        std::sync::Arc::new(shop_card_img(r, g, b, true)),
+                    ]
+                }
+            }
         }).collect()
     })
+}
+
+fn first_gif_frame(bytes: &[u8]) -> Option<image::RgbaImage> {
+    let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
+    decoder.into_frames().next()?.ok().map(|f| f.into_buffer())
+}
+
+/// A rope style's card art: its first tile, three deep, mirrored the way
+/// the rope draws it; the classic energy rope shows its own GIF frame.
+fn rope_style_art(style: usize) -> Option<image::RgbaImage> {
+    if style != 0 {
+        let s = crate::cosmetics::ROPE_STYLES.get(style)?;
+        return crate::cosmetics::rope_card_art(style, s.signature);
+    }
+    let tile = first_gif_frame(include_bytes!("../assets/energy_hook_1.gif"))?;
+    let (w, h) = tile.dimensions();
+    let n = 2;
+    let mut strip = image::RgbaImage::new(w, h * n);
+    for k in 0..n {
+        let t = if k % 2 == 1 { image::imageops::flip_vertical(&tile) } else { tile.clone() };
+        image::imageops::overlay(&mut strip, &t, 0, (k * h) as i64);
+    }
+    Some(strip)
 }
 
 fn get_item_card_cache(cat: i32) -> Option<&'static Vec<[std::sync::Arc<image::RgbaImage>; 2]>> {
@@ -129,7 +177,26 @@ fn get_item_card_cache(cat: i32) -> Option<&'static Vec<[std::sync::Arc<image::R
     };
 
     match cat {
-        1 => Some(ROPE_CARD_CACHE.get_or_init(|| make_cache(SHOP_ROPE_COLORS))),
+        1 => Some(ROPE_CARD_CACHE.get_or_init(|| {
+            (0..crate::cosmetics::ROPE_STYLES.len()).map(|i| {
+                match rope_style_art(i) {
+                    Some(art) => {
+                        let k = 3;
+                        [
+                            std::sync::Arc::new(art_card_img(&art, k, false)),
+                            std::sync::Arc::new(art_card_img(&art, k, true)),
+                        ]
+                    }
+                    None => {
+                        let (r, g, b) = crate::cosmetics::ROPE_STYLE_SWATCHES[i];
+                        [
+                            std::sync::Arc::new(shop_card_img(r, g, b, false)),
+                            std::sync::Arc::new(shop_card_img(r, g, b, true)),
+                        ]
+                    }
+                }
+            }).collect()
+        })),
         2 => Some(BG_CARD_CACHE.get_or_init(|| make_cache(SHOP_BG_COLORS))),
         3 => Some(TRAIL_CARD_CACHE.get_or_init(|| make_cache(SHOP_TRAIL_COLORS))),
         _ => None,
@@ -137,6 +204,30 @@ fn get_item_card_cache(cat: i32) -> Option<&'static Vec<[std::sync::Arc<image::R
 }
 
 // ── Card image builder ──────────────────────────────────────────────────────
+
+/// A card carrying pixel art (upscaled by `scale`, nearest) where the orb
+/// would be: cats curled up, ropes as a strip of their tile.
+fn art_card_img(art: &image::RgbaImage, scale: u32, selected: bool) -> image::RgbaImage {
+    let mut img = shop_card_img(0, 0, 0, selected);
+    // Clear the orb shop_card_img drew; this card's art replaces it.
+    let (bgr, bgg, bgb) = if selected { (45u8, 65u8, 90u8) } else { (22u8, 35u8, 55u8) };
+    let (cx, cy, cr) = ((CARD_W / 2) as i32, (CARD_H / 2) as i32 - 60, 121i32);
+    for py in (cy - cr).max(0)..(cy + cr).min(CARD_H as i32) {
+        for px in (cx - cr).max(0)..(cx + cr).min(CARD_W as i32) {
+            let (dx, dy) = (px - cx, py - cy);
+            if dx * dx + dy * dy <= cr * cr {
+                img.put_pixel(px as u32, py as u32, image::Rgba([bgr, bgg, bgb, 235]));
+            }
+        }
+    }
+    let (w, h) = art.dimensions();
+    let big = image::imageops::resize(art, w * scale, h * scale, image::imageops::FilterType::Nearest);
+    let ox = cx - (w * scale / 2) as i32;
+    let oy = (cy - (h * scale / 2) as i32).max(12);
+    image::imageops::overlay(&mut img, &big, ox as i64, oy as i64);
+    img
+}
+
 fn shop_card_img(r: u8, g: u8, b: u8, selected: bool) -> image::RgbaImage {
     let w = CARD_W;
     let h = CARD_H;
@@ -377,6 +468,8 @@ pub fn show_categories(c: &mut Canvas) {
         set_visible(c, &format!("shop_slot_{s}"), false);
         set_visible(c, &format!("shop_slot_label_{s}"), false);
     }
+    show_rope_colors(c, false);
+    c.clear_effect("shop_preview_trail");
 
     // Update title and back button text
     if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
@@ -439,6 +532,12 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
     update_slot_positions(c, 0.0);
     update_all_slot_images(c, sel as usize, cat);
     update_all_slot_labels(c, sel as usize, cat);
+    show_rope_colors(c, cat == 1);
+    if cat != 1 {
+        c.clear_effect("shop_preview_trail");
+    }
+
+    refresh_select_text(c, cat, sel as usize);
 
     // Update title and back button text
     if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
@@ -462,12 +561,19 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
                 action, &font, 32.0 * s, Color(255, 255, 255, 255), 380.0 * s,
             )));
         }
+        let instr = carousel_instruction(c, cat, sel as usize);
+        if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                &instr, &font, 30.0 * s, Color(150, 180, 215, 210), 1600.0 * s,
+            )));
+        }
         if let Some(obj) = c.get_game_object_mut("shop_back_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 "\u{25C4}  BACK", &font, 32.0 * s, Color(215, 230, 255, 255), 380.0 * s,
             )));
         }
     }
+    refresh_select_text(c, cat, sel as usize);
 }
 
 // ── Carousel helpers ────────────────────────────────────────────────────────
@@ -539,6 +645,8 @@ pub fn update_all_slot_labels(c: &mut Canvas, selected: usize, cat: i32) {
             // every one of them.
             let (label, colour) = if is_upgrade_category(cat) {
                 upgrade_slot_label(idx)
+            } else if cat == 0 || cat == 1 {
+                look_slot_label(c, cat, idx)
             } else {
                 (names[idx].to_string(), Color(180, 210, 240, 200))
             };
@@ -550,6 +658,18 @@ pub fn update_all_slot_labels(c: &mut Canvas, selected: usize, cat: i32) {
                 )));
             }
         }
+    }
+}
+
+/// Redraw the whole carousel for `selected` (cards, labels, the blurb and
+/// the action button) — after anything outside the carousel moved it.
+pub fn refresh_carousel(c: &mut Canvas, cat: i32, selected: usize) {
+    update_all_slot_images(c, selected, cat);
+    update_all_slot_labels(c, selected, cat);
+    refresh_instruction(c, cat, selected);
+    refresh_select_text(c, cat, selected);
+    if cat == 1 {
+        place_rope_color_ring(c);
     }
 }
 
@@ -565,6 +685,177 @@ pub fn refresh_instruction(c: &mut Canvas, cat: i32, selected: usize) {
             )));
         }
     }
+}
+
+/// What a look (cat or rope style) costs, whether it is owned, and whether
+/// it is the one equipped.
+pub fn look_state(c: &Canvas, cat: i32, idx: usize) -> (String, crate::cosmetics::Price, bool, bool) {
+    use crate::cosmetics::*;
+    let (key, price, name) = if cat == 0 {
+        (char_key(idx), char_price(idx), PLAYER_CHAR_NAMES.get(idx).copied().unwrap_or(""))
+    } else {
+        let s = &ROPE_STYLES[idx.min(ROPE_STYLES.len() - 1)];
+        (rope_key(idx), s.price, s.name)
+    };
+    let equipped = if cat == 0 {
+        c.get_i32("player_char_selected").max(0) as usize == idx
+    } else {
+        c.get_i32("player_rope_style_selected").max(0) as usize == idx
+    };
+    (name.to_string(), price, owns(&key, price), equipped)
+}
+
+fn look_slot_label(c: &Canvas, cat: i32, idx: usize) -> (String, Color) {
+    use crate::cosmetics::Price;
+    let (name, price, owned, equipped) = look_state(c, cat, idx);
+    let meta = {
+        let g = crate::profile::profile();
+        let m = g.lock().unwrap().meta_currency;
+        m
+    };
+    if equipped {
+        (format!("{name}  \u{2022}  EQUIPPED"), Color(140, 255, 190, 230))
+    } else if owned {
+        (name, Color(180, 210, 240, 200))
+    } else {
+        match price {
+            Price::Meta(n) if meta >= n => (format!("{name}  \u{2022}  {n} META"), Color(255, 236, 150, 240)),
+            Price::Meta(n) => (format!("{name}  \u{2022}  {n} META"), Color(160, 175, 200, 190)),
+            Price::Premium(_) => (format!("{name}  \u{2022}  SOON"), Color(160, 175, 200, 190)),
+            Price::Free => (name, Color(180, 210, 240, 200)),
+        }
+    }
+}
+
+/// The action button says BUY for a look not owned yet.
+pub fn refresh_select_text(c: &mut Canvas, cat: i32, selected: usize) {
+    if cat == 1 {
+        tint_original_swatch(c, selected);
+    }
+    let action = if is_upgrade_category(cat) {
+        "BUY".to_string()
+    } else if cat == 0 || cat == 1 {
+        let (_, price, owned, _) = look_state(c, cat, selected);
+        if owned { "SELECT".to_string() } else { format!("BUY \u{2022} {}", price.label()) }
+    } else {
+        "SELECT".to_string()
+    };
+    let s = c.virtual_scale();
+    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+        if let Some(obj) = c.get_game_object_mut("shop_select_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                &action, &font, 32.0 * s, Color(255, 255, 255, 255), 380.0 * s,
+            )));
+        }
+    }
+}
+
+/// SELECT on a cat or rope-style card: equip it if owned, buy it first if
+/// not. False (and a message on the instruction line) when it cannot be
+/// bought, so the caller stays on the carousel instead of equipping.
+pub fn select_look(c: &mut Canvas, cat: i32, idx: usize) -> bool {
+    use crate::cosmetics::*;
+    let (name, price, owned, _) = look_state(c, cat, idx);
+    if owned {
+        return true;
+    }
+    let key = if cat == 0 { char_key(idx) } else { rope_key(idx) };
+    match buy(&key, price) {
+        Ok(()) => {
+            flash_instruction(c, &format!("UNLOCKED {name}!"));
+            true
+        }
+        Err(short) if short == u64::MAX => {
+            flash_instruction(c, &format!("{name} IS COMING SOON"));
+            false
+        }
+        Err(short) => {
+            flash_instruction(c, &format!("NEED {short} MORE META FOR {name}"));
+            let sel = c.get_i32("shop_selected").max(0) as usize;
+            update_all_slot_labels(c, sel, cat);
+            false
+        }
+    }
+}
+
+/// Put a message on the instruction line for a moment; `tick_shop` puts
+/// the blurb back.
+fn flash_instruction(c: &mut Canvas, text: &str) {
+    let scale = c.virtual_scale();
+    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+        if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                text, &font, 34.0 * scale, Color(255, 236, 150, 240), 1600.0 * scale,
+            )));
+        }
+    }
+    c.set_var("shop_instr_restore", 150i32);
+}
+
+// ── Rope colour row ─────────────────────────────────────────────────────────
+
+/// One swatch per rope colour, under the carousel on the ROPES screen.
+pub const ROPE_SWATCH_D: f32 = 96.0;
+const ROPE_SWATCH_GAP: f32 = 34.0;
+
+fn rope_swatch_pos(i: usize) -> (f32, f32) {
+    let n = SHOP_ROPE_COLORS.len() as f32;
+    let total = n * ROPE_SWATCH_D + (n - 1.0) * ROPE_SWATCH_GAP;
+    let x0 = VW * 0.5 - total * 0.5;
+    let strip_bottom_y = CARD_CENTER_Y + CARD_H as f32 / 2.0 + 100.0;
+    (x0 + i as f32 * (ROPE_SWATCH_D + ROPE_SWATCH_GAP), strip_bottom_y + 30.0 + 110.0 + 50.0)
+}
+
+fn show_rope_colors(c: &mut Canvas, show: bool) {
+    for i in 0..SHOP_ROPE_COLORS.len() {
+        set_visible(c, &format!("shop_rope_color_{i}"), show);
+    }
+    set_visible(c, "shop_rope_color_ring", show);
+    set_visible(c, "shop_rope_color_text", show);
+    if show {
+        place_rope_color_ring(c);
+    }
+}
+
+/// Swatch 0, ORIGINAL, wears the colour it means: the browsed style's own.
+fn tint_original_swatch(c: &mut Canvas, style: usize) {
+    let (r, g, b) = crate::cosmetics::rope_tint(style, 0, SHOP_ROPE_COLORS[0]);
+    let d = ROPE_SWATCH_D;
+    if let Some(o) = c.get_game_object_mut("shop_rope_color_0") {
+        o.set_image(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0), image: circle_cached((d * 0.5) as u32, r, g, b), color: None });
+    }
+}
+
+fn place_rope_color_ring(c: &mut Canvas) {
+    let sel = (c.get_i32("player_rope_selected").max(0) as usize).min(SHOP_ROPE_COLORS.len() - 1);
+    let (x, y) = rope_swatch_pos(sel);
+    let d = ROPE_SWATCH_D + 28.0;
+    if let Some(o) = c.get_game_object_mut("shop_rope_color_ring") {
+        o.position = (x - 14.0, y - 14.0);
+        o.size = (d, d);
+    }
+    let scale = c.virtual_scale();
+    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+        if let Some(obj) = c.get_game_object_mut("shop_rope_color_text") {
+            obj.set_drawable(Box::new(ui_text_spec(
+                &format!("COLOUR  \u{2022}  {}   (W / S)", SHOP_ROPE_NAMES[sel]),
+                &font, 28.0 * scale, Color(180, 210, 240, 220), 1200.0 * scale,
+            )));
+        }
+    }
+}
+
+/// Pick rope colour `i`: equipped at once and saved, whichever style is on.
+pub fn select_rope_color(c: &mut Canvas, i: usize) {
+    let i = i.min(SHOP_ROPE_COLORS.len() - 1);
+    c.set_var("player_rope_selected", i as i32);
+    place_rope_color_ring(c);
+    let (ch, bg, tr) = (
+        c.get_i32("player_char_selected").max(0) as u32,
+        c.get_i32("player_bg_selected").max(0) as u32,
+        c.get_i32("player_trail_selected").max(0) as u32,
+    );
+    crate::profile::save_cosmetics(ch, i as u32, bg, tr);
 }
 
 /// `NAME  RANK 2/4  •  320 META` — or `MAXED`, or the shortfall.
@@ -596,6 +887,14 @@ fn upgrade_slot_label(idx: usize) -> (String, Color) {
 /// The line under the carousel: what the selected upgrade actually does, plus
 /// the player's balance. Cosmetic categories keep the browse hint.
 pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
+    if cat == 0 || cat == 1 {
+        let meta = {
+            let g = crate::profile::profile();
+            let m = g.lock().unwrap().meta_currency;
+            m
+        };
+        return format!("A / D  or  \u{2190}\u{2192}  to browse   \u{2022}   YOU HAVE {meta} META");
+    }
     if !is_upgrade_category(cat) {
         return "A / D  or  \u{2190}\u{2192}  to browse".to_string();
     }
@@ -678,6 +977,21 @@ pub fn handle_shop_key(c: &mut Canvas, key: &Key) {
     let (colors, _) = cat_items(cat);
     let n = colors.len() as i32;
     let cur = c.get_i32("shop_selected");
+    if cat == 1 {
+        let step: i32 = match key {
+            Key::Character(ch) if ch == "w" => -1,
+            Key::Character(ch) if ch == "s" => 1,
+            Key::Named(NamedKey::ArrowUp) => -1,
+            Key::Named(NamedKey::ArrowDown) => 1,
+            _ => 0,
+        };
+        if step != 0 {
+            let n = SHOP_ROPE_COLORS.len() as i32;
+            let now = c.get_i32("player_rope_selected").max(0);
+            select_rope_color(c, (((now + step) % n + n) % n) as usize);
+            return;
+        }
+    }
     let dir: i32 = match key {
         Key::Character(ch) if ch == "a" => -1,
         Key::Character(ch) if ch == "d" =>  1,
@@ -693,6 +1007,7 @@ pub fn handle_shop_key(c: &mut Canvas, key: &Key) {
     update_all_slot_images(c, new_sel as usize, cat);
     update_all_slot_labels(c, new_sel as usize, cat);
     refresh_instruction(c, cat, new_sel as usize);
+    refresh_select_text(c, cat, new_sel as usize);
 }
 
 /// Process one key-release for the shop hold-scroll.
@@ -728,6 +1043,7 @@ pub fn tick_shop(c: &mut Canvas) {
             update_all_slot_images(c, new_sel as usize, cat);
             update_all_slot_labels(c, new_sel as usize, cat);
             refresh_instruction(c, cat, new_sel as usize);
+            refresh_select_text(c, cat, new_sel as usize);
         }
     }
 
@@ -763,6 +1079,10 @@ const TRAIL_DOT_TEX_R: u32 = 34;
 
 /// Centre of the shop preview pane.
 fn preview_center() -> (f32, f32) { (VW * 0.5, 250.0) }
+
+/// How long the ROPES preview's rope is: an in-game rope of ~690 px at the
+/// preview's 1.6x, lying across most of the panel.
+const PREVIEW_ROPE_LEN: f32 = 1100.0;
 
 /// Recent ball positions used to draw the trail streak.
 static PREVIEW_TAIL: OnceLock<Mutex<VecDeque<(f32, f32)>>> = OnceLock::new();
@@ -830,25 +1150,18 @@ fn draw_circle_alpha(img: &mut image::RgbaImage, cx: f32, cy: f32, r: f32, c: [u
     }
 }
 
-/// Decode `energy_hook_1.gif` and tint each frame toward the selected rope
-/// colour with a mild colour overlay, preserving the energy-hook aesthetic.
-fn tint_energy_hook_gif(color: (u8, u8, u8), size: (f32, f32)) -> Option<AnimatedSprite> {
+/// Decode `energy_hook_1.gif` and recolour each frame to the rope colour
+/// the way the game does (colour 0 keeps its own blue).
+fn tint_energy_hook_gif(color_idx: usize, color: (u8, u8, u8), size: (f32, f32)) -> Option<AnimatedSprite> {
     use std::io::Cursor;
     let bytes = include_bytes!("../assets/energy_hook_1.gif");
     let cursor = Cursor::new(bytes);
     let decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
-    let (cr, cg, cb) = color;
     let frames: Vec<image::RgbaImage> = decoder.into_frames()
         .filter_map(|f| f.ok())
         .map(|f| {
-            let mut img = f.into_buffer();
-            for px in img.pixels_mut() {
-                if px[3] == 0 { continue; }
-                px[0] = (px[0] as f32 * 0.65 + cr as f32 * 0.35).min(255.0) as u8;
-                px[1] = (px[1] as f32 * 0.65 + cg as f32 * 0.35).min(255.0) as u8;
-                px[2] = (px[2] as f32 * 0.65 + cb as f32 * 0.35).min(255.0) as u8;
-            }
-            img
+            let img = f.into_buffer();
+            if color_idx == 0 { img } else { crate::cosmetics::gradient_map(&img, color) }
         })
         .collect();
     if frames.is_empty() { return None; }
@@ -856,15 +1169,30 @@ fn tint_energy_hook_gif(color: (u8, u8, u8), size: (f32, f32)) -> Option<Animate
 }
 
 /// Cached, per-colour recoloured energy-hook animation for the rope preview.
-fn energy_hook_preview(color: (u8, u8, u8), size: (f32, f32)) -> Option<AnimatedSprite> {
-    static CACHE: OnceLock<Mutex<HashMap<(u8, u8, u8), Option<AnimatedSprite>>>> = OnceLock::new();
+fn energy_hook_preview(color_idx: usize, color: (u8, u8, u8), size: (f32, f32)) -> Option<AnimatedSprite> {
+    static CACHE: OnceLock<Mutex<HashMap<(usize, u8, u8, u8), Option<AnimatedSprite>>>> = OnceLock::new();
     let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = map.lock().unwrap();
-    if let Some(a) = guard.get(&color) {
+    let key = (color_idx, color.0, color.1, color.2);
+    if let Some(a) = guard.get(&key) {
         return a.clone();
     }
-    let anim = tint_energy_hook_gif(color, size);
-    guard.insert(color, anim.clone());
+    let anim = tint_energy_hook_gif(color_idx, color, size);
+    guard.insert(key, anim.clone());
+    anim
+}
+
+/// A breed's frames for the shop preview, cycling slowly so the card shows
+/// the cat opening up. Cached per breed.
+fn breed_preview_anim(char_idx: usize) -> Option<AnimatedSprite> {
+    static CACHE: OnceLock<Mutex<HashMap<usize, Option<AnimatedSprite>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap();
+    if let Some(a) = guard.get(&char_idx) {
+        return a.clone();
+    }
+    let anim = crate::cosmetics::cat_sprite(char_idx, 110.0, 3.0);
+    guard.insert(char_idx, anim.clone());
     anim
 }
 
@@ -914,21 +1242,61 @@ pub fn tick_shop_preview(c: &mut Canvas) {
     }
     set_visible(c, "shop_preview_bg", false);
 
-    // Ropes category: preview the recoloured energy-hook animation, not a ball.
+    // Ropes category: the style being browsed, in the colour picked below.
     if cat == 1 {
         set_visible(c, "shop_preview_ball", false);
         hide_trail_dots(c);
-        let c2 = SHOP_ROPE_COLORS[sel.min(SHOP_ROPE_COLORS.len() - 1)];
-        if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
-            // energy_hook_1.gif is 32×64 (1:2) — show it at a beam aspect.
-            let (w, h) = (160.0f32, 320.0f32);
-            obj.size = (w, h);
-            obj.position = (pcx - w * 0.5, pcy - h * 0.5);
-            if let Some(mut anim) = energy_hook_preview(c2, (w, h)) {
-                anim.set_fps(6.0);
-                obj.set_animation(anim);
+        let color_idx = (c.get_i32("player_rope_selected").max(0) as usize).min(SHOP_ROPE_COLORS.len() - 1);
+        let rgb = SHOP_ROPE_COLORS[color_idx];
+        let t = c.get_f32("shop_preview_t") + 1.0 / 60.0;
+        c.set_var("shop_preview_t", t);
+        let style_idx = sel.min(crate::cosmetics::ROPE_STYLES.len() - 1);
+        // The rope lies along the panel, between the title and the blurb (it
+        // used to stand upright, straight through both), drawn the way the
+        // game draws it at 1.6x.
+        let (cx, cy) = (pcx, pcy + 25.0);
+        let len = PREVIEW_ROPE_LEN;
+        if style_idx == 0 {
+            c.clear_effect("shop_preview_trail");
+            if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
+                // The classic GIF stretched end to end, as in the game.
+                let w = ROPE_THICKNESS * 1.6;
+                obj.size = (w, len);
+                obj.position = (cx - w * 0.5, cy - len * 0.5);
+                obj.rotation = 90.0;
+                // Set once per colour: setting an animation restarts it, so
+                // setting it every frame (as this did) froze it on frame 0.
+                let tag = format!("classic_{color_idx}");
+                if !obj.tags.iter().any(|t| t == &tag) {
+                    if let Some(mut anim) = energy_hook_preview(color_idx, rgb, (w, len)) {
+                        anim.set_fps(6.0);
+                        obj.set_animation(anim);
+                        obj.tags.retain(|t| !t.starts_with("classic_"));
+                        obj.tags.push(tag);
+                    }
+                }
+                obj.visible = true;
             }
-            obj.visible = true;
+        } else {
+            // Premium: the in-game effect itself.
+            let style = &crate::cosmetics::ROPE_STYLES[style_idx];
+            let frame = crate::cosmetics::rope_frame(style, t);
+            let tint = crate::cosmetics::rope_tint(style_idx, color_idx, rgb);
+            if let Some(tile) = crate::cosmetics::rope_tile(style_idx, frame, tint) {
+                let (w, h) = (style.beam * 1.6, len);
+                if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
+                    obj.animated_sprite = None;
+                    obj.tags.retain(|t| !t.starts_with("classic_"));
+                    obj.size = (w, h);
+                    obj.position = (cx - w * 0.5, cy - h * 0.5);
+                    obj.rotation = 90.0;
+                    obj.visible = true;
+                }
+                let reps = h / (style.cell_len() * 1.6);
+                c.attach_effect("shop_preview_trail",
+                    Effect::TiledStrip { image: tile, repeats: reps, phase: -t * style.flow, mirror: style.mirror, alpha: 1.0 },
+                    EffectColor::WHITE, (w, h));
+            }
         }
         return;
     }
@@ -951,10 +1319,22 @@ pub fn tick_shop_preview(c: &mut Canvas) {
     // calico's visible pixel extent (its full 110 frame has ~104px of cat) so
     // they read at the same scale.
     if let Some(obj) = c.get_game_object_mut("shop_preview_ball") {
-        let d = if cat == 0 && sel == 0 { 110.0 } else { 88.0 };
+        let breed = cat == 0 && crate::cosmetics::cat_skin(sel).is_some();
+        let d = if cat == 0 && (sel == 0 || breed) { 110.0 } else { 88.0 };
         obj.size = (d, d);
         obj.position = (bx - d * 0.5, by - d * 0.5);
-        if cat == 0 && sel == 0 {
+        if breed {
+            // The breed's own frames, cycling: ball, half, spread-eagle.
+            let showing = obj.tags.iter().any(|t| t == &format!("breed_{sel}"));
+            if !showing {
+                if let Some(anim) = breed_preview_anim(sel) {
+                    obj.set_animation(anim);
+                    obj.tags.retain(|t| !t.starts_with("breed_"));
+                    obj.tags.push(format!("breed_{sel}"));
+                }
+            }
+        } else if cat == 0 && sel == 0 {
+            obj.tags.retain(|t| !t.starts_with("breed_"));
             if obj.animated_sprite.is_none() {
                 if let Some(mut anim) = cached_calico_ball_anim() {
                     anim.set_fps(4.0); // slow playback while selected
@@ -962,6 +1342,7 @@ pub fn tick_shop_preview(c: &mut Canvas) {
                 }
             }
         } else {
+            obj.tags.retain(|t| !t.starts_with("breed_"));
             obj.animated_sprite = None;
             obj.set_image(Image {
                 shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
@@ -1241,6 +1622,53 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         for (name, dot) in trail_dots {
             scene = scene.with_object(&name, dot);
         }
+    }
+
+    // ── Rope colour row (ROPES screen) ────────────────────────────────────
+    for i in 0..SHOP_ROPE_COLORS.len() {
+        let (x, y) = rope_swatch_pos(i);
+        let (r, g, b) = SHOP_ROPE_COLORS[i];
+        let d = ROPE_SWATCH_D;
+        let mut sw = GameObject::new_rect(ctx, format!("shop_rope_color_{i}").into(),
+            Some(Image { shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+                         image: circle_cached((d * 0.5) as u32, r, g, b), color: None }),
+            (d, d), (x, y), vec!["button".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        sw.layer = 12;
+        sw.visible = false;
+        scene = scene
+            .with_object(format!("shop_rope_color_{i}"), sw)
+            .with_event(
+                GameEvent::MousePress {
+                    action: Action::Custom { name: format!("shop_rope_color_{i}") },
+                    target: Target::name(format!("shop_rope_color_{i}")),
+                    button: Some(MouseButton::Left),
+                },
+                Target::name(format!("shop_rope_color_{i}")),
+            );
+    }
+    {
+        let d = ROPE_SWATCH_D + 28.0;
+        let n = d as u32;
+        let ring_img = image::RgbaImage::from_fn(n, n, |x, y| {
+            let (dx, dy) = (x as f32 + 0.5 - d * 0.5, y as f32 + 0.5 - d * 0.5);
+            let r = (dx * dx + dy * dy).sqrt();
+            if (r - (d * 0.5 - 6.0)).abs() < 5.0 { image::Rgba([255, 255, 255, 235]) } else { image::Rgba([0, 0, 0, 0]) }
+        });
+        let mut ring = GameObject::new_rect(ctx, "shop_rope_color_ring".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0), image: ring_img.into(), color: None }),
+            (d, d), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        ring.layer = 13;
+        ring.visible = false;
+        let (x0, y0) = rope_swatch_pos(0);
+        let mut text = GameObject::build("shop_rope_color_text")
+            .size(1200.0, 60.0)
+            .position(VW * 0.5 - 600.0, y0 + ROPE_SWATCH_D + 18.0)
+            .build(ctx);
+        let _ = x0;
+        text.visible = false;
+        scene = scene
+            .with_object("shop_rope_color_ring", ring)
+            .with_object("shop_rope_color_text", text);
     }
 
     for s in 0..NUM_SLOTS {

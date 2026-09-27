@@ -2793,3 +2793,21 @@ fn a_homing_attack_must_be_slower_than_the_player() {
     let reach = SERPENT_TAIL_LAUNCH_SPEED * SERPENT_TAIL_LAUNCH_TICKS as f32;
     assert!(reach > 2000.0, "the tail only travels {reach:.0}px before it is recalled");
 }
+
+// ── Dealt roster (2026-09-27) ────────────────────────────────────────────────
+
+#[test]
+fn a_dealt_roster_is_every_boss_once_with_the_final_boss_last() {
+    for seed in [1u64, 2, 3, 42, 0xDEAD_BEEF, 7_777_777] {
+        let order = deal_roster(seed);
+        assert_eq!(order.len(), BOSS_ROSTER.len(), "{order:?}");
+        assert_eq!(*order.last().unwrap(), FINAL_BOSS, "the final boss is always last: {order:?}");
+        for kind in BOSS_ROSTER {
+            assert_eq!(order.iter().filter(|k| **k == kind).count(), 1, "{kind:?} once: {order:?}");
+        }
+    }
+    // It actually shuffles: across seeds the opening fight varies.
+    let openers: std::collections::HashSet<String> =
+        (0..40u64).map(|s| format!("{:?}", deal_roster(s * 7919)[0])).collect();
+    assert!(openers.len() >= 4, "only {} different opening bosses in 40 deals", openers.len());
+}

@@ -18,6 +18,7 @@ mod objects;
 mod menu;
 mod scenes;
 mod shop;
+mod cosmetics;
 mod profile;
 pub mod headless;
 

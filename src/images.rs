@@ -1470,26 +1470,6 @@ pub fn shield_dome_img() -> Arc<image::RgbaImage> {
     .clone()
 }
 
-/// The sweeping wavefront drawn across the screen during an active flare: a
-/// soft vertical band, brightest at its centre line.
-pub fn flare_front_img() -> Arc<image::RgbaImage> {
-    static IMG: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
-    IMG.get_or_init(|| {
-        const W: u32 = 128;
-        const H: u32 = 8;
-        let mut img = image::RgbaImage::from_pixel(W, H, image::Rgba([0, 0, 0, 0]));
-        for x in 0..W {
-            let t = (x as f32 / (W as f32 - 1.0) - 0.5).abs() * 2.0;
-            let a = (1.0 - t).powf(1.8);
-            for y in 0..H {
-                img.put_pixel(x, y, image::Rgba([255, 255, 255, (a * 255.0) as u8]));
-            }
-        }
-        Arc::new(img)
-    })
-    .clone()
-}
-
 /// Flat full-screen wash. Cached per colour because the flare re-tints it every
 /// frame as the telegraph ramps, and rebuilding a VW×VH buffer per frame would
 /// be absurd — the image is 1×1 and stretched by the rectangle shape.

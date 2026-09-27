@@ -50,7 +50,7 @@ pub const DIFFICULTY_GRACE_MINUTES: f32 = 2.0;
 /// One minute of forward progress, in world px.
 pub const DIFFICULTY_PX_PER_MINUTE: f32 = ASSUMED_PLAYER_PX_PER_SEC * 60.0;
 
-/// Distance at which the curve reaches 1.0 (≈ 2.88 M px at the defaults).
+/// Distance at which the curve reaches 1.0 (1.44 M px at the defaults).
 pub const DIFFICULTY_FULL_DISTANCE: f32 = DIFFICULTY_PX_PER_MINUTE * DIFFICULTY_FULL_MINUTES;
 
 /// Distance before the curve starts moving at all.

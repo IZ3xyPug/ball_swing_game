@@ -2,6 +2,10 @@
 // Usage: cargo run --bin headless -- --episodes 5 --frames 3600
 
 fn main() {
+    if let Ok(dir) = std::env::var("HEADLESS_SHOP") {
+        main::headless::capture_shop(&dir);
+        return;
+    }
     // Off unless RUST_LOG asks for it, so normal runs stay quiet.
     let _ = env_logger::try_init();
 
@@ -126,6 +130,12 @@ fn main() {
         "flares_fired={} flare_hearts_lost={} flare_saves={} flares_without_shelter={}",
         agg.flares_fired, agg.flare_hearts_lost, agg.flare_saves, agg.flares_without_shelter
     );
+    if agg.flares_fired > 0 {
+        println!(
+            "nearest_shelter_at_flare avg={:.0} px worst={:.0} px",
+            agg.shelter_dx_sum / agg.flares_fired as f32, agg.shelter_dx_worst
+        );
+    }
     println!(
         "worst_frontier_overshoot={:.0} px (GEN_AHEAD={:.0})  frontier_repairs={}",
         agg.worst_frontier_overshoot,

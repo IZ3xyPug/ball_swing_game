@@ -598,9 +598,10 @@ fn menu_mode_selector_img() -> image::RgbaImage {
 pub fn select_profile_and_continue(canvas: &mut Canvas, idx: usize) {
     crate::profile::select_profile(idx);
     let p = crate::profile::profile();
-    let (tutorial_done, extra_hearts, c_char, c_rope, c_bg, c_trail) = {
+    let (tutorial_done, extra_hearts, c_char, c_rope, c_bg, c_trail, c_rope_style) = {
         let g = p.lock().unwrap();
-        (g.tutorial_done, g.permanent_extra_hearts, g.cosmetic_char, g.cosmetic_rope, g.cosmetic_bg, g.cosmetic_trail)
+        (g.tutorial_done, g.permanent_extra_hearts, g.cosmetic_char, g.cosmetic_rope, g.cosmetic_bg,
+         g.cosmetic_trail, g.cosmetic_rope_style)
     };
     // Permanent extra hearts are read into the run on game start; push them now
     // so the first run already benefits.
@@ -610,6 +611,7 @@ pub fn select_profile_and_continue(canvas: &mut Canvas, idx: usize) {
     canvas.set_var("player_rope_selected", c_rope as i32);
     canvas.set_var("player_bg_selected", c_bg as i32);
     canvas.set_var("player_trail_selected", c_trail as i32);
+    canvas.set_var("player_rope_style_selected", c_rope_style as i32);
     // Pre-mark already-unlocked achievements so they aren't re-triggered.
     canvas.set_var(GOLD_MASTER_UNLOCKED_VAR, crate::profile::profile_has_achievement("gold_master"));
     if tutorial_done {
@@ -1460,9 +1462,20 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                     shop::buy_selected_upgrade(c);
                     return;
                 }
+                // A cat or a rope style has to be OWNED to be equipped:
+                // SELECT buys it first when it is not (or says why not, and
+                // stays on the carousel).
+                if (cat == 0 || cat == 1) && !shop::select_look(c, cat, sel.max(0) as usize) {
+                    return;
+                }
                 match cat {
                     0 => c.set_var("player_char_selected", sel),
-                    1 => c.set_var("player_rope_selected", sel),
+                    // Ropes: the carousel picks the STYLE; its colour is the
+                    // swatch row, saved as it is tapped.
+                    1 => {
+                        c.set_var("player_rope_style_selected", sel);
+                        crate::profile::save_rope_style(sel.max(0) as u32);
+                    }
                     2 => c.set_var("player_bg_selected",   sel),
                     3 => c.set_var("player_trail_selected", sel),
                     _ => {}
@@ -1488,6 +1501,11 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 shop::handle_shop_key(c, &Key::Named(NamedKey::ArrowRight));
                 shop::handle_shop_key_release(c, &Key::Named(NamedKey::ArrowRight));
             });
+            for i in 0..crate::shop::SHOP_ROPE_COLORS.len() {
+                canvas.register_custom_event(format!("shop_rope_color_{i}"), move |c| {
+                    shop::select_rope_color(c, i);
+                });
+            }
             canvas.register_custom_event("shop_cat_0".into(), |c| { shop::show_carousel(c, 0); });
             canvas.register_custom_event("shop_cat_1".into(), |c| { shop::show_carousel(c, 1); });
             canvas.register_custom_event("shop_cat_2".into(), |c| { shop::show_carousel(c, 2); });
@@ -2373,11 +2391,14 @@ fn boss_order_refresh(canvas: &mut Canvas) {
         let (label, colour) = match picks.get(n) {
             Some(&i) => (format!("{}.  {}\n", n + 1, BOSS_ROSTER[i].name()), Color(255, 220, 90, 255)),
             None => {
-                // Unassigned slots fall through to the shipped roster, so show
-                // what would actually load rather than an empty line — an
-                // "empty" slot still spawns a boss.
-                (format!("{}.  ({})\n", n + 1, boss_kind_for_index(n as u32).name()),
-                 Color(110, 118, 138, 255))
+                // Unassigned slots are dealt at random each run, except the
+                // last, which is always the final boss.
+                let label = if n + 1 == BOSS_ORDER_SLOTS {
+                    format!("{}.  ({})\n", n + 1, crate::constants::FINAL_BOSS.name())
+                } else {
+                    format!("{}.  (RANDOM)\n", n + 1)
+                };
+                (label, Color(110, 118, 138, 255))
             }
         };
         slot_spans.push(Span::new(label, BO_ROW_FONT * sc, Some(BO_ROW_H * sc),

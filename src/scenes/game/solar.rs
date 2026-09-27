@@ -314,7 +314,7 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         return;
     }
 
-    let (phase, hooks, px, py, sheltered, ticks, previously_shielded, buffed) = {
+    let (phase, hooks, px, py, sheltered, ticks, previously_shielded, buffed, titan) = {
         let s = st.lock().unwrap();
         (
             flare_phase(&s),
@@ -325,6 +325,7 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.ticks,
             s.shield_fx_attached.clone(),
             s.buff_active(),
+            crate::scenes::game::boss::titan_owns_flares(&s),
         )
     };
     let mut shielded_now: Vec<String> = Vec::new();
@@ -334,6 +335,9 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // Idle still draws the faint "this is shelter" marker, so domes stay
     // attached; the release below is what handles nodes that stop qualifying.
     let (base_a, pulse_a) = match phase {
+        // In the Titan's arena sheltering IS the fight: the domes are
+        // plainly on from its first frame, not the run's faint hint.
+        FlarePhase::Idle if titan => (0.36, 0.08),
         FlarePhase::Idle => (0.16, 0.05),
         FlarePhase::Warning => (0.42, 0.22),
         FlarePhase::Active => (0.70, 0.18),
@@ -443,22 +447,21 @@ fn draw_flare_overlay(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     };
     set_flare_banner(c, banner);
 
-    // A wavefront sweeping across the screen during the active window, so the
-    // flare reads as something passing over rather than a static colour cast.
+    // The flare itself sweeping across the screen during the active window:
+    // a column of solar plasma (it was a soft white bar, which read as a line
+    // crossing the screen). Sized wider than the column for its licks.
     if phase == FlarePhase::Active {
         let t = 1.0 - (active_left as f32 / FLARE_ACTIVE_TICKS as f32);
         let px = st.lock().unwrap().px;
         let sweep_x = px - VW * 0.6 + VW * 1.2 * t;
         let py = st.lock().unwrap().py;
+        let (w, h) = (VW * 0.30, VH * 2.4);
         c.push_effect(
-            Effect::Image {
-                image: crate::images::flare_front_img(),
-                looks: LookFlags::NONE,
-                alpha: 0.5,
-            },
-            EffectColor::linear(1.0, 0.92, 0.62),
+            // Its own clock (seconds into the flare), never the global one.
+            Effect::SolarFront { intensity: 1.0, aspect: h / w, time: (FLARE_ACTIVE_TICKS - active_left) as f32 / 60.0 },
+            EffectColor::srgb(1.0, 0.55, 0.16),
             (sweep_x, py),
-            (VW * 0.18, VH * 2.4),
+            (w, h),
         );
     }
 }

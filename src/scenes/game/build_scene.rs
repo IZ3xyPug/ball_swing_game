@@ -921,17 +921,25 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let char_idx = (char_val as usize).min(PLAYER_CHAR_COLORS.len() - 1);
                 if let Some(obj) = canvas.get_game_object_mut("player") {
                     if char_idx == 0 {
-                        // Calico cat — keep (or restore) the animated sprite.
-                        if obj.animated_sprite.is_none() {
-                            if let Ok(mut calico) = AnimatedSprite::new(
-                                include_bytes!("../../../assets/calicoball.gif"),
-                                (PLAYER_R * 2.0, PLAYER_R * 2.0),
-                                CALICO_FPS,
-                            ) {
-                                calico.set_fps(0.0);
-                                obj.set_animation(calico);
-                            }
+                        // Calico cat — always (re)set: the player object
+                        // outlives a run, and a breed's frames from the last
+                        // one would otherwise stay on it.
+                        if let Ok(mut calico) = AnimatedSprite::new(
+                            include_bytes!("../../../assets/calicoball.gif"),
+                            (PLAYER_R * 2.0, PLAYER_R * 2.0),
+                            CALICO_FPS,
+                        ) {
+                            calico.set_fps(0.0);
+                            obj.set_animation(calico);
                         }
+                    } else if let Some(mut cat) =
+                        crate::cosmetics::cat_sprite(char_idx, PLAYER_R * 2.0, CALICO_FPS)
+                    {
+                        // A breed: curled, half uncurled, spread-eagle —
+                        // driven frame by frame like the calico
+                        // (tick_player_ball_animation), so fps 0.
+                        cat.set_fps(0.0);
+                        obj.set_animation(cat);
                     } else {
                         // Solid colour circle — clear animation so it doesn't override drawable.
                         obj.animated_sprite = None;
@@ -1216,6 +1224,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 .unwrap_or(0xDEAD_BEEF);
             let level_nonce = canvas.get_i32("level_nonce").max(0) as u64;
             seed ^= level_nonce.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            // A new order of bosses every run, the final boss always last
+            // (kept in State as `boss_roster`).
+            let boss_roster = crate::constants::deal_roster(seed);
 
             let gen_y = starter_hooks
                 .last()
@@ -1392,7 +1403,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 cannon_ft_prompt:  false, cannon_ft_active: false,
                 cannon_fast_travel_grace: 0,
                 boss_active:       false,
-                boss_kind:         crate::constants::boss_kind_for_index(0),
+                boss_kind:         crate::constants::boss_kind_for_run(&boss_roster, 0),
+                boss_roster:       boss_roster.clone(),
                 boss_parts:        Vec::new(),
                 boss_entry_ticks:  0, boss_spawned:      false,
                 boss_cleared:      false, boss_hp:           crate::constants::BOSS_MAX_HP,
@@ -1426,7 +1438,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 weaver_gauntlet: 0, weaver_gauntlet_ticks: 0, weaver_gauntlet_done: 0,
                 weaver_gauntlet_parts: [0, 0], weaver_gauntlet_y: 0.0, weaver_gauntlet_fired: false,
                 titan_clock: 0, titan_clock_ticks: 0, titan_orbit: 0.0, titan_flares: 0,
-                titan_charged: false, titan_burn_timer: 0,
+                decor: Vec::new(), decor_cam_prev: None, decor_travel: 0.0,
+                decor_next_at: 0.0, decor_last_kind: None, decor_ticks: 0,
+                titan_charged: false, titan_burn_timer: 0, titan_guide_node: String::new(),
+                titan_reshelter: false, grab_lockout_ticks: 0,
                 boss_contact_cooldown: 0,
                 conductor_beat_phase: 0.0,
                 conductor_beat_clock: None,
@@ -1836,7 +1851,13 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             canvas.resume();
 
             // ── Pre-warm rope texture cache (background thread) ──────────
-            physics::prewarm_rope_fx_cache();
+            {
+                let color = match canvas.get_var("player_rope_selected") {
+                    Some(Value::I32(v)) => v.max(0) as usize,
+                    _ => 0,
+                };
+                physics::prewarm_rope_fx_cache(color);
+            }
             // Pre-warm solar GIF decode so corona is ready before space approach.
             super::space_zone::prewarm_solar_decode(&state);
             // Pre-warm catcoin GIF decode so first space coin spawn does not hitch.
@@ -2279,6 +2300,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         if s.spinner_hit_cooldown > 0 {
                             s.spinner_hit_cooldown -= 1;
                         }
+                        s.grab_lockout_ticks = s.grab_lockout_ticks.saturating_sub(1);
                     }
                     frame_counter = frame_counter.wrapping_add(1);
 
@@ -2679,6 +2701,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             obj.visible = true;
                         }
                     }
+
+                    // ── Distant decor (planets, wrecks, the odd whale) ──
+                    super::decor::tick_decor(c, &st);
 
                     // ── Death check ──────────────────────────────────────
                     let mut s = st.lock().unwrap();

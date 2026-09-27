@@ -70,17 +70,12 @@ fn rope_fx_image(
     let src = frames[idx].as_ref();
     let mut resized = image::imageops::resize(src, target_w, target_h, image::imageops::FilterType::Nearest);
 
-    // Style 0 preserves the original animated energy rope unchanged.
-    // Styles 1-4 recolour that same energy-hook GIF toward the selected rope
-    // colour (a mild overlay), rather than drawing a fresh braided shape.
+    // Colour 0 keeps the energy rope's own blue. Any other colour is
+    // gradient-mapped — the same recolour every rope style uses, so a colour
+    // means the same thing whichever style wears it (it used to be a 35%
+    // overlay, which left every colour a faint blue).
     if style_idx != 0 {
-        let (cr, cg, cb) = rope_rgb;
-        for px in resized.pixels_mut() {
-            if px[3] == 0 { continue; }
-            px[0] = (px[0] as f32 * 0.65 + cr as f32 * 0.35).min(255.0) as u8;
-            px[1] = (px[1] as f32 * 0.65 + cg as f32 * 0.35).min(255.0) as u8;
-            px[2] = (px[2] as f32 * 0.65 + cb as f32 * 0.35).min(255.0) as u8;
-        }
+        resized = crate::cosmetics::gradient_map(&resized, rope_rgb);
     }
     let out = Arc::new(resized);
 
@@ -95,7 +90,7 @@ fn rope_fx_image(
 /// Spawn a background thread to pre-generate and cache all rope textures.
 /// Uses FilterType::Nearest so each texture takes <1ms even in debug builds,
 /// completing the full cache in well under a second before the player can grab.
-pub fn prewarm_rope_fx_cache() {
+pub fn prewarm_rope_fx_cache(color_idx: usize) {
     let beam_px = ROPE_THICKNESS.round().max(2.0) as u32;
     let n_frames = rope_fx_frames().len();
     const VEL_LOOK: f32 = 1.0;
@@ -107,10 +102,11 @@ pub fn prewarm_rope_fx_cache() {
     std::thread::spawn(move || {
         let mut len = min_q;
         while len <= max_q {
+            // Only the colour actually equipped: warming all of them overran
+            // the cache's 800-entry cap, which then cleared itself mid-warm.
+            let (rr, rg, rb) = SHOP_ROPE_COLORS[color_idx.min(SHOP_ROPE_COLORS.len() - 1)];
             for frame_idx in 0..n_frames {
-                for (style_idx, &(rr, rg, rb)) in SHOP_ROPE_COLORS.iter().enumerate() {
-                    rope_fx_image(frame_idx, len, beam_px, style_idx as u8, (rr, rg, rb));
-                }
+                rope_fx_image(frame_idx, len, beam_px, color_idx as u8, (rr, rg, rb));
             }
             len += step;
         }
@@ -230,15 +226,62 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         .min(SHOP_ROPE_COLORS.len() - 1);
         (idx as u8, SHOP_ROPE_COLORS[idx])
     };
-    let rope_img = rope_fx_image(frame_idx, rope_len_px, rope_beam_px, rope_sel_idx, rope_rgb);
-
+    // The rope's STYLE (bought in the shop), chosen apart from its colour.
+    let style_idx = match c.get_var("player_rope_style_selected") {
+        Some(Value::I32(v)) => v.max(0) as usize,
+        _ => 0,
+    }
+    .min(crate::cosmetics::ROPE_STYLES.len() - 1);
+    if style_idx == 0 {
+        // The classic energy rope: its own GIF, stretched end to end.
+        c.clear_effect("rope");
+        let rope_img = rope_fx_image(frame_idx, rope_len_px, rope_beam_px, rope_sel_idx, rope_rgb);
+        if let Some(rope_obj) = c.get_game_object_mut("rope") {
+            rope_obj.size = (rope_beam, rope_draw_len);
+            rope_obj.position = (rope_mid_x - rope_beam * 0.5, rope_mid_y - rope_draw_len * 0.5);
+            rope_obj.rotation = rope_ang + 90.0;
+            rope_obj.visible = true;
+            rope_obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (rope_beam, rope_draw_len), 0.0), image: rope_img, color: None });
+        }
+        return;
+    }
+    // A premium style: its tile repeated along the rope by the effect, so it
+    // looks right at any length. The quad's local y runs from the player end
+    // (0) to the hook end (1); anchoring the phase at the hook end keeps the
+    // pattern fixed to the hook while the drawn length breathes, and a
+    // rising phase runs it toward the ball.
+    let style = &crate::cosmetics::ROPE_STYLES[style_idx];
+    let t = rope_tick as f32 / 60.0;
+    let frame = crate::cosmetics::rope_frame(style, t);
+    let rgb = crate::cosmetics::rope_tint(style_idx, rope_sel_idx as usize, rope_rgb);
+    let Some(tile) = crate::cosmetics::rope_tile(style_idx, frame, rgb) else { return };
+    let beam = style.beam;
+    let reps = rope_draw_len / style.cell_len().max(1.0);
+    let phase = t * style.flow - reps;
     if let Some(rope_obj) = c.get_game_object_mut("rope") {
-        rope_obj.size = (rope_beam, rope_draw_len);
-        rope_obj.position = (rope_mid_x - rope_beam * 0.5, rope_mid_y - rope_draw_len * 0.5);
+        rope_obj.size = (beam, rope_draw_len);
+        rope_obj.position = (rope_mid_x - beam * 0.5, rope_mid_y - rope_draw_len * 0.5);
         rope_obj.rotation = rope_ang + 90.0;
         rope_obj.visible = true;
-        rope_obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (rope_beam, rope_draw_len), 0.0), image: rope_img, color: None });
+        rope_obj.set_image(Image {
+            shape: ShapeType::Rectangle(0.0, (beam, rope_draw_len), 0.0),
+            image: transparent_pixel(),
+            color: None,
+        });
     }
+    c.attach_effect(
+        "rope",
+        Effect::TiledStrip { image: tile, repeats: reps, phase, mirror: style.mirror, alpha: 1.0 },
+        EffectColor::WHITE,
+        (beam, rope_draw_len),
+    );
+}
+
+/// One shared transparent pixel for the rope's own image while an effect
+/// draws it (a fresh `Arc` per frame would be a texture upload per frame).
+fn transparent_pixel() -> Arc<image::RgbaImage> {
+    static PIXEL: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
+    PIXEL.get_or_init(|| Arc::new(image::RgbaImage::new(1, 1))).clone()
 }
 
 /// Manage engine gravity. When hooked: gravity = 0 (rope handles it).

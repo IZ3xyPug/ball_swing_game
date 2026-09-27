@@ -108,6 +108,21 @@ pub struct CometWarn {
     pub v_offset: f32,
 }
 
+/// One live piece of background decor (see scenes/game/decor.rs), in
+/// screen space.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DecorSlot {
+    pub active: bool,
+    pub kind: usize,
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub rot: f32,
+    pub phase: f32,
+    /// An oddity that has already been reported as seen.
+    pub seen: bool,
+}
+
 #[derive(Clone)]
 pub struct State {
     pub px: f32, pub py: f32,
@@ -373,6 +388,9 @@ pub struct State {
     pub boss_active: bool,
     /// Which boss the current (or next) fight is; selected from `boss_index`.
     pub boss_kind: crate::constants::BossKind,
+    /// This run's order of fights: dealt at random at run start, the final
+    /// boss always last (`constants::deal_roster`).
+    pub boss_roster: Vec<crate::constants::BossKind>,
     /// Per-part HP/shield/weakpoint state for multi-part bosses (empty for the
     /// single-body Sun Devourer, which uses the scalar `boss_hp` path).
     pub boss_parts: Vec<crate::constants::BossPart>,
@@ -457,6 +475,15 @@ pub struct State {
     pub titan_clock_ticks: u32,
     /// Flare Titan: the vents' orbit angle.
     pub titan_orbit: f32,
+    /// Background decor: the pooled pieces, the camera last tick, world px
+    /// of forward travel, when the next piece is due, the last kind shown,
+    /// and a tick count for bobbing.
+    pub decor: Vec<DecorSlot>,
+    pub decor_cam_prev: Option<(f32, f32)>,
+    pub decor_travel: f32,
+    pub decor_next_at: f32,
+    pub decor_last_kind: Option<usize>,
+    pub decor_ticks: u32,
     /// Flare Titan: flares so far this fight (telemetry).
     pub titan_flares: u32,
     /// Flare Titan: the player has taken Solar Charge from the current flare.
@@ -464,6 +491,14 @@ pub struct State {
     /// Flare Titan: ticks to the next heart an unsheltered player loses in
     /// the flare.
     pub titan_burn_timer: u32,
+    /// Flare Titan: the shelter node wearing the "go here" reticle.
+    pub titan_guide_node: String,
+    /// Flare Titan: top the shelter cover up before this flare.
+    pub titan_reshelter: bool,
+    /// Ticks the player cannot grab a node: a boss tore the rope off and
+    /// holds it off for a moment, so catching yourself is a reaction.
+    /// Counted down every tick.
+    pub grab_lockout_ticks: u32,
     /// Magnetar: its clock — 0 beams, 1 pulse count-in, 2 pulse, 3 starquake
     /// — and the ticks left in that phase.
     pub magnetar_clock: u8,

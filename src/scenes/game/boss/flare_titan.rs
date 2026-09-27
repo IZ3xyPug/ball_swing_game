@@ -116,6 +116,57 @@ pub(crate) fn titan_end_flare(s: &mut State) {
     s.flare_damage_timer = 0;
 }
 
+/// While the flare counts in or burns and the player is NOT sheltered, the
+/// nearest shelter wears the house "this one" reticle, so finding cover is
+/// a glance instead of a search. Moves to whichever shelter is nearest, and
+/// comes off the moment the player is sheltered or the flare is over.
+fn titan_guide_to_shelter(c: &mut Canvas, st: &Arc<Mutex<State>>, show: bool) {
+    let (prev, want) = {
+        let s = st.lock().unwrap();
+        let want = if show {
+            s.live_hooks
+                .iter()
+                .filter_map(|id| {
+                    let o = c.get_game_object(id)?;
+                    if !o.visible || !o.tags.iter().any(|t| t == SHIELD_HOOK_TAG) {
+                        return None;
+                    }
+                    let (hx, hy) = (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5);
+                    Some((id.clone(), (hx - s.px).powi(2) + (hy - s.py).powi(2)))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(id, _)| id)
+        } else {
+            None
+        };
+        (s.titan_guide_node.clone(), want)
+    };
+    let want_id = want.clone().unwrap_or_default();
+    if prev != want_id {
+        if !prev.is_empty() {
+            c.clear_overlay_effect(&prev);
+        }
+        st.lock().unwrap().titan_guide_node = want_id;
+    }
+    if let Some(id) = want {
+        let d = HOOK_R * 2.0 * 3.4;
+        c.attach_overlay_effect(
+            &id,
+            Effect::StateMarker { mode: MarkerMode::Vulnerable, intensity: 1.0 },
+            EffectColor::linear(1.0, 0.86, 0.35),
+            (d, d),
+        );
+    }
+}
+
+/// Take the shelter reticle off, wherever it is. Every exit from the fight.
+pub(crate) fn titan_clear_guide(c: &mut Canvas, s: &mut State) {
+    let prev = std::mem::take(&mut s.titan_guide_node);
+    if !prev.is_empty() {
+        c.clear_overlay_effect(&prev);
+    }
+}
+
 /// Hide every Titan piece. Called on victory (the fight stops being ticked
 /// the moment it dies) and on every fight start.
 pub(crate) fn hide_titan(c: &mut Canvas) {
@@ -177,7 +228,29 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.boss_kind.name()
         };
         hide_titan(c);
-        ensure_arena_shelter_nodes(c, st);
+        ensure_arena_shelter_nodes(c, st, true);
+        if check {
+            // Coverage: how many shelters, and the worst distance from any
+            // node to its nearest one.
+            let hooks = st.lock().unwrap().live_hooks.clone();
+            let pts: Vec<((f32, f32), bool)> = hooks
+                .iter()
+                .filter_map(|id| c.get_game_object(id).map(|o| (
+                    (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5),
+                    o.tags.iter().any(|t| t == SHIELD_HOOK_TAG),
+                )))
+                .collect();
+            let shelters: Vec<(f32, f32)> = pts.iter().filter(|p| p.1).map(|p| p.0).collect();
+            let worst = pts
+                .iter()
+                .map(|&((x, y), _)| {
+                    shelters.iter().map(|&(sx, sy)| ((sx - x).powi(2) + (sy - y).powi(2)).sqrt())
+                        .fold(f32::MAX, f32::min)
+                })
+                .fold(0.0f32, f32::max);
+            eprintln!("titan-check: {} of {} nodes are shelter; farthest node is {:.0} px from one",
+                      shelters.len(), pts.len(), worst);
+        }
         let cx = arena_center_x(c);
         if let Some(obj) = c.get_game_object_mut("boss") {
             obj.position = (cx - BOSS_SIZE * 0.5, BOSS_Y_CENTER - BOSS_SIZE * 0.5);
@@ -254,10 +327,18 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let (next, len) = titan_next_phase(s.titan_clock, core_phase);
             s.titan_clock = next;
             s.titan_clock_ticks = len;
+            if next == CLOCK_KINDLE {
+                s.titan_reshelter = true;
+            }
             if next == CLOCK_FLARE {
                 s.titan_flares += 1;
                 s.titan_charged = false;
                 s.titan_burn_timer = TITAN_BURN_GRACE;
+                // SUNPROOFING works here as it does against the run's own
+                // flares: its wards refill each flare and are spent before
+                // hearts. A bought upgrade silently not applying in the one
+                // fight built on flares would be a lie.
+                s.flare_wards_left = s.perm_flare_wards;
             }
             if check {
                 let label = ["calm", "kindle", "flare", "vent"][next as usize];
@@ -283,13 +364,23 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     };
     c.set_var("flare_warning", clock == CLOCK_KINDLE);
     c.set_var("flare_active", clock == CLOCK_FLARE);
+    // Top the cover up as the arena fills in, and before every flare, so
+    // nodes that arrived after the fight began are covered too.
+    let top_up = {
+        let mut s = st.lock().unwrap();
+        std::mem::take(&mut s.titan_reshelter) || s.ticks % 20 == 0
+    };
+    if top_up {
+        ensure_arena_shelter_nodes(c, st, false);
+    }
 
     // ── The flare: it burns the exposed and charges the sheltered ─────────
+    let sheltered = {
+        let s = st.lock().unwrap();
+        crate::scenes::game::solar::player_is_sheltered(c, &s)
+    };
+    titan_guide_to_shelter(c, st, matches!(clock, CLOCK_KINDLE | CLOCK_FLARE) && !sheltered);
     if clock == CLOCK_FLARE {
-        let sheltered = {
-            let s = st.lock().unwrap();
-            crate::scenes::game::solar::player_is_sheltered(c, &s)
-        };
         let burn = {
             let mut s = st.lock().unwrap();
             if sheltered {
@@ -315,7 +406,21 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if let Some(cam) = c.camera_mut() {
                 cam.flash_with(Color(255, 190, 90, 170), 0.3, FlashMode::Pulse, FlashEase::Sharp, 0.8, 0.0);
             }
-            crate::scenes::game::hearts::lose_heart(c, st);
+            let warded = {
+                let mut s = st.lock().unwrap();
+                if s.flare_wards_left > 0 {
+                    s.flare_wards_left -= 1;
+                    true
+                } else {
+                    false
+                }
+            };
+            if warded {
+                let n = { st.lock().unwrap().flare_wards_left as i32 };
+                c.set_var("flare_wards_left", Value::I32(n));
+            } else {
+                crate::scenes::game::hearts::lose_heart(c, st);
+            }
         }
     }
 
@@ -830,6 +935,7 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         {
             let mut s = st.lock().unwrap();
             titan_end_flare(&mut s);
+            titan_clear_guide(c, &mut s);
         }
         hide_titan(c);
         if let Some(obj) = c.get_game_object_mut("boss") {
@@ -843,6 +949,13 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_solar_wind_outweighs_arena_gravity_at_its_peak() {
+        // At 0.03 the wind was weaker than the gravity a roped swing hangs
+        // from, and in play nobody noticed it.
+        assert!(TITAN_WIND > 2.0 * GRAVITY * BOSS_GRAVITY_SCALE);
+    }
 
     #[test]
     fn the_clock_runs_calm_kindle_flare_vent_and_round_again() {

@@ -83,9 +83,10 @@ pub(crate) fn magnetar_beams(
 
 /// The field's pull (positive) or push (negative) on a point `d` from the
 /// core, as an acceleration toward the core: strongest at the star, nothing
-/// at `MAGNETAR_FIELD_REACH`. Pure, for the test.
+/// at `MAGNETAR_FIELD_REACH`. It falls off with the square root, so it holds
+/// up across the arena and fades only near the reach. Pure, for the test.
 pub(crate) fn magnetar_field_accel(d: f32, pull: bool) -> f32 {
-    let k = (1.0 - d / MAGNETAR_FIELD_REACH).clamp(0.0, 1.0);
+    let k = (1.0 - d / MAGNETAR_FIELD_REACH).clamp(0.0, 1.0).sqrt();
     if pull { MAGNETAR_PULL_ACCEL * k } else { -MAGNETAR_PUSH_ACCEL * k }
 }
 
@@ -216,9 +217,10 @@ pub(crate) fn tick_magnetar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // ── The clock ──────────────────────────────────────────────────────────
     // BEAMS runs its beam cycles; a pulse (count-in, then the field) and a
     // starquake follow; round again. The beam cycle only turns inside BEAMS.
-    let (clock, clock_left, beam, beam_left, pull, quake_began) = {
+    let (clock, clock_left, beam, beam_left, pull, quake_began, pulse_began) = {
         let mut s = st.lock().unwrap();
         let mut quake_began = false;
+        let mut pulse_began = false;
         match s.magnetar_clock {
             MCLOCK_BEAMS => {
                 if s.magnetar_beam_ticks > 0 {
@@ -264,6 +266,7 @@ pub(crate) fn tick_magnetar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                             s.magnetar_clock = MCLOCK_PULSE;
                             s.magnetar_clock_ticks = MAGNETAR_PULSE_TICKS;
                             s.magnetar_pulses += 1;
+                            pulse_began = true;
                         }
                         MCLOCK_PULSE => {
                             s.magnetar_clock = MCLOCK_QUAKE;
@@ -297,8 +300,33 @@ pub(crate) fn tick_magnetar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // What the pulse does is fixed at its count-in; `pull_next` flips at
         // the quake, after it.
         (s.magnetar_clock, s.magnetar_clock_ticks, s.magnetar_beam, s.magnetar_beam_ticks,
-         s.magnetar_pull_next, quake_began)
+         s.magnetar_pull_next, quake_began, pulse_began)
     };
+    // The field firing: it tears the rope off and holds grabs off for a
+    // moment (as the Colossus's well does), and the view lurches in toward
+    // the star for a pull and out for a push, so the moment reads before
+    // the swing has changed.
+    if pulse_began {
+        let was_hooked = {
+            let mut s = st.lock().unwrap();
+            let was = s.hooked;
+            s.hooked = false;
+            s.active_hook = String::new();
+            s.grab_lockout_ticks = MAGNETAR_PULSE_LOCKOUT_TICKS;
+            was
+        };
+        if was_hooked {
+            c.run(Action::Hide { target: Target::name("rope") });
+        }
+        if check {
+            eprintln!("magnetar-check: the field fired; rope torn off: {was_hooked}; grabs locked {MAGNETAR_PULSE_LOCKOUT_TICKS} ticks");
+        }
+        if let Some(cam) = c.camera_mut() {
+            let z = cam.zoom;
+            cam.zoom_punch(if pull { z * 0.12 } else { -z * 0.10 }, 0.55);
+            cam.shake(HIT_SHAKE_INTENSITY * 0.6, 0.3);
+        }
+    }
     if quake_began {
         if let Some(cam) = c.camera_mut() {
             cam.shake(HIT_SHAKE_INTENSITY * 1.5, 0.45);
@@ -669,5 +697,17 @@ mod tests {
         assert!(magnetar_field_accel(0.0, false) < 0.0);
         assert!(magnetar_field_accel(1000.0, true) > magnetar_field_accel(3000.0, true));
         assert_eq!(magnetar_field_accel(MAGNETAR_FIELD_REACH + 1.0, true), 0.0);
+    }
+
+    #[test]
+    fn the_field_outweighs_arena_gravity_where_the_fight_happens() {
+        // What a roped swing hangs from. A field weaker than this is not
+        // felt: the first tuning moved a loose player ~240 px over a whole
+        // pulse and went unnoticed in play.
+        let arena_gravity = GRAVITY * BOSS_GRAVITY_SCALE;
+        for d in [1200.0, 2400.0, 3600.0] {
+            assert!(magnetar_field_accel(d, true) > 3.0 * arena_gravity, "pull at {d} px");
+            assert!(-magnetar_field_accel(d, false) > 3.0 * arena_gravity, "push at {d} px");
+        }
     }
 }

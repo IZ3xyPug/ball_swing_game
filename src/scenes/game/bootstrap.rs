@@ -557,15 +557,17 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     zero_g_overlay.layer = 50;
 
     // ── Solar flare presentation ─────────────────────────────────────────
-    // Full-screen wash for the telegraph and the flare itself. Sits under the
-    // pause overlay but over gameplay, and is re-tinted every frame by
-    // `solar::draw_flare_overlay` as the telegraph ramps.
+    // Full-screen wash for the telegraph and the flare itself, re-tinted
+    // every frame by `solar::draw_flare_overlay` as the telegraph ramps.
+    // Just above the backdrop, UNDER the nodes, the domes and the player: on
+    // top of gameplay it washed the shelter domes out exactly when they
+    // mattered, and the sky burning reads as the flare on its own.
     let mut flare_overlay = GameObject::new_rect(ctx, "flare_overlay".into(),
         None::<Image>, (VW, VH), (0.0, 0.0),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
     flare_overlay.ignore_zoom = true;
     flare_overlay.visible = false;
-    flare_overlay.layer = 60;
+    flare_overlay.layer = 1;
 
     // Instruction banner. The flare has to be readable without audio and
     // without prior knowledge, so the telegraph says what to do, not just that
@@ -616,7 +618,13 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let mut scene = Scene::new("game")
         .with_object("bg",           bg)
         .with_object("bg_space",     bg_space)
-        .with_object("bg_stars_b",   bg_stars_b)
+        .with_object("bg_stars_b",   bg_stars_b);
+    // Distant decor straight after the backdrop: layer 0 draws in insertion
+    // order, so this puts it behind every gameplay object.
+    for (id, obj) in super::decor::decor_objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
+    let mut scene = scene
         .with_object("asteroid",     asteroid)
         .with_object("rope",         rope)
         .with_object("player",       player)

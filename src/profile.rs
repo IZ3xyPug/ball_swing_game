@@ -53,6 +53,12 @@ pub struct PlayerProfile {
     pub cosmetic_rope: u32,
     pub cosmetic_bg: u32,
     pub cosmetic_trail: u32,
+    /// Rope STYLE (cosmetics::ROPE_STYLES index); `cosmetic_rope` is its
+    /// colour, chosen separately.
+    pub cosmetic_rope_style: u32,
+    /// Premium looks bought on this profile, as keys ("rope:helix",
+    /// "cat:ginger"). Free items are never listed.
+    pub owned_cosmetics: Vec<String>,
     /// Lifetime stats, tracked per profile for the Stats screen.
     pub best_distance: u32,
     pub total_coins: u64,
@@ -115,6 +121,12 @@ impl PlayerProfile {
                         "cosmetic_rope" => p.cosmetic_rope = v.parse().unwrap_or(0),
                         "cosmetic_bg" => p.cosmetic_bg = v.parse().unwrap_or(0),
                         "cosmetic_trail" => p.cosmetic_trail = v.parse().unwrap_or(0),
+                        "cosmetic_rope_style" => p.cosmetic_rope_style = v.parse().unwrap_or(0),
+                        "owned_cosmetics" => {
+                            p.owned_cosmetics = v.split(',').map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                        }
                         "best_distance" => p.best_distance = v.parse().unwrap_or(0),
                         "total_coins" => p.total_coins = v.parse().unwrap_or(0),
                         "deaths" => p.deaths = v.parse().unwrap_or(0),
@@ -156,6 +168,11 @@ impl PlayerProfile {
             self.best_distance_casual, self.best_distance_normal, self.best_distance_bossrush,
             self.runs_casual, self.runs_normal, self.runs_bossrush,
         );
+        body.push_str(&format!(
+            "cosmetic_rope_style={}\nowned_cosmetics={}\n",
+            self.cosmetic_rope_style,
+            self.owned_cosmetics.join(","),
+        ));
         // Written in table order, not insertion order, so the file is stable.
         for u in PERM_UPGRADES {
             if u.id == "heart" {
@@ -290,6 +307,38 @@ pub fn save_cosmetics(char: u32, rope: u32, bg: u32, trail: u32) {
     p.cosmetic_bg = bg;
     p.cosmetic_trail = trail;
     p.save(active_index());
+}
+
+/// Save the selected rope STYLE (its colour goes through `save_cosmetics`).
+pub fn save_rope_style(style: u32) {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    p.cosmetic_rope_style = style;
+    p.save(active_index());
+}
+
+/// Whether the active profile owns the premium look `key`.
+pub fn owns_cosmetic(key: &str) -> bool {
+    let g = profile();
+    let owned = g.lock().unwrap().owned_cosmetics.iter().any(|k| k == key);
+    owned
+}
+
+/// Buy `key` for `cost` META on the active profile. `Err(shortfall)` when
+/// the balance is short; already owned is `Ok` and charges nothing.
+pub fn buy_cosmetic(key: &str, cost: u64) -> Result<(), u64> {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    if p.owned_cosmetics.iter().any(|k| k == key) {
+        return Ok(());
+    }
+    if p.meta_currency < cost {
+        return Err(cost - p.meta_currency);
+    }
+    p.meta_currency -= cost;
+    p.owned_cosmetics.push(key.to_string());
+    p.save(active_index());
+    Ok(())
 }
 
 /// Record an achievement as unlocked on the active profile (no-op if present).

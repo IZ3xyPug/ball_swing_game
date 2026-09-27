@@ -171,17 +171,64 @@ fn bounce_player_off_walls(c: &mut Canvas, st: &Arc<Mutex<State>>, x1: f32, x2: 
     }
 }
 
-/// Mark a few of the arena tether nodes as shielded so they are shelter during
-/// the Flare Titan's flares (timed-release, like the world's flare system).
-pub(crate) fn ensure_arena_shelter_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+/// Mark arena tether nodes as shielded — shelter from the Flare Titan's
+/// flares — so that from ANY node a shelter is within
+/// `TITAN_SHELTER_SPACING`: reachable inside the flare's count-in.
+///
+/// Chosen by distance, not by index. It used to be every fourth node in
+/// spawn order, which on the 5-column grid fell on a diagonal: the nearest
+/// shelter was often a column (3 000 px) away with four seconds to get
+/// there (playtest, 2026-09-27). Greedy cover: walk the nodes left to
+/// right and shelter any node no shelter covers yet.
+pub(crate) fn ensure_arena_shelter_nodes(c: &mut Canvas, st: &Arc<Mutex<State>>, fresh: bool) {
     let ids: Vec<String> = st.lock().unwrap().live_hooks.clone();
-    for (i, id) in ids.iter().enumerate() {
-        if i % 4 == 0 {
-            if let Some(obj) = c.get_game_object_mut(id) {
+    let mut nodes: Vec<(String, f32, f32)> = ids
+        .iter()
+        .filter_map(|id| {
+            c.get_game_object(id).map(|o| {
+                (id.clone(), o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5)
+            })
+        })
+        .collect();
+    nodes.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)));
+    // `fresh` (the fight starting) clears tags left from an earlier fight
+    // and covers from scratch. Otherwise the cover is only TOPPED UP: the
+    // arena keeps filling in after the fight starts (31 nodes at spawn, 42
+    // later), and recomputing then moved shelters under a player heading
+    // for one, just as the flare's warning began.
+    let mut shelters: Vec<(f32, f32)> = Vec::new();
+    for (id, x, y) in &nodes {
+        if fresh {
+            break;
+        }
+        if c.get_game_object(id).is_some_and(|o| o.tags.iter().any(|t| t == SHIELD_HOOK_TAG)) {
+            shelters.push((*x, *y));
+        }
+    }
+    for (id, _, _) in nodes.iter().filter(|_| fresh) {
+        if let Some(obj) = c.get_game_object_mut(id) {
+            if obj.tags.iter().any(|t| t == SHIELD_HOOK_TAG) {
                 obj.tags.retain(|t| t != SHIELD_HOOK_TAG);
-                obj.tags.push(SHIELD_HOOK_TAG.into());
-                obj.set_glow(GlowConfig { color: Color(255, 200, 80, 255), width: 14.0 });
+                if obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) {
+                    obj.set_glow(GlowConfig { color: Color(110, 230, 255, 255), width: 16.0 });
+                } else {
+                    obj.clear_glow();
+                }
             }
+        }
+    }
+    for (id, x, y) in nodes {
+        let covered = shelters.iter().any(|&(sx, sy)| {
+            (sx - x).powi(2) + (sy - y).powi(2) < TITAN_SHELTER_SPACING * TITAN_SHELTER_SPACING
+        });
+        if covered {
+            continue;
+        }
+        if let Some(obj) = c.get_game_object_mut(&id) {
+            obj.tags.retain(|t| t != SHIELD_HOOK_TAG);
+            obj.tags.push(SHIELD_HOOK_TAG.into());
+            obj.set_glow(GlowConfig { color: Color(255, 200, 80, 255), width: 14.0 });
+            shelters.push((x, y));
         }
     }
 }
@@ -329,7 +376,7 @@ pub(crate) fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.boss_kind = if matches!(c.get_var("debug_boss_kind_sundev"), Some(Value::Bool(true))) {
             crate::constants::BossKind::SunDevourer
         } else {
-            crate::constants::boss_kind_for_index(index)
+            crate::constants::boss_kind_for_run(&s.boss_roster, index)
         };
         s.boss_parts = crate::constants::boss_parts_for_kind(s.boss_kind);
         s.boss_cleared = false;
@@ -861,9 +908,10 @@ pub fn reset_boss_after_fall(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // A fall while the Weaver had the world upside down: the stasis orbit
         // and everything after it assume gravity points down.
         weaver_restore_gravity(c, &mut s);
-        // A fall mid-flare: the wash and the banner must not hang over the
-        // stasis orbit.
+        // A fall mid-flare: the wash, the banner and the shelter reticle
+        // must not hang over the stasis orbit.
         titan_end_flare(&mut s);
+        titan_clear_guide(c, &mut s);
         s.boss_spawned = false;
         s.boss_stasis_active = true;
         // Clear any active darkness so the stasis orbit is visible.
@@ -995,6 +1043,7 @@ pub(crate) fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let mut s = st.lock().unwrap();
         weaver_restore_gravity(c, &mut s);
         titan_end_flare(&mut s);
+        titan_clear_guide(c, &mut s);
     }
     crate::scenes::game::eclipse::end_night_mode(c);
     crate::scenes::game::eclipse::release_nodes_from_dark(c);

@@ -434,8 +434,26 @@ pub const PLAYER_CHAR_COLORS: &[(u8, u8, u8)] = &[
     (240, 150,  60), // 4 orange
     (180, 100, 240), // 5 purple
     (240,  90,  90), // 6 red
+    // 7.. the animated cat breeds (cosmetics::CAT_SKINS, same order; the
+    // colour is only the shop card's fallback swatch). Saved by index: append.
+    (230, 140,  60), // 7 ginger
+    ( 50,  45,  60), // 8 midnight
+    (225, 205, 175), // 9 siamese
+    ( 30,  30,  35), // 10 tuxedo
+    (170, 170, 175), // 11 silver tabby
+    (140, 100,  60), // 12 maine coon
+    (240, 240, 245), // 13 persian
+    (230, 170, 160), // 14 sphynx
+    (110,  80, 200), // 15 galaxy
+    (190, 205, 215), // 16 robo-cat
+    (240, 240, 250), // 17 astro-cat
+    (240, 100,  30), // 18 magma
 ];
-pub const PLAYER_CHAR_NAMES: &[&str] = &["CALICO", "SILVER", "BLUE", "GREEN", "ORANGE", "PURPLE", "RED"];
+pub const PLAYER_CHAR_NAMES: &[&str] = &[
+    "CALICO", "SILVER", "BLUE", "GREEN", "ORANGE", "PURPLE", "RED",
+    "GINGER", "MIDNIGHT", "SIAMESE", "TUXEDO", "SILVER TABBY", "MAINE COON", "PERSIAN", "SPHYNX",
+    "GALAXY", "ROBO-CAT", "ASTRO-CAT", "MAGMA",
+];
 
 pub const C_HOOK:     (u8,u8,u8) = (200, 60,  20 );
 pub const C_HOOK_ON:  (u8,u8,u8) = (255, 90,  70 );
@@ -990,31 +1008,27 @@ pub fn boss_kind_names() -> Vec<&'static str> {
     BOSS_ROSTER.iter().map(|k| k.slug()).collect()
 }
 
-/// Select the boss for a 0-based roster slot.
-///
-/// The shipped order opens with the Sun Devourer — the eclipse that builds on
-/// the approach to a fight is its effect, so meeting it first explains what the
-/// player is seeing — then the Colossus, the Serpent, the Conductor and the
-/// Gravity Weaver, with the two unfinished bosses filling the tail.
-/// The shipped roster, in the order fights appear. The testing override below
+/// The shipped roster: every boss in the game. The testing override below
 /// permutes THIS list, so the menu can never offer a boss that does not exist.
 ///
 /// To fight a particular boss without playing to its slot, use the boss-order
 /// testing menu or the headless driver's `--boss-kind`. Reordering THIS list to
-/// reach one quickly changes the shipped run structure for everyone, and the
+/// reach one quickly changes the fallback order for everyone, and the
 /// override exists precisely so that is never necessary.
+///
+/// Runs no longer play this order: each run deals its own (`deal_roster`),
+/// every boss but `FINAL_BOSS` shuffled and the final boss last. This list is
+/// the set of bosses, and the order used only where no roster was dealt.
 pub const BOSS_ROSTER: [BossKind; crate::mode::BOSS_ROSTER_SIZE as usize] = [
-    // The Sun Devourer opens the run. The eclipse builds on the approach to a
-    // fight, so meeting the boss the eclipse belongs to FIRST explains the
-    // effect the first time a player sees it. (The eclipse precedes every
-    // boss, not only this one — it is gated on distance to the next fight, not
-    // on which boss it is.)
+    // In build order: the Sun Devourer first, whose eclipse was the first
+    // pre-fight effect (the eclipse precedes every boss — it is gated on
+    // distance to the next fight, not on which boss it is).
     BossKind::SunDevourer,
     BossKind::Colossus,
     BossKind::Serpent,
     BossKind::Conductor,
     BossKind::GravityWeaver,
-    // The two still being built, in the order they are being built.
+    // The last two built.
     BossKind::FlareTitan,
     BossKind::Magnetar,
 ];
@@ -1053,6 +1067,45 @@ pub fn boss_order_is_overridden() -> bool {
     boss_order_slot().lock().unwrap().is_some()
 }
 
+/// The run's last fight, in Normal and in Boss Rush alike: the hardest boss
+/// once a player's likely upgrades are counted. The Magnetar — nothing in
+/// the upgrade pool softens it (SUNPROOFING wards blunt the Flare Titan's
+/// flares; the Weaver's spindles are two hits), its windows are the
+/// scarcest, and it layers every lesson of the run at once. The reasoning
+/// is in docs/overnight-review-2026-09-27.md.
+pub const FINAL_BOSS: BossKind = BossKind::Magnetar;
+
+/// Every boss but the final one in a random order, then the final one.
+/// Pure (the seed decides everything) so it can be tested; the game deals
+/// one per run with `deal_run_roster`.
+pub fn deal_roster(seed: u64) -> Vec<BossKind> {
+    let mut s = seed ^ 0xA076_1D64_78BD_642F;
+    let mut rest: Vec<BossKind> = BOSS_ROSTER.iter().copied().filter(|k| *k != FINAL_BOSS).collect();
+    // Fisher-Yates.
+    for i in (1..rest.len()).rev() {
+        let j = ((crate::state::lcg(&mut s) * (i + 1) as f32) as usize).min(i);
+        rest.swap(i, j);
+    }
+    rest.push(FINAL_BOSS);
+    rest
+}
+
+/// The boss for fight `index` of a run dealt `roster` (`State::boss_roster`):
+/// the testing override first, then the run's dealt order, then the shipped
+/// order. The dealt order lives in the run's State, not in a global, so two
+/// runs (or two tests) can never see each other's deal.
+pub fn boss_kind_for_run(roster: &[BossKind], index: u32) -> BossKind {
+    if let Some(order) = boss_order_override() {
+        if let Some(kind) = order.get(index as usize) {
+            return *kind;
+        }
+    }
+    match roster.get(index as usize) {
+        Some(kind) => *kind,
+        None => boss_kind_for_index(index),
+    }
+}
+
 pub fn boss_kind_for_index(index: u32) -> BossKind {
     if let Some(order) = boss_order_override() {
         if let Some(kind) = order.get(index as usize) {
@@ -1061,6 +1114,8 @@ pub fn boss_kind_for_index(index: u32) -> BossKind {
         // Past the end of a short override, fall through to the shipped order
         // rather than repeating the last pick — a run should still finish.
     }
+    // A real run deals its own order (`deal_roster`, read through
+    // `boss_kind_for_run`); this is the shipped order that stands behind it.
     // Read from BOSS_ROSTER rather than repeating it.
     //
     // This was a second copy of the order as match arms, with a test whose
@@ -2621,15 +2676,24 @@ pub const TITAN_KINDLE_TICKS: u32 = FLARE_WARN_TICKS;
 pub const TITAN_FLARE_TICKS: u32 = FLARE_ACTIVE_TICKS;
 pub const TITAN_VENT_TICKS: u32 = 330;
 /// Unsheltered in the flare: a heart at this tick and every interval after
-/// — two at most, where the run's own flare can take three.
-pub const TITAN_BURN_GRACE: u32 = 75;
+/// — two at most, where the run's own flare can take three. Two seconds of
+/// grace (was 1.25): with the count-in that is five seconds to find shelter.
+pub const TITAN_BURN_GRACE: u32 = 120;
 pub const TITAN_BURN_INTERVAL: u32 = 150;
+/// From any node in the Titan's arena a shielded node is at most this far
+/// away (see `ensure_arena_shelter_nodes`).
+pub const TITAN_SHELTER_SPACING: f32 = 1800.0;
 /// Sheltered in the flare: Solar Charge, the buff every hit needs, topped up
 /// to this long.
 pub const TITAN_CHARGE_TICKS: u32 = 720;
 /// The solar wind through the kindle, px/tick^2 at its peak, straight out
 /// from the core: reaching shelter is a swing against it.
-pub const TITAN_WIND: f32 = 0.04;
+///
+/// Measured against arena gravity (`GRAVITY * BOSS_GRAVITY_SCALE`, 0.041),
+/// because that is what a roped swing hangs from. At 0.03 the wind was
+/// weaker than gravity and nobody felt it; at 0.10 the swing leans away from
+/// the star as the kindle peaks, and a loose player drifts out ~10 px/tick.
+pub const TITAN_WIND: f32 = 0.10;
 
 /// A prominence: wind-up (its path shown, clearing before the throw),
 /// flight, then the arc burns where it lies while the vent that threw it
@@ -2870,8 +2934,18 @@ pub const MAGNETAR_BEAM_HALF: f32 = 80.0;
 pub const MAGNETAR_BEAM_KICK: f32 = 28.0;
 /// The field, px/tick^2 at the core falling to nothing at the reach: the
 /// pull drags the unroped in, the push throws them out.
-pub const MAGNETAR_PULL_ACCEL: f32 = 0.12;
-pub const MAGNETAR_PUSH_ACCEL: f32 = 0.14;
+///
+/// At 0.12/0.14 with a linear falloff the field was ~0.06 at fighting range
+/// and went unnoticed in play (it moved a loose player ~240 px over a whole
+/// pulse); 0.30 was felt but "doesn't read as much force". Now ~0.26 at
+/// 2,400 px, six times arena gravity, and the pulse tears the rope off
+/// (`MAGNETAR_PULSE_LOCKOUT_TICKS`), so the player takes it loose.
+pub const MAGNETAR_PULL_ACCEL: f32 = 0.36;
+pub const MAGNETAR_PUSH_ACCEL: f32 = 0.38;
+/// Like the Colossus's gravity well: when the field fires it tears the rope
+/// off and no node can be grabbed for this long (~0.67 s), so stopping
+/// yourself is a reaction, not a rope you already held.
+pub const MAGNETAR_PULSE_LOCKOUT_TICKS: u32 = 40;
 pub const MAGNETAR_FIELD_REACH: f32 = 5200.0;
 /// The field quad around the core.
 pub const MAGNETAR_FIELD_VISUAL: f32 = 4200.0;
