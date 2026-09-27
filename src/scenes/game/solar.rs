@@ -102,6 +102,17 @@ pub fn tick_solar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 }
 
 fn tick_flare_state(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // The Flare Titan's arena: the flare is the boss's clock. It sets the
+    // fields this system draws from; running or resetting them here as well
+    // would be two flares fighting over one wash. Only once it has SPAWNED:
+    // before that (the entry stasis) the reset below still clears a flare
+    // the player warped in with, or its wash would hang there frozen.
+    {
+        let s = st.lock().unwrap();
+        if crate::scenes::game::boss::titan_owns_flares(&s) && s.boss_spawned {
+            return;
+        }
+    }
     // Flares are a normal-zone hazard. Space has its own sun, and a boss arena
     // has no shielded nodes to reach.
     let (suspended, distance) = {
@@ -282,7 +293,9 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // before.
     let bail = {
         let s = st.lock().unwrap();
-        s.in_space_mode || s.boss_active || s.dead
+        // The Titan's arena keeps its shelter: sheltering IS that fight.
+        let titan = crate::scenes::game::boss::titan_owns_flares(&s);
+        s.in_space_mode || (s.boss_active && !titan) || s.dead
     };
     if bail {
         let (stale, had_player) = {

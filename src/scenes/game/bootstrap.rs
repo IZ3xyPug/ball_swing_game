@@ -385,10 +385,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     rope.visible = false;
     rope.layer = LAYER_ROPE;
 
-    let mut floor = GameObject::new_rect(ctx, "danger_floor".into(),
-        Some(Image { shape: ShapeType::Rectangle(0.0, (VW, 28.0), 0.0), image: solid(C_DANGER.0, C_DANGER.1, C_DANGER.2, 200).into(), color: None }),
-        (VW, 28.0), (0.0, VH - 28.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
-    floor.ignore_zoom = true;
+    // No "danger floor" bar. A red strip pinned to the bottom of the screen
+    // marked where falling used to kill; nothing ever read it (the fall is
+    // tested against the player's own position in `State`), and it drew as
+    // a flat red line across every frame. Removed 2026-09-27.
 
     // ── HUD elements ─────────────────────────────────────────────────────
     let mut dist_bar = GameObject::new_rect(ctx, "dist_bar".into(),
@@ -618,7 +618,6 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("bg_space",     bg_space)
         .with_object("bg_stars_b",   bg_stars_b)
         .with_object("asteroid",     asteroid)
-        .with_object("danger_floor", floor)
         .with_object("rope",         rope)
         .with_object("player",       player)
         .with_object("airshield",    airshield)
@@ -1357,6 +1356,172 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             obj.set_glow(GlowConfig { color: Color(255, 210, 110, 200), width: 34.0 });
             scene = scene.with_object(name, obj);
         }
+        // ── Sun Devourer lunge lane ──────────────────────────────────
+        // Transparent strip; the STRIKE LANE effect draws it (tick_desperation).
+        {
+            let mut obj = GameObject::new_rect(ctx, "devourer_lunge_lane".into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, 100.0), 0.0),
+                             image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                (100.0, 100.0), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 1;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object("devourer_lunge_lane", obj);
+        }
+        // ── The Gravity Weaver ───────────────────────────────────────
+        // Four spindles and the loom (index WEAVER_SPINDLES), then a thread
+        // strip per part (the lane and the shuttle thread draw on it), and
+        // the lens quad the inversion telegraph draws on. Self-lit: the
+        // violet is the light source in this fight.
+        for i in 0..=WEAVER_SPINDLES {
+            let name = format!("weaver_part_{i}");
+            let loom = i == WEAVER_SPINDLES;
+            let d = if loom { WEAVER_LOOM_SIZE } else { WEAVER_SPINDLE_SIZE };
+            let (art, idle): (&'static [u8], &'static [&'static [u8]]) = if loom {
+                (ASSET_PL_WEAVER_LOOM, &ASSET_PL_WEAVER_LOOM_IDLE)
+            } else {
+                (ASSET_PL_WEAVER_SPINDLE, &ASSET_PL_WEAVER_SPINDLE_IDLE)
+            };
+            let img = crate::scenes::game::helpers::pl_image_cached(art, d)
+                .unwrap_or_else(|| std::sync::Arc::new(crate::images::solid(120, 60, 200, 255)));
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0), image: img.into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            obj.unlit = true;
+            if let Some(anim) = crate::scenes::game::helpers::pl_sprite(idle, d, WEAVER_IDLE_FPS) {
+                obj.animated_sprite = Some(anim);
+            }
+            obj.set_glow(GlowConfig {
+                color: Color(WEAVER_SRGB.0, WEAVER_SRGB.1, WEAVER_SRGB.2, 190),
+                width: if loom { 14.0 } else { 9.0 },
+            });
+            scene = scene.with_object(&name, obj);
+        }
+        for i in 0..=WEAVER_SPINDLES {
+            let name = format!("weaver_thread_{i}");
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, WEAVER_THREAD_W), 0.0),
+                             image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                (100.0, WEAVER_THREAD_W), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 1;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        {
+            let d = WEAVER_LOOM_SIZE * WEAVER_LENS_SCALE;
+            let mut obj = GameObject::new_rect(ctx, "weaver_lens".into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0),
+                             image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 2;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object("weaver_lens", obj);
+        }
+        // ── The Flare Titan ──────────────────────────────────────────
+        // Four vents and the core (index TITAN_VENTS), an arc strip and a
+        // landing zone per part (the prominence draws on them), and the
+        // corona quad the kindle's solar wind draws on. Self-lit: the star
+        // is the light source in this fight.
+        for i in 0..=TITAN_VENTS {
+            let name = format!("titan_part_{i}");
+            let core = i == TITAN_VENTS;
+            let d = if core { TITAN_CORE_SIZE } else { TITAN_VENT_SIZE };
+            let (art, idle): (&'static [u8], &'static [&'static [u8]]) = if core {
+                (ASSET_PL_TITAN_CORE, &ASSET_PL_TITAN_CORE_IDLE)
+            } else {
+                (ASSET_PL_TITAN_VENT, &ASSET_PL_TITAN_VENT_IDLE)
+            };
+            let img = crate::scenes::game::helpers::pl_image_cached(art, d)
+                .unwrap_or_else(|| std::sync::Arc::new(crate::images::solid(255, 150, 40, 255)));
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0), image: img.into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            obj.unlit = true;
+            if let Some(anim) = crate::scenes::game::helpers::pl_sprite(idle, d, TITAN_IDLE_FPS) {
+                obj.animated_sprite = Some(anim);
+            }
+            scene = scene.with_object(&name, obj);
+        }
+        for i in 0..=TITAN_VENTS {
+            for (name, layer) in [(format!("titan_arc_{i}"), LAYER_SPACE_HOOK - 1), (format!("titan_zone_{i}"), LAYER_SPACE_HOOK - 1)] {
+                let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                    Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, 100.0), 0.0),
+                                 image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                    (100.0, 100.0), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+                obj.layer = layer;
+                obj.gravity = 0.0;
+                obj.visible = false;
+                scene = scene.with_object(&name, obj);
+            }
+        }
+        {
+            let d = TITAN_CORE_SIZE * TITAN_CORONA_SCALE;
+            let mut obj = GameObject::new_rect(ctx, "titan_corona".into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0),
+                             image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 2;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object("titan_corona", obj);
+        }
+        // ── The Magnetar ─────────────────────────────────────────────
+        // Two poles and the core (index MAGNETAR_POLES), a beam strip per
+        // beam (a pole's, or the bare core's four), and the field quad the
+        // pulses draw on. Self-lit.
+        for i in 0..=MAGNETAR_POLES {
+            let name = format!("magnetar_part_{i}");
+            let core = i == MAGNETAR_POLES;
+            let d = if core { MAGNETAR_CORE_SIZE } else { MAGNETAR_POLE_SIZE };
+            let (art, idle): (&'static [u8], &'static [&'static [u8]]) = if core {
+                (ASSET_PL_MAGNETAR_CORE, &ASSET_PL_MAGNETAR_CORE_IDLE)
+            } else {
+                (ASSET_PL_MAGNETAR_POLE, &ASSET_PL_MAGNETAR_POLE_IDLE)
+            };
+            let img = crate::scenes::game::helpers::pl_image_cached(art, d)
+                .unwrap_or_else(|| std::sync::Arc::new(crate::images::solid(120, 200, 255, 255)));
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0), image: img.into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            obj.unlit = true;
+            if let Some(anim) = crate::scenes::game::helpers::pl_sprite(idle, d, MAGNETAR_IDLE_FPS) {
+                obj.animated_sprite = Some(anim);
+            }
+            scene = scene.with_object(&name, obj);
+        }
+        for k in 0..crate::scenes::game::boss::MAGNETAR_BEAMS {
+            let name = format!("magnetar_beam_{k}");
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (100.0, 100.0), 0.0),
+                             image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                (100.0, 100.0), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 1;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
+        }
+        {
+            let d = MAGNETAR_FIELD_VISUAL;
+            let mut obj = GameObject::new_rect(ctx, "magnetar_field".into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (d, d), 0.0),
+                             image: std::sync::Arc::new(solid(0, 0, 0, 0)).into(), color: None }),
+                (d, d), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 2;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object("magnetar_field", obj);
+        }
         // ── Conductor ────────────────────────────────────────────────
         // A metronome core, a ring of tuning-fork spars, an expanding beat ring
         // and two sweeping bar lines.
@@ -1623,22 +1788,6 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             obj.visible = false;
             scene = scene.with_object(&name, obj);
         }
-        // Colossus vulnerability rings: bright gold rings that pulse on a part
-        // only while its weakpoint is open, so "you can hit it now" reads at a
-        // glance. Sized per part; follow the part in boss.rs.
-        for i in 0..4 {
-            let name = format!("colossus_vuln_{i}");
-            let r = (colossus_part_size(i as u32) * 0.55).round().max(2.0);
-            let d = (r * 2.0).round().max(2.0) as u32;
-            let ring = gwell_ring_cached(r, 255, 220, 60, GWELL_RING_COUNT, 235.0);
-            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
-                Some(Image { shape: ShapeType::Ellipse(0.0, (d as f32, d as f32), 0.0), image: ring.clone(), color: None }),
-                (d as f32, d as f32), (-9000.0, -9000.0), vec!["boss".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
-            obj.layer = 30; // above parts/zones, below the player
-            obj.gravity = 0.0;
-            obj.visible = false;
-            scene = scene.with_object(&name, obj);
-        }
         // Colossus gravity well: a large translucent swirl centred on the head,
         // shown while its gaze attack winds up/fires. The image is small and
         // stretched to the object size so the raster stays cheap.
@@ -1660,7 +1809,9 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         {
             let wall_th = ARENA_WALL_THICKNESS;
             let wall_h = 4800.0;
-            let wall_img = crate::images::solid(120, 170, 255, 90);
+            // Transparent: the wall is drawn by the ENERGY WALL effect, attached
+            // each frame by `tick_arena_walls`, so it can scroll and flicker.
+            let wall_img = crate::images::solid(0, 0, 0, 0);
             for name in ["arena_wall_l", "arena_wall_r"] {
                 let mut obj = GameObject::new_rect(ctx, name.into(),
                     Some(Image { shape: ShapeType::Rectangle(0.0, (wall_th, wall_h), 0.0), image: wall_img.clone().into(), color: None }),
@@ -1924,21 +2075,6 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             t.visible = false;
             scene = scene.with_object(&id, t);
         }
-        // Barrier: a wide glowing band near the sun edge.
-        let bw = BOSS_ZONE_X2 - BOSS_ZONE_X1;
-        let bh = 70.0f32;
-        let mut barrier = GameObject::new_rect(
-            ctx, "boss_barrier".into(),
-            Some(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: solid(C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 230).into(), color: None }),
-            (bw, bh), (-6000.0, -6000.0),
-            vec!["boss_barrier".into()], (0.0, 0.0), (1.0, 1.0), 0.0,
-        );
-        barrier.layer = LAYER_SPACE_HOOK;
-        barrier.gravity = 0.0;
-        barrier.visible = false;
-        barrier.set_glow(GlowConfig { color: Color(C_BOSS_BARRIER.0, C_BOSS_BARRIER.1, C_BOSS_BARRIER.2, 120), width: 30.0 });
-        scene = scene.with_object("boss_barrier", barrier);
-
         // Boss forcefield: a glowing ring around the boss while the generators
         // are still up (the boss is invulnerable until they are destroyed).
         {
@@ -1959,32 +2095,6 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             scene = scene.with_object("boss_forcefield", ff);
         }
 
-        // Boss arena boundary forcefield: a glowing outline of the arena bounds
-        // that contains the player for the fight. Built as four thin solid-edged
-        // rectangles (1×1 `solid` texture stretched to each rect) instead of one
-        // full-arena RgbaImage — a 14000×8400 image exceeds wgpu's 8192 texture
-        // dimension limit and panics in `Device::create_texture`.
-        {
-            let (bx1, bx2, ymin, ymax): (f32, f32, f32, f32) = (BOSS_ZONE_X1, BOSS_ZONE_X2, -6000.0, 2400.0);
-            let bw = bx2 - bx1;
-            let bh = ymax - ymin;
-            let t = 24.0; // border thickness
-            let col = C_BOSS_BARRIER;
-            let mut border = |ctx: &mut Context, id: &str, x: f32, y: f32, w: f32, h: f32| {
-                let mut o = GameObject::new_rect(ctx, id.into(),
-                    Some(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: solid(col.0, col.1, col.2, 90).into(), color: None }),
-                    (w, h), (x, y),
-                    vec!["boss_boundary".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
-                o.layer = LAYER_SPACE_HOOK + 1;
-                o.gravity = 0.0;
-                o.visible = false;
-                o
-            };
-            scene = scene.with_object("boss_boundary_b", border(ctx, "boss_boundary_b", bx1, ymin, bw, t));
-            scene = scene.with_object("boss_boundary_t", border(ctx, "boss_boundary_t", bx1, ymax - t, bw, t));
-            scene = scene.with_object("boss_boundary_l", border(ctx, "boss_boundary_l", bx1, ymin, t, bh));
-            scene = scene.with_object("boss_boundary_r", border(ctx, "boss_boundary_r", bx2 - t, ymin, t, bh));
-        }
     }
 
     // ── Boss HP bar ───────────────────────────────────────────────────────

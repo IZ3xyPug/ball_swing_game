@@ -444,7 +444,6 @@ pub const C_HOOK_SPECIAL:      (u8,u8,u8) = (52, 196, 84);
 pub const C_HOOK_SPECIAL_NEAR: (u8,u8,u8) = (105, 244, 140);
 pub const C_HOOK_SPECIAL_ON:   (u8,u8,u8) = (175, 255, 196);
 pub const C_ROPE:     (u8,u8,u8) = (220, 220, 220);
-pub const C_DANGER:   (u8,u8,u8) = (200, 50,  50 );
 pub const C_PAD:      (u8,u8,u8) = (60,  200, 255);
 pub const C_PAD_HIT:  (u8,u8,u8) = (160, 255, 255);
 pub const C_SPINNER:  (u8,u8,u8) = (255, 100, 95);
@@ -791,8 +790,11 @@ pub const BOSS_ENTRY_DELAY_TICKS: u32  = 180;      // 3 seconds before boss appe
 pub const BOSS_SIZE:             f32   = 360.0;    // width and height of boss body
 pub const BOSS_MAX_HP:           i32   = 20;
 pub const BOSS_BOLT_POOL_SIZE:   usize = 24;
-pub const BOSS_BOLT_W:           f32   = 80.0;
-pub const BOSS_BOLT_H:           f32   = 30.0;
+/// Square: the bolt is a fireball with a trailing corona (PixelLab), drawn
+/// pointing along its velocity. The hit test is a circle of half the larger
+/// side, so this is also its reach.
+pub const BOSS_BOLT_W:           f32   = 92.0;
+pub const BOSS_BOLT_H:           f32   = 92.0;
 pub const BOSS_BOLT_SPEED:       f32   = 16.0;
 pub const BOSS_BOLT_LIFETIME:    u32   = 360;      // 6 s at 60 fps
 pub const BOSS_SHOOT_INTERVAL:   u32   = 90;       // 1.5 s at 60 fps
@@ -848,7 +850,7 @@ pub const BOSS_DARK_AMBIENT:              f32 = 0.06;
 
 // ── Last-boss barrier / generators / bait-and-bail ───────────────────────────
 /// How many generators power the protective barrier.
-pub const BOSS_GENERATOR_COUNT:   usize = 3;
+pub const BOSS_GENERATOR_COUNT:   usize = 5;
 /// HP per generator (buffed hits, or one boss attack, damage it).
 pub const BOSS_GENERATOR_HP:      i32   = 2;
 /// Radius (px) of a generator node.
@@ -857,8 +859,6 @@ pub const BOSS_GENERATOR_R:       f32   = 95.0;
 pub const C_BOSS_GENERATOR:       (u8, u8, u8) = (90, 220, 255);
 /// Barrier colour (soft blue — placeholder).
 pub const C_BOSS_BARRIER:         (u8, u8, u8) = (120, 160, 255);
-/// Y (most-negative) the player/boss can't cross while the barrier is up.
-pub const BOSS_BARRIER_Y:         f32   = -3600.0;
 /// Y (more negative) the boss must cross after the barrier drops to fall into
 /// the sun (the bait-and-bail finisher).
 /// Ceiling the boss is clamped to during a lunge.
@@ -887,6 +887,14 @@ pub const BOSS_ARENA_PLAY_MID_Y: f32 =
 pub const BOSS_ARENA_PLAY_H: f32 = BOSS_ARENA_NODE_Y_TOP - BOSS_ARENA_NODE_Y_BOT;
 /// Ticks of telegraph before the boss's final desperation lunge.
 pub const BOSS_LUNGE_TELEGRAPH:   u32   = 90;
+/// The Devourer's lunge telegraph: when (ticks before the lunge) the bait is
+/// taken and its lane appears, when the lane clears so the body launches on
+/// a clean frame, when the wind-up rings start on the body, and the lane's
+/// width — the body's swept path.
+pub const DEVOURER_LUNGE_LOCK_TICKS: u32 = 60;
+pub const DEVOURER_LUNGE_CLEAR_TICKS: u32 = 8;
+pub const DEVOURER_LUNGE_WINDUP_TICKS: u32 = 80;
+pub const DEVOURER_LUNGE_LANE_W: f32 = DEVOURER_BODY_SIZE * 0.7;
 
 // ── Gravity cannon hyper-transit (fast travel) ────────────────────────────────
 /// Coin cost to use a cannon as fast travel. Lowered 2026-08-28 to match the
@@ -951,7 +959,11 @@ impl BossKind {
 
     /// Whether this boss is a multi-part fight (needs the BossPart model).
     pub fn is_multi_part(self) -> bool {
-        matches!(self, BossKind::Colossus | BossKind::Serpent)
+        matches!(
+            self,
+            BossKind::Colossus | BossKind::Serpent | BossKind::GravityWeaver | BossKind::FlareTitan
+                | BossKind::Magnetar
+        )
     }
 
     /// The short name the headless driver takes on `--boss-kind`.
@@ -982,8 +994,8 @@ pub fn boss_kind_names() -> Vec<&'static str> {
 ///
 /// The shipped order opens with the Sun Devourer — the eclipse that builds on
 /// the approach to a fight is its effect, so meeting it first explains what the
-/// player is seeing — then the Colossus, the Serpent and the Conductor, with
-/// the three unfinished bosses filling the tail.
+/// player is seeing — then the Colossus, the Serpent, the Conductor and the
+/// Gravity Weaver, with the two unfinished bosses filling the tail.
 /// The shipped roster, in the order fights appear. The testing override below
 /// permutes THIS list, so the menu can never offer a boss that does not exist.
 ///
@@ -1001,8 +1013,8 @@ pub const BOSS_ROSTER: [BossKind; crate::mode::BOSS_ROSTER_SIZE as usize] = [
     BossKind::Colossus,
     BossKind::Serpent,
     BossKind::Conductor,
-    // The three still being built, in the order they are being built.
     BossKind::GravityWeaver,
+    // The two still being built, in the order they are being built.
     BossKind::FlareTitan,
     BossKind::Magnetar,
 ];
@@ -1197,6 +1209,38 @@ pub fn boss_parts_for_kind(kind: BossKind) -> Vec<BossPart> {
                 .collect();
             parts.push(BossPart::new("tail", SERPENT_TAIL_HP));
             parts.push(BossPart::new("head", SERPENT_HEAD_HP));
+            parts
+        }
+        // ── The Gravity Weaver ─────────────────────────────────────────
+        // Four spindles then the loom. Gating is PAIRWISE (0,1 live; 2,3
+        // once they are gone; the loom last) and lives in gravity_weaver.rs,
+        // not in the shared one-at-a-time loop.
+        BossKind::GravityWeaver => {
+            let mut parts: Vec<BossPart> = (0..WEAVER_SPINDLES)
+                .map(|_| BossPart::new("spindle", WEAVER_SPINDLE_HP))
+                .collect();
+            parts[0] = BossPart::new("spindle", WEAVER_SPINDLE_HP).unshielded();
+            parts[1] = BossPart::new("spindle", WEAVER_SPINDLE_HP).unshielded();
+            parts.push(BossPart::new("loom", WEAVER_LOOM_HP));
+            parts
+        }
+        // ── The Flare Titan ────────────────────────────────────────────
+        // Four vents, all live from the start, then the core, shielded until
+        // every vent is dead (gating lives in flare_titan.rs).
+        BossKind::FlareTitan => {
+            let mut parts: Vec<BossPart> = (0..TITAN_VENTS)
+                .map(|_| BossPart::new("vent", TITAN_VENT_HP).unshielded())
+                .collect();
+            parts.push(BossPart::new("core", TITAN_CORE_HP));
+            parts
+        }
+        // ── The Magnetar ───────────────────────────────────────────────
+        // Two poles, then the core, shielded until both poles are dead.
+        BossKind::Magnetar => {
+            let mut parts: Vec<BossPart> = (0..MAGNETAR_POLES)
+                .map(|_| BossPart::new("pole", MAGNETAR_POLE_HP).unshielded())
+                .collect();
+            parts.push(BossPart::new("core", MAGNETAR_CORE_HP));
             parts
         }
         // The remaining single-body bosses keep the scalar boss_hp path.
@@ -1671,6 +1715,13 @@ pub const COLOSSUS_GRAVITY_STRENGTH: f32 = 4.0;
 /// How many ticks (1 s) the boss is invulnerable after one part is destroyed,
 /// so two parts cannot be destroyed back-to-back in the same second.
 pub const COLOSSUS_PART_INVULN_TICKS: u32 = 60;
+/// After ANY landed hit, not only a kill. Parts used to take damage every
+/// frame the player overlapped them, so one pass through an open hand took
+/// several HP; with parts solid, one touch is one hit, and this guards it.
+pub const COLOSSUS_HIT_INVULN_TICKS: u32 = 20;
+/// A live part that is closed wears a lighter shell than a shielded one:
+/// "can't hurt it now" is always visible.
+pub const COLOSSUS_CLOSED_SHELL: f32 = 0.5;
 // REMOVED: COLOSSUS_METEOR_LOCK_TICKS. Meteors were a rider on the torso's slam
 // and the body froze for a fixed spell afterwards. The storm is its own attack
 // now, so the freeze is the storm's own length plus one warning
@@ -2127,6 +2178,10 @@ pub const C_HEART_EMPTY: (u8, u8, u8) = ( 60,  34,  38);
 /// Thickness of a boundary wall. The wall object is CENTRED on the arena bound,
 /// so its inner face is half this inside it.
 pub const ARENA_WALL_THICKNESS: f32 = 140.0;
+/// How wide the wall's energy field is DRAWN (the bounce line is still the
+/// arena edge). Its bright face sits exactly where the player stops.
+pub const ARENA_WALL_VISUAL_W: f32 = 420.0;
+pub const ARENA_WALL_SRGB: (u8, u8, u8) = (110, 175, 255);
 /// How much speed a wall gives back. Well under 1: a wall is a boundary, not a
 /// trampoline, and a lively bounce would launch the player across the arena
 /// every time they clipped an edge.
@@ -2506,21 +2561,331 @@ pub const META_BOSS_REWARD: u64 = 50;
 /// upgrade in the link section after the fight.
 pub const BOSS_COIN_REWARD: u32 = 150;
 
-// ── Flare Titan boss (reuses the solar-flare mechanic) ───────────────────────
-pub const FLARE_TITAN_TELEGRAPH_TICKS: u32 = 180;  // 3 s warning
-pub const FLARE_TITAN_ACTIVE_TICKS:    u32 = 300;  // 5 s flare
-pub const FLARE_TITAN_DAMAGE_INTERVAL: u32 = 120;  // a heart every 2 s unsheltered
-pub const FLARE_TITAN_WINDOW_TICKS:    u32 = 240;  // 4 s weakpoint window after flame
-pub const FLARE_TITAN_INTERVAL:        u32 = 600;  // 10 s between flares
+// ── The Flare Titan ──────────────────────────────────────────────────────────
+//
+// See boss/flare_titan.rs. A caged star and four furnace vents. Its clock is
+// the solar flare the run has been teaching since minute 44: survive it on a
+// shielded node and come out CHARGED, then spend the charge on the vents it
+// leaves open while it cools.
+pub const ASSET_PL_TITAN_CORE: &[u8] = include_bytes!("../assets/pixellab/titan_core.png");
+pub const ASSET_PL_TITAN_CORE_DAMAGED: &[u8] =
+    include_bytes!("../assets/pixellab/titan_core_damaged.png");
+pub const ASSET_PL_TITAN_CORE_IDLE: [&[u8]; 9] = [
+    include_bytes!("../assets/pixellab/titan_core_idle/0.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/1.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/2.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/3.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/4.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/5.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/6.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/7.png"),
+    include_bytes!("../assets/pixellab/titan_core_idle/8.png"),
+];
+pub const ASSET_PL_TITAN_VENT: &[u8] = include_bytes!("../assets/pixellab/titan_vent.png");
+pub const ASSET_PL_TITAN_VENT_DAMAGED: &[u8] =
+    include_bytes!("../assets/pixellab/titan_vent_damaged.png");
+pub const ASSET_PL_TITAN_VENT_IDLE: [&[u8]; 9] = [
+    include_bytes!("../assets/pixellab/titan_vent_idle/0.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/1.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/2.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/3.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/4.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/5.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/6.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/7.png"),
+    include_bytes!("../assets/pixellab/titan_vent_idle/8.png"),
+];
+pub const TITAN_IDLE_FPS: f32 = 9.0;
+/// The vent's art has its mouth at the TOP: its aim is -90 degrees.
+pub const TITAN_VENT_ART_DEG: f32 = -90.0;
 
-// ── Gravity Weaver boss (uses the space_rift gravity inversion) ──────────────
-pub const GRAVITY_WEAVER_FLIP_INTERVAL: u32 = 300;  // 5 s between world flips
-pub const GRAVITY_WEAVER_WINDOW_TICKS:  u32 = 180;  // 3 s weakpoint after a flip
+pub const TITAN_VENTS: usize = 4;
+/// Two hits a vent — crack, then kill — the same as the Weaver's spindles
+/// after playtesting found five a part far too many.
+pub const TITAN_VENT_HP: i32 = 2;
+pub const TITAN_CORE_HP: i32 = 12;
+pub const TITAN_CORE_SIZE: f32 = 1400.0;
+pub const TITAN_VENT_SIZE: f32 = 780.0;
+pub const TITAN_ORBIT_RX: f32 = 2400.0;
+pub const TITAN_ORBIT_RY: f32 = 1450.0;
+pub const TITAN_ORBIT_RATE: f32 = 0.004;
 
-// ── Magnetar boss (uses the gravity-well / magnet pull) ──────────────────────
-pub const MAGNETAR_PULL_INTERVAL: u32 = 360;  // 6 s between charges
-pub const MAGNETAR_PULL_TICKS:    u32 = 180;  // 3 s of active rope pull
-pub const MAGNETAR_WINDOW_TICKS:  u32 = 180;  // 3 s weakpoint while over-charged
+/// The clock: CALM (prominences), KINDLE (the flare's count-in: shelter now),
+/// FLARE (unsheltered burns; sheltered charges), VENT (every live part open
+/// while the star cools). Kindle and flare are the solar flare's own
+/// lengths, because the flare's screen wash and the shelter domes are the
+/// solar system's, driven by the Titan's clock.
+pub const TITAN_CALM_TICKS: u32 = 540;
+pub const TITAN_CALM_TICKS_CORE: u32 = 360;
+pub const TITAN_KINDLE_TICKS: u32 = FLARE_WARN_TICKS;
+pub const TITAN_FLARE_TICKS: u32 = FLARE_ACTIVE_TICKS;
+pub const TITAN_VENT_TICKS: u32 = 330;
+/// Unsheltered in the flare: a heart at this tick and every interval after
+/// — two at most, where the run's own flare can take three.
+pub const TITAN_BURN_GRACE: u32 = 75;
+pub const TITAN_BURN_INTERVAL: u32 = 150;
+/// Sheltered in the flare: Solar Charge, the buff every hit needs, topped up
+/// to this long.
+pub const TITAN_CHARGE_TICKS: u32 = 720;
+/// The solar wind through the kindle, px/tick^2 at its peak, straight out
+/// from the core: reaching shelter is a swing against it.
+pub const TITAN_WIND: f32 = 0.04;
+
+/// A prominence: wind-up (its path shown, clearing before the throw),
+/// flight, then the arc burns where it lies while the vent that threw it
+/// stays open, cooling.
+pub const TITAN_VENT_IDLE_TICKS: u32 = 140;
+pub const TITAN_CORE_IDLE_TICKS: u32 = 110;
+pub const TITAN_PATTERN_COOLDOWN: u32 = 120;
+pub const TITAN_ARC_TELEGRAPH_TICKS: u32 = 72;
+pub const TITAN_TELEGRAPH_CLEAR: u32 = 10;
+pub const TITAN_ARC_FLIGHT_TICKS: u32 = 34;
+pub const TITAN_ARC_BURN_TICKS: u32 = 110;
+pub const TITAN_RECOVER_TICKS: u32 = 300;
+pub const TITAN_REJOIN_TICKS: u32 = 50;
+pub const TITAN_AIM_LEAD: f32 = 8.0;
+/// The arc's rise off its chord, as a share of the chord, and its limits.
+pub const TITAN_ARC_RISE: f32 = 0.32;
+pub const TITAN_ARC_RISE_MIN: f32 = 300.0;
+pub const TITAN_ARC_RISE_MAX: f32 = 1600.0;
+/// Half-width of the burning arc, the head's radius in flight, and the
+/// splash where it lands — all BEFORE the player's own radius is added.
+pub const TITAN_ARC_HALF_W: f32 = 70.0;
+pub const TITAN_ARC_HEAD_R: f32 = 110.0;
+pub const TITAN_ARC_SPLASH_R: f32 = 200.0;
+pub const TITAN_ARC_KICK: f32 = 28.0;
+/// The escalation: with half the vents gone, the Titan throws at the
+/// player's SHELTER during the flare, every this many ticks — sit still on
+/// one node and the next arc lands on it.
+pub const TITAN_HUNT_COOLDOWN: u32 = 95;
+pub const TITAN_PART_INVULN_TICKS: u32 = 60;
+/// Its solar orange (sRGB): name, plasma.
+pub const TITAN_SRGB: (u8, u8, u8) = (255, 150, 40);
+/// Markers (linear): a paler, whiter gold than the house vulnerable colour,
+/// because this boss IS orange; the house shield blue; the house wind-up red.
+pub const TITAN_MARKER_VULNERABLE_RGB: (f32, f32, f32) = (1.0, 0.94, 0.55);
+pub const TITAN_MARKER_SHIELDED_RGB: (f32, f32, f32) = (0.40, 0.72, 1.0);
+pub const TITAN_MARKER_WINDUP_RGB: (f32, f32, f32) = (1.0, 0.30, 0.16);
+pub const TITAN_CLOSED_SHELL: f32 = 0.5;
+/// The plasma (linear), and the corona quad around the core.
+pub const TITAN_PLASMA_RGB: (f32, f32, f32) = (1.0, 0.55, 0.12);
+pub const TITAN_CORONA_SCALE: f32 = 2.6;
+
+// ── The Gravity Weaver ───────────────────────────────────────────────────────
+//
+// See boss/gravity_weaver.rs for the fight. Fifth of the run: an escalation,
+// so its cycle is a little faster than the Colossus's and its threads cross the
+// whole arena.
+pub const ASSET_PL_WEAVER_LOOM: &[u8] = include_bytes!("../assets/pixellab/weaver_loom.png");
+pub const ASSET_PL_WEAVER_LOOM_DAMAGED: &[u8] =
+    include_bytes!("../assets/pixellab/weaver_loom_damaged.png");
+pub const ASSET_PL_WEAVER_SPINDLE: &[u8] =
+    include_bytes!("../assets/pixellab/weaver_spindle.png");
+pub const ASSET_PL_WEAVER_SPINDLE_DAMAGED: &[u8] =
+    include_bytes!("../assets/pixellab/weaver_spindle_damaged.png");
+pub const ASSET_PL_WEAVER_LOOM_IDLE: [&[u8]; 9] = [
+    include_bytes!("../assets/pixellab/weaver_loom_idle/0.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/1.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/2.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/3.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/4.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/5.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/6.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/7.png"),
+    include_bytes!("../assets/pixellab/weaver_loom_idle/8.png"),
+];
+pub const ASSET_PL_WEAVER_SPINDLE_IDLE: [&[u8]; 9] = [
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/0.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/1.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/2.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/3.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/4.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/5.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/6.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/7.png"),
+    include_bytes!("../assets/pixellab/weaver_spindle_idle/8.png"),
+];
+pub const WEAVER_IDLE_FPS: f32 = 9.0;
+
+pub const WEAVER_SPINDLES: usize = 4;
+/// Two hits: the first cracks it (its damaged art shows at half HP), the
+/// second kills it. Was 5, and landing five hits on each of four moving
+/// spindles made the Weaver the hardest fight in the run by far (playtest,
+/// 2026-09-27) — each hit needs an open window AND a buffed approach.
+pub const WEAVER_SPINDLE_HP: i32 = 2;
+pub const WEAVER_LOOM_HP: i32 = 14;
+pub const WEAVER_LOOM_SIZE: f32 = 1500.0;
+pub const WEAVER_SPINDLE_SIZE: f32 = 820.0;
+/// The spindles' orbit around the loom, and how far the inversion telegraph
+/// draws it in (fraction of the radius).
+pub const WEAVER_ORBIT_RX: f32 = 2300.0;
+pub const WEAVER_ORBIT_RY: f32 = 1400.0;
+pub const WEAVER_ORBIT_RATE: f32 = 0.0045;
+pub const WEAVER_DRAW_IN: f32 = 0.45;
+/// The shuttle: rest, wind-up (lane filling), thread out, thread winding back
+/// in (the part is open).
+///
+/// The wind-back is FOUR SECONDS. The throw has just flung the player off the
+/// rope and away from the line, and the spindle sits ~2300 px out on its
+/// orbit: at 110 ticks (first playtest) the window closed before anyone could
+/// swing back to it, so a spindle was never hit from its own attack. The
+/// thread winding in is the visible timer, so a long window still reads.
+pub const WEAVER_IDLE_TICKS: u32 = 150;
+pub const WEAVER_LOOM_IDLE_TICKS: u32 = 120;
+pub const WEAVER_TELEGRAPH_TICKS: u32 = 66;
+/// The lane is taken down this many ticks before the thread flies.
+pub const WEAVER_TELEGRAPH_CLEAR: u32 = 10;
+pub const WEAVER_SHUTTLE_TICKS: u32 = 54;
+pub const WEAVER_RECOVER_TICKS: u32 = 330;
+/// The thread reels back INTO the spindle over the first part of the window
+/// (it used to erase from the spindle end outward, which read as the thread
+/// leaving, not returning).
+pub const WEAVER_RETRACT_TICKS: u32 = 70;
+/// An open spindle holds where it threw from for the whole window, then
+/// eases back into the ring over this long. Chasing a part that keeps
+/// orbiting away on a rope was most of why the window felt unreachable.
+pub const WEAVER_REJOIN_TICKS: u32 = 50;
+/// A live spindle that is closed wears a lighter shell than a phase-gated
+/// one: "can't hurt it now" is always visible, and "not yet in this phase"
+/// is the stronger version of it.
+pub const WEAVER_CLOSED_SHELL: f32 = 0.5;
+/// WEAVER_REACH_CHECK: the stand-in player's speed, px per tick. Below the
+/// momentum cap (50) on purpose: a swinging player averages well under it.
+pub const WEAVER_REACH_SPEED: f32 = 30.0;
+/// One shuttle at a time.
+pub const WEAVER_PATTERN_COOLDOWN: u32 = 150;
+pub const WEAVER_AIM_LEAD: f32 = 10.0;
+/// Long enough to cross the arena from any spindle.
+pub const WEAVER_THREAD_LEN: f32 = 7000.0;
+pub const WEAVER_THREAD_W: f32 = 90.0;
+pub const WEAVER_THREAD_HIT_HALF: f32 = 40.0;
+pub const WEAVER_THREAD_KICK: f32 = 30.0;
+/// The inversion: how often, the count-in, and how long every live part is
+/// open afterwards. Faster once only the loom is left.
+pub const WEAVER_FLIP_INTERVAL: u32 = 660;
+pub const WEAVER_FLIP_INTERVAL_CORE: u32 = 420;
+pub const WEAVER_FLIP_TELEGRAPH: u32 = 120;
+pub const WEAVER_FLIP_OPEN_TICKS: u32 = 220;
+pub const WEAVER_PART_INVULN_TICKS: u32 = 60;
+/// The GAUNTLET: once per phase change (after the first pair dies, and again
+/// when one spindle is left), the live spindles line up on either side of
+/// the arena at the player's height and fire across it IN TURN, each shot
+/// flipping gravity as it flies — three shots, alternating sides and
+/// directions of fall — then the ring resumes. Ticks to line up, the
+/// shortened wind-up of a gauntlet shot, how far out the posts are, and the
+/// ticks to drift back onto the ring.
+pub const WEAVER_GAUNTLET_ALIGN_TICKS: u32 = 70;
+pub const WEAVER_GAUNTLET_TELEGRAPH: u32 = 42;
+pub const WEAVER_GAUNTLET_POST_DX: f32 = 2700.0;
+pub const WEAVER_GAUNTLET_RELEASE_TICKS: u32 = 60;
+pub const WEAVER_GAUNTLET_SHOTS: u8 = 3;
+/// A LONE spindle runs the gauntlet by crossing the arena between shots;
+/// this long, and visibly, rather than teleporting from post to post.
+pub const WEAVER_GAUNTLET_TRANSIT_TICKS: u32 = 48;
+/// The lens quad over the loom, as a multiple of the loom.
+pub const WEAVER_LENS_SCALE: f32 = 2.4;
+/// Inverted, "fell off the top" is this far above the top row of nodes —
+/// the same margin the normal floor has below the bottom row.
+pub const WEAVER_CEILING_MARGIN: f32 = 1050.0;
+/// Its violet, as a picker shows it (sRGB): threads, lens and name.
+pub const WEAVER_SRGB: (u8, u8, u8) = (178, 96, 255);
+pub const WEAVER_LENS_SRGB: (u8, u8, u8) = (150, 70, 255);
+/// Markers (linear): gold against the violet, the house shield blue, the
+/// house wind-up red.
+pub const WEAVER_MARKER_VULNERABLE_RGB: (f32, f32, f32) = (1.0, 0.87, 0.28);
+pub const WEAVER_MARKER_SHIELDED_RGB:   (f32, f32, f32) = (0.40, 0.72, 1.0);
+pub const WEAVER_MARKER_WINDUP_RGB:     (f32, f32, f32) = (1.0, 0.30, 0.16);
+
+// ── The Magnetar ─────────────────────────────────────────────────────────────
+//
+// See boss/magnetar.rs. The finale: a neutron star with two magnetic poles
+// whose beams sweep the arena like a lighthouse, a field that pulls and then
+// pushes, and a STARQUAKE after every pulse that stalls the beams and cracks
+// the poles open.
+pub const ASSET_PL_MAGNETAR_CORE: &[u8] = include_bytes!("../assets/pixellab/magnetar_core.png");
+pub const ASSET_PL_MAGNETAR_CORE_DAMAGED: &[u8] =
+    include_bytes!("../assets/pixellab/magnetar_core_damaged.png");
+pub const ASSET_PL_MAGNETAR_CORE_IDLE: [&[u8]; 9] = [
+    include_bytes!("../assets/pixellab/magnetar_core_idle/0.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/1.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/2.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/3.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/4.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/5.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/6.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/7.png"),
+    include_bytes!("../assets/pixellab/magnetar_core_idle/8.png"),
+];
+pub const ASSET_PL_MAGNETAR_POLE: &[u8] = include_bytes!("../assets/pixellab/magnetar_pole.png");
+pub const ASSET_PL_MAGNETAR_POLE_DAMAGED: &[u8] =
+    include_bytes!("../assets/pixellab/magnetar_pole_damaged.png");
+pub const ASSET_PL_MAGNETAR_POLE_IDLE: [&[u8]; 9] = [
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/0.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/1.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/2.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/3.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/4.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/5.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/6.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/7.png"),
+    include_bytes!("../assets/pixellab/magnetar_pole_idle/8.png"),
+];
+pub const MAGNETAR_IDLE_FPS: f32 = 9.0;
+/// The pole's art is DIAGONAL, its glowing tip top-right: its aim is -45
+/// degrees.
+pub const MAGNETAR_POLE_ART_DEG: f32 = -45.0;
+
+pub const MAGNETAR_POLES: usize = 2;
+/// Three a pole: its damaged art shows after the second.
+pub const MAGNETAR_POLE_HP: i32 = 3;
+pub const MAGNETAR_CORE_HP: i32 = 12;
+pub const MAGNETAR_CORE_SIZE: f32 = 1300.0;
+pub const MAGNETAR_POLE_SIZE: f32 = 900.0;
+/// Pole centre to core centre.
+pub const MAGNETAR_POLE_DIST: f32 = 1300.0;
+
+/// The clock: BEAMS (the poles sweep), a field PULSE with its count-in
+/// (pull and push alternate), then a STARQUAKE — the window — and round.
+pub const MAGNETAR_BEAM_CYCLES: u8 = 2;
+pub const MAGNETAR_PULSE_TELEGRAPH: u32 = 70;
+pub const MAGNETAR_PULSE_TICKS: u32 = 150;
+pub const MAGNETAR_QUAKE_TICKS: u32 = 330;
+/// One beam cycle: dark and turning, charging (the telegraph, clearing
+/// before it fires), then live and sweeping slowly. Turn rates in rad/tick.
+pub const MAGNETAR_BEAM_OFF_TICKS: u32 = 110;
+pub const MAGNETAR_BEAM_OFF_TICKS_LONE: u32 = 70;
+pub const MAGNETAR_BEAM_CHARGE_TICKS: u32 = 70;
+pub const MAGNETAR_TELEGRAPH_CLEAR: u32 = 10;
+pub const MAGNETAR_BEAM_LIVE_TICKS: u32 = 60;
+pub const MAGNETAR_SPIN_OFF: f32 = 0.010;
+pub const MAGNETAR_SPIN_CHARGE: f32 = 0.004;
+pub const MAGNETAR_SPIN_LIVE: f32 = 0.0035;
+pub const MAGNETAR_SPIN_LIVE_LONE: f32 = 0.005;
+pub const MAGNETAR_SPIN_PULSE: f32 = 0.006;
+pub const MAGNETAR_BEAM_LEN: f32 = 7000.0;
+pub const MAGNETAR_CORE_BEAM_LEN: f32 = 3400.0;
+/// Half-width of what a beam hurts, before the player's radius. The beam's
+/// sprite is this / 0.15 high: its solid core is the middle 30%.
+pub const MAGNETAR_BEAM_HALF: f32 = 80.0;
+pub const MAGNETAR_BEAM_KICK: f32 = 28.0;
+/// The field, px/tick^2 at the core falling to nothing at the reach: the
+/// pull drags the unroped in, the push throws them out.
+pub const MAGNETAR_PULL_ACCEL: f32 = 0.12;
+pub const MAGNETAR_PUSH_ACCEL: f32 = 0.14;
+pub const MAGNETAR_FIELD_REACH: f32 = 5200.0;
+/// The field quad around the core.
+pub const MAGNETAR_FIELD_VISUAL: f32 = 4200.0;
+pub const MAGNETAR_PART_INVULN_TICKS: u32 = 60;
+/// Its cyan (sRGB): name, field.
+pub const MAGNETAR_SRGB: (u8, u8, u8) = (120, 200, 255);
+/// Markers (linear): the house vulnerable gold; a pale VIOLET shell rather
+/// than the house blue, which would vanish on a blue boss; the house wind-up
+/// red. The beam itself is cyan-white.
+pub const MAGNETAR_MARKER_VULNERABLE_RGB: (f32, f32, f32) = (1.0, 0.87, 0.28);
+pub const MAGNETAR_MARKER_SHIELDED_RGB: (f32, f32, f32) = (0.72, 0.58, 1.0);
+pub const MAGNETAR_MARKER_WINDUP_RGB: (f32, f32, f32) = (1.0, 0.30, 0.16);
+pub const MAGNETAR_BEAM_RGB: (f32, f32, f32) = (0.35, 0.85, 1.0);
+pub const MAGNETAR_CLOSED_SHELL: f32 = 0.5;
 
 // ── Conductor boss (rhythm / Resonance) ─────────────────────────────────────
 //
@@ -2805,6 +3170,26 @@ pub const CONDUCTOR_BEAT_NODE_SCALE: f32 = 5.2;
 /// reads as the cue fighting the boss for the same pixels. Pushed outward, the
 /// silhouette stays clear and the marker still surrounds it.
 pub const STATE_MARKER_SCALE: f32 = 1.85;
+/// How long a state's opening beat lasts (the flash as a weak point opens,
+/// the power-on sweep as a shield rises).
+pub const STATE_OPEN_TICKS: u32 = 30;
+/// A struck part flashes white this long, this strongly.
+pub const HIT_FLASH_TICKS: u32 = 6;
+/// Boss parts are SOLID. How much of the player's inward speed survives a
+/// bounce, and the least they leave with, so a grazing touch cannot stick.
+pub const BOSS_PART_RESTITUTION: f32 = 0.55;
+pub const BOSS_PART_MIN_BOUNCE: f32 = 16.0;
+/// A LANDED hit rebounds harder than a touch: the hit has to be felt.
+pub const HIT_REBOUND_SPEED: f32 = 30.0;
+/// Hit-stop: frames the struck part shakes and the player hangs at the
+/// contact point. ~83 ms at 60 fps, inside the 45-140 ms range action
+/// games use; longer starts to read as lag.
+pub const HITSTOP_TICKS: u32 = 5;
+/// How far the struck part shakes during hit-stop, and the camera kick.
+pub const HITSTOP_JITTER: f32 = 14.0;
+pub const HIT_SHAKE_INTENSITY: f32 = 16.0;
+pub const HIT_SHAKE_SECS: f32 = 0.16;
+pub const HIT_FLASH_ALPHA: u8 = 215;
 
 /// A SHIELDED marker is drawn tight to the part instead, not ringed around it.
 ///

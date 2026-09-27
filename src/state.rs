@@ -426,10 +426,61 @@ pub struct State {
     /// Flare Titan: remaining ticks of the post-flare weakpoint window (core
     /// vents; the only window the boss can be hurt, and only with Solar Charge).
     pub boss_flare_window_ticks: u32,
-    /// Gravity Weaver: countdown to the next world-flip gravity inversion.
-    pub boss_gravity_flip_ticks: u32,
-    /// Magnetar: remaining ticks of the active gravity-pull window.
-    pub boss_pull_ticks: u32,
+    /// Gravity Weaver: countdown to the next inversion; the telegraph runs
+    /// over its last `WEAVER_FLIP_TELEGRAPH` ticks.
+    pub weaver_flip_ticks: u32,
+    /// Gravity Weaver: ticks every live part stays open after a flip.
+    pub weaver_flip_open: u32,
+    /// Gravity Weaver: the spindles' orbit angle.
+    pub weaver_orbit: f32,
+    /// Gravity Weaver: the world is currently upside down. Mirrors
+    /// `gravity_dir < 0` while the fight owns it; cleared by every exit.
+    pub weaver_inverted: bool,
+    /// Gravity Weaver: flips so far this fight (telemetry).
+    pub weaver_flips: u32,
+    /// Gravity Weaver gauntlet: 0 off, 1 lining up, 2.. shooting (shot
+    /// `weaver_gauntlet - 2`), `2 + WEAVER_GAUNTLET_SHOTS` drifting back.
+    pub weaver_gauntlet: u8,
+    pub weaver_gauntlet_ticks: u32,
+    /// Which gauntlets have run: bit 0 after the first pair, bit 1 at the
+    /// last spindle. Each runs once.
+    pub weaver_gauntlet_done: u8,
+    /// The two posts' spindles (the same index twice when one is left).
+    pub weaver_gauntlet_parts: [usize; 2],
+    /// Height the posts were set at (the player's, when it began).
+    pub weaver_gauntlet_y: f32,
+    /// The current shooter has fired (and flipped) this shot.
+    pub weaver_gauntlet_fired: bool,
+    /// Flare Titan: its clock — 0 calm, 1 kindle, 2 flare, 3 vent — and the
+    /// ticks left in that phase.
+    pub titan_clock: u8,
+    pub titan_clock_ticks: u32,
+    /// Flare Titan: the vents' orbit angle.
+    pub titan_orbit: f32,
+    /// Flare Titan: flares so far this fight (telemetry).
+    pub titan_flares: u32,
+    /// Flare Titan: the player has taken Solar Charge from the current flare.
+    pub titan_charged: bool,
+    /// Flare Titan: ticks to the next heart an unsheltered player loses in
+    /// the flare.
+    pub titan_burn_timer: u32,
+    /// Magnetar: its clock — 0 beams, 1 pulse count-in, 2 pulse, 3 starquake
+    /// — and the ticks left in that phase.
+    pub magnetar_clock: u8,
+    pub magnetar_clock_ticks: u32,
+    /// Magnetar: the beams' own cycle inside the beam phase — 0 dark, 1
+    /// charging, 2 live — its ticks left, and cycles run this phase.
+    pub magnetar_beam: u8,
+    pub magnetar_beam_ticks: u32,
+    pub magnetar_beam_cycles: u8,
+    /// Magnetar: which beams have already struck this live phase (bits).
+    pub magnetar_beam_hit: u8,
+    /// Magnetar: the poles' axis angle (radians) and which way it turns.
+    pub magnetar_angle: f32,
+    pub magnetar_spin: f32,
+    /// Magnetar: the next pulse pulls (else it pushes); pulses so far.
+    pub magnetar_pull_next: bool,
+    pub magnetar_pulses: u32,
     /// Conductor: frames to the next beat of the bar.
     pub boss_beat_ticks: u32,
     /// Conductor: frames per beat (BPM-derived).
@@ -630,6 +681,12 @@ pub struct State {
     /// beat feedback: both are short-lived effects at a world position, and a
     /// second pool would be the same code with a different name.
     pub impact_live: Vec<(String, u32, f32, (f32, f32, f32), u32)>,
+    /// Hit-stop after a landed hit: frames left, where the player hangs,
+    /// the rebound they leave with, and the part that shakes meanwhile.
+    pub hitstop_ticks: u32,
+    pub hitstop_pos: (f32, f32),
+    pub hitstop_vel: (f32, f32),
+    pub hitstop_target: String,
     pub impact_free: Vec<String>,
     /// Which attack is running: 0 none, 1 bar line, 2 sustain, 3 crescendo.
     pub conductor_attack: u8,
@@ -838,6 +895,19 @@ impl State {
     ///
     /// Reading it through here means the two cannot be believed separately.
     /// Pair it with `retire_buff` for the write side.
+    /// Above this the player has "fallen off the top" while gravity is
+    /// inverted. Outside an arena a rift inverts gravity with the ground at
+    /// the bottom of the screen, so the old fixed -150 stands; in an arena
+    /// the play area reaches thousands of pixels up, and the same margin
+    /// the floor has under the bottom row of nodes goes above the top row.
+    pub fn fall_ceiling_y(&self) -> f32 {
+        if self.boss_active {
+            crate::constants::BOSS_ARENA_NODE_Y_BOT - crate::constants::WEAVER_CEILING_MARGIN
+        } else {
+            -150.0
+        }
+    }
+
     pub fn buff_active(&self) -> bool {
         buff_is_active(self.player_buff, self.buff_timer)
     }

@@ -237,6 +237,61 @@ written. Quartz: `obj.set_effect(effect, colour, size)`,
 - `fullscreen_effect_cost` was hand-packing the old beat-field bit and would
   have silently measured nothing; now uses the typed API.
 
+## 6e. Playtest round 2 (2026-09-26, build J4)
+
+- Weaver spindle window 240 -> 330 ticks (5.5 s) on the player's read.
+- Telegraphs: `Effect::DangerZone` (id 15) — a ring closing onto the strike
+  disc as the wind-up runs, hazard dashes, crosshair, flash on impact; the
+  Colossus hand/torso landing zones use it (drawn 1.6x the strike so the
+  ring has room). `StrikeLane` gained crawling hazard stripes on the unfilled
+  part, edge rails and a tightening end bracket. Both rendered headless.
+- Colossus hand: the forearm cut-off is now a rounded iron cuff with a
+  thruster opening (inpainted onto the original, see SOURCES.md), so the
+  plume has a nozzle. Nozzle at -0.45 of the part, `COLOSSUS_PLUMES` -0.44.
+- Decided: NO gravity wells on the Weaver — the Colossus head has one and
+  the Magnetar IS the pull boss; the Weaver owns inversion.
+- Art still worth re-rolling: Serpent segment, Devourer bolt; an idle loop
+  for the Colossus; the Colossus well -> GravityLens.
+
+## 6d. Playtest round 1 fixes (2026-09-26, build J3)
+
+- Weaver spindle window 110 -> 240 ticks: at 110 the throw's own knock-back
+  meant a spindle was never reachable inside its window.
+- Sun Devourer: the top barrier (`BOSS_BARRIER_Y`) and the fixed-position
+  `boss_boundary_*` frame removed — both were for the sun-line finisher
+  that no longer exists. Generators 3 -> 5, zigzagged in height.
+  `DEVOURER_GEN_CHECK` walks all five.
+- Shielded marker redesigned: hex-cell energy shell with a fresnel rim,
+  bright lattice lines, cells lighting in a wave, sparse flicker, slow
+  spin. Colossus and Weaver both use it.
+- Arena walls are now `Effect::EnergyWall` (id 14): scrolling hex field,
+  bright face exactly where the player stops (objects sit outside the
+  bounce line by half the field; the left wall is turned round).
+
+## 6c. The Gravity Weaver — BUILT (2026-09-26), awaiting playtest
+
+Multi-part, slot 5 (`boss/gravity_weaver.rs`). Loom + 4 orbiting spindles,
+PixelLab art with damaged states and idle loops (`assets/pixellab/weaver_*`,
+provenance in SOURCES.md).
+- SHUTTLE: a spindle draws a strike lane through the player, throws a
+  gravity thread (EnergyTether) across the arena, then is open while the
+  thread winds back in (snap). One at a time.
+- INVERSION: on a clock the spindles draw in, a GravityLens (new effect,
+  the first on the id scheme) opens over the loom with a 3-beat count-in,
+  and `gravity_dir` flips — the player falls UP. Every live part is open
+  for 170 ticks after a flip. Faster once only the loom is left.
+- Gating: spindles 0,1 live; 2,3 after; loom last. 4x5 + 14 = 34 hits.
+- The inverted fall rule: `State::fall_ceiling_y` — the old
+  `gravity_dir < 0 && py < -150` was every point in the arena. Gravity is
+  restored on victory, on a fall reset and on death.
+- Proof: `WEAVER_CHECK=1 headless --boss-kind weaver --boss-stasis-down
+  --frames 9000 --episodes 1` walks hits -> damaged art -> pair gating ->
+  flips -> loom exposed -> win (bossKill=true, 0 panics), then a second
+  fight starts clean. Unscripted bot: identical hearts/frames to the
+  Colossus baseline (the stasis-down "fall" is the known harness artefact).
+- Tune after play: thread width/kick, flip interval, orbit radius, whether
+  the post-flip open window is too generous.
+
 ## 6b. Sun Devourer generators — DONE (art + code)
 
 Two designs, `DEVOURER_GENERATOR_DESIGN` = Floating (Pylon available):

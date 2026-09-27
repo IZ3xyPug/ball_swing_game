@@ -22,20 +22,35 @@ pub(crate) fn tick_arena_walls(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let wall_h = bottom - top;
     let cy = (top + bottom) * 0.5;
     if active {
-        let half = ARENA_WALL_THICKNESS * 0.5;
+        // The field is drawn `ARENA_WALL_VISUAL_W` wide with its bright face
+        // (the effect's local x = 0) where the player actually stops, so the
+        // objects sit OUTSIDE the bounce line by half the field. The left
+        // wall is turned round so its face is its arena side. The objects are
+        // purely visual — the bounce uses x1 / x2.
+        let w = ARENA_WALL_VISUAL_W;
+        let (r, g, b) = ARENA_WALL_SRGB;
+        let left_cx = x1 + PLAYER_R - w * 0.5;
+        let right_cx = x2 - PLAYER_R + w * 0.5;
         if let Some(obj) = c.get_game_object_mut("arena_wall_l") {
             obj.size = (ARENA_WALL_THICKNESS, wall_h);
-            obj.position = (x1 - half, cy - wall_h * 0.5);
+            obj.position = (left_cx - ARENA_WALL_THICKNESS * 0.5, cy - wall_h * 0.5);
+            obj.rotation = 180.0;
             obj.visible = true;
         }
         if let Some(obj) = c.get_game_object_mut("arena_wall_r") {
             obj.size = (ARENA_WALL_THICKNESS, wall_h);
-            obj.position = (x2 - half, cy - wall_h * 0.5);
+            obj.position = (right_cx - ARENA_WALL_THICKNESS * 0.5, cy - wall_h * 0.5);
+            obj.rotation = 0.0;
             obj.visible = true;
+        }
+        for name in ["arena_wall_l", "arena_wall_r"] {
+            c.attach_effect(name, Effect::EnergyWall { intensity: 0.9 },
+                            EffectColor::srgb8(r, g, b), (w, wall_h));
         }
         bounce_player_off_walls(c, st, x1, x2);
     } else {
         for name in ["arena_wall_l", "arena_wall_r"] {
+            c.clear_effect(name);
             if let Some(obj) = c.get_game_object_mut(name) {
                 obj.visible = false;
             }
@@ -582,7 +597,7 @@ pub(crate) fn activate_arena_tether_node(c: &mut Canvas, s: &mut State, id: Stri
         obj.momentum = (0.0, 0.0);
         obj.rotation_momentum = 0.0;
         obj.collision_mode = CollisionMode::NonPlatform;
-        obj.tags.retain(|t| t != "arena_node" && t != BUFF_HOOK_TAG);
+        obj.tags.retain(|t| t != "arena_node" && t != BUFF_HOOK_TAG && t != SHIELD_HOOK_TAG);
         obj.tags.push("arena_node".into());
         if !obj.tags.iter().any(|t| t == "hook") {
             obj.tags.push("hook".into());
@@ -843,6 +858,12 @@ pub(crate) fn tick_boss_stasis(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 pub fn reset_boss_after_fall(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let mut s = st.lock().unwrap();
+        // A fall while the Weaver had the world upside down: the stasis orbit
+        // and everything after it assume gravity points down.
+        weaver_restore_gravity(c, &mut s);
+        // A fall mid-flare: the wash and the banner must not hang over the
+        // stasis orbit.
+        titan_end_flare(&mut s);
         s.boss_spawned = false;
         s.boss_stasis_active = true;
         // Clear any active darkness so the stasis orbit is visible.
@@ -854,6 +875,11 @@ pub fn reset_boss_after_fall(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         obj.position = (-6000.0, -6000.0);
         obj.momentum = (0.0, 0.0);
     }
+    // Arcs, landing zones, the corona, beams and the field would otherwise
+    // hang frozen over the stasis orbit; the parts reappear when the fight
+    // resumes.
+    hide_titan(c);
+    hide_magnetar(c);
     if c.has_lighting() {
         c.set_ambient(Color(255, 255, 255, 255), 1.0);
     }
@@ -962,6 +988,14 @@ pub(crate) fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // screen would have nothing to clean it up. Same lesson as the darkness
     // post-pass two lines down.
     hide_conductor(c);
+    hide_weaver(c);
+    hide_titan(c);
+    hide_magnetar(c);
+    {
+        let mut s = st.lock().unwrap();
+        weaver_restore_gravity(c, &mut s);
+        titan_end_flare(&mut s);
+    }
     crate::scenes::game::eclipse::end_night_mode(c);
     crate::scenes::game::eclipse::release_nodes_from_dark(c);
     if c.has_lighting() {
@@ -991,9 +1025,6 @@ pub(crate) fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         obj.visible = false;
         obj.position = (-6000.0, -6000.0);
         obj.momentum = (0.0, 0.0);
-    }
-    if let Some(obj) = c.get_game_object_mut("boss_barrier") {
-        obj.visible = false;
     }
     if c.has_lighting() {
         c.set_ambient(Color(255, 255, 255, 255), 1.0);

@@ -13,9 +13,11 @@ use super::*;
 /// Position the weakpoint marker rings on the boss body, visible only while the
 /// boss is up, so players can see where to land buffed hits.
 pub(crate) fn tick_boss_weakpoints(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let active = {
+    let (active, dome_up) = {
         let s = st.lock().unwrap();
-        s.boss_active && s.boss_spawned && s.boss_hp > 0
+        (s.boss_active && s.boss_spawned && s.boss_hp > 0,
+         s.boss_barrier_up
+             && !matches!(c.get_var("debug_boss_forcefield_down"), Some(Value::Bool(true))))
     };
     let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((-6000.0, -6000.0));
     let bcx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
@@ -35,11 +37,17 @@ pub(crate) fn tick_boss_weakpoints(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         // Outside the borrow: the effect helper needs the canvas too.
+        //
+        // Shielded while the dome is up: a weakpoint that says "hit me" while
+        // the boss cannot be hurt teaches the player to ignore the marker.
         if place {
             let d = BOSS_WEAKPOINT_R * 2.0;
-            crate::scenes::game::fx::attach_state_marker(
-                c, &id, (d, d), DEVOURER_MARKER_VULNERABLE_RGB, 1.0,
-                MarkerMode::Vulnerable);
+            let (rgb, mode) = if dome_up {
+                (MARKER_SHIELDED_RGB, MarkerMode::Shielded)
+            } else {
+                (DEVOURER_MARKER_VULNERABLE_RGB, MarkerMode::Vulnerable)
+            };
+            crate::scenes::game::fx::attach_circle_marker(c, &id, (d, d), rgb, 1.0, mode);
         } else {
             c.clear_effect(&id);
         }
@@ -102,7 +110,11 @@ pub(crate) fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
-/// Position the barrier and generator nodes across the arena.
+/// Position the generator nodes across the arena.
+///
+/// There used to be a physical barrier across the top of the arena as well
+/// (`BOSS_BARRIER_Y`), for the sun-line finisher this fight no longer has;
+/// `boss_barrier_up` now only means "the dome is up".
 pub(crate) fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (zx1, zx2) = arena_bounds(c);
     let zone_w = zx2 - zx1;
@@ -126,9 +138,11 @@ pub(crate) fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>
     }
     for i in 0..BOSS_GENERATOR_COUNT {
         let id = format!("boss_gen_{i}");
+        // Spread across the arena and ZIGZAGGED in height, so some are a
+        // climb and some a drop, and no two neighbours share a row.
         let frac = i as f32 / (BOSS_GENERATOR_COUNT - 1).max(1) as f32;
-        let gx = zx1 + zone_w * (0.15 + frac * 0.7);
-        let gy = -700.0 - frac * 2200.0;
+        let gx = zx1 + zone_w * (0.12 + frac * 0.76);
+        let gy = -800.0 - (i % 2) as f32 * 1900.0 - frac * 500.0;
         {
             let mut s = st.lock().unwrap();
             if i < s.boss_generators.len() {
@@ -141,10 +155,6 @@ pub(crate) fn spawn_generators_and_barrier(c: &mut Canvas, st: &Arc<Mutex<State>
             obj.momentum = (0.0, 0.0);
             obj.rotation_momentum = 0.0;
         }
-    }
-    if let Some(obj) = c.get_game_object_mut("boss_barrier") {
-        obj.position = (zx1, BOSS_BARRIER_Y);
-        obj.visible = true;
     }
 }
 
@@ -162,12 +172,6 @@ pub(crate) fn tick_boss_forcefield(c: &mut Canvas, st: &Arc<Mutex<State>>) {
          s.boss_generator_snap.iter().copied().max().unwrap_or(0))
     };
     let fighting = active && hp > 0;
-
-    for id in ["boss_boundary_b", "boss_boundary_t", "boss_boundary_l", "boss_boundary_r"] {
-        if let Some(obj) = c.get_game_object_mut(id) {
-            obj.visible = fighting;
-        }
-    }
 
     let boss_center = c.get_game_object("boss")
         .map(|o| (o.position.0 + DEVOURER_BODY_SIZE * 0.5, o.position.1 + DEVOURER_BODY_SIZE * 0.5));
@@ -221,8 +225,14 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let bcx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
     let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
 
-    let gens: Vec<String> = st.lock().unwrap().boss_generators.clone();
+    let (gens, flashing): (Vec<String>, Vec<i32>) = {
+        let s = st.lock().unwrap();
+        (s.boss_generators.clone(), s.boss_generator_flash.clone())
+    };
     let mut damaged: Vec<usize> = Vec::new();
+    // Generators are SOLID to the player; a buffed touch is a hit. Resolved
+    // after the loop (the bounce needs the canvas mutably).
+    let mut touched: Vec<(usize, (f32, f32), bool)> = Vec::new();
     for (i, id) in gens.iter().enumerate() {
         let Some(obj) = c.get_game_object(id) else { continue; };
         if !obj.visible {
@@ -230,12 +240,17 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
         let gx = obj.position.0 + obj.size.0 * 0.5;
         let gy = obj.position.1 + obj.size.1 * 0.5;
-        if buffed {
+        {
             let dx = px - gx;
             let dy = py - gy;
             let r = PLAYER_R + BOSS_GENERATOR_R;
             if dx * dx + dy * dy < r * r {
-                damaged.push(i);
+                // One hit per touch: not again while its hit flash runs.
+                let hit = buffed && flashing.get(i).copied().unwrap_or(0) == 0;
+                touched.push((i, (gx, gy), hit));
+                if hit {
+                    damaged.push(i);
+                }
                 continue;
             }
         }
@@ -267,7 +282,7 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     {
         let mut s = st.lock().unwrap();
-        for i in damaged {
+        for &i in &damaged {
             if i < s.boss_generator_hp.len() {
                 s.boss_generator_hp[i] -= 1;
                 // Every hit registers on the generator itself...
@@ -279,6 +294,29 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     if let Some(sn) = s.boss_generator_snap.get_mut(i) {
                         *sn = DEVOURER_TETHER_SNAP_TICKS;
                     }
+                }
+            }
+        }
+    }
+    // The player off each generator they touched; the struck ones felt.
+    for (i, at, hit) in touched {
+        let Some(id) = gens.get(i) else { continue };
+        if let Some(normal) = crate::scenes::game::boss::common::bounce_off_part(
+            c, st, at, BOSS_GENERATOR_R)
+        {
+            if hit {
+                let surface = (at.0 + normal.0 * BOSS_GENERATOR_R, at.1 + normal.1 * BOSS_GENERATOR_R);
+                crate::scenes::game::boss::common::land_hit(
+                    c, st, id, surface, BOSS_GENERATOR_R * 2.0, DEVOURER_TETHER_RGB, normal);
+            }
+        }
+    }
+    // Generators struck by the boss's own crash flash too.
+    {
+        for &i in &damaged {
+            if let Some(id) = gens.get(i) {
+                if !id.is_empty() {
+                    crate::scenes::game::fx::flash_hit(c, id);
                 }
             }
         }
@@ -335,10 +373,6 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let mut s = st.lock().unwrap();
         s.boss_barrier_up = false;
         s.boss_final_phase = true;
-        drop(s);
-        if let Some(obj) = c.get_game_object_mut("boss_barrier") {
-            obj.visible = false;
-        }
     }
 }
 
@@ -412,7 +446,7 @@ pub(crate) fn tick_generator_tethers(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         match shown {
             Some(size) if alive => {
                 c.attach_effect(
-                    &tether, Effect::EnergyTether { intensity: 0.95, snap: None },
+                    &tether, Effect::EnergyTether { intensity: 0.95, snap: None, hot: false },
                     crate::scenes::game::fx::lin(DEVOURER_TETHER_RGB), size);
             }
             Some(size) => {
@@ -421,7 +455,7 @@ pub(crate) fn tick_generator_tethers(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
                 let t = 1.0 - snapping as f32 / DEVOURER_TETHER_SNAP_TICKS as f32;
                 c.attach_effect(
-                    &tether, Effect::EnergyTether { intensity: 1.0, snap: Some(t) },
+                    &tether, Effect::EnergyTether { intensity: 1.0, snap: Some(t), hot: false },
                     crate::scenes::game::fx::lin(DEVOURER_TETHER_RGB), size);
             }
             None => c.clear_effect(&tether),
@@ -450,102 +484,115 @@ pub(crate) fn tick_generator_tethers(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 }
 
-/// While the barrier is up, clamp the player (and boss) from crossing into the
-/// sun side of the arena.
-pub(crate) fn tick_barrier(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let mut s = st.lock().unwrap();
-    if !s.boss_active || !s.boss_barrier_up {
-        return;
-    }
-    if s.py < BOSS_BARRIER_Y {
-        s.py = BOSS_BARRIER_Y;
-        if s.vy < 0.0 {
-            s.vy = 0.0;
-        }
-        drop(s);
-        if let Some(obj) = c.get_game_object_mut("player") {
-            obj.position.1 = BOSS_BARRIER_Y - PLAYER_R;
-            if obj.momentum.1 < 0.0 {
-                obj.momentum.1 = 0.0;
-            }
-        }
-        return;
-    }
-    // Keep the boss on the safe side of the barrier too.
-    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((0.0, 0.0));
-    let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
-    if bcy < BOSS_BARRIER_Y {
-        drop(s);
-        if let Some(obj) = c.get_game_object_mut("boss") {
-            obj.position.1 = BOSS_BARRIER_Y - DEVOURER_BODY_SIZE * 0.5;
-        }
-    }
-}
-
 /// Final phase: the boss periodically lunges at where the player *was* (a
 /// telegraphed bait), which is a dodge test and a window to counter-attack.
 ///
 /// The lunge used to KILL the boss outright if it carried past the sun line —
 /// the "bait-and-bail" finisher from the original design. That is gone: the sun
 /// is no longer part of this fight, so the only way to end it is to bring the
-/// barrier down by destroying both generators and then damage the boss with a
+/// dome down by destroying every generator and then damage the boss with a
 /// buffed weakpoint hit. The lunge is now purely an attack the player dodges.
 pub(crate) fn tick_desperation(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (final_phase, active, spawned, hp) = {
         let s = st.lock().unwrap();
         (s.boss_final_phase, s.boss_active, s.boss_spawned, s.boss_hp)
     };
-    if !final_phase || !active || !spawned || hp <= 0 {
-        return;
+    // The telegraph's visuals are DECIDED on the way through and applied once
+    // at the end, on every path: an attached effect left up by an early return
+    // outlives the fight (the shelter-dome leak).
+    let mut lane: Option<((f32, f32), (f32, f32), f32)> = None;
+    let mut windup: Option<f32> = None;
+    let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((0.0, 0.0));
+    let bcx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
+    let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
+
+    if final_phase && active && spawned && hp > 0 {
+        let mut s = st.lock().unwrap();
+        if s.boss_lunge_telegraph > 0 {
+            s.boss_lunge_telegraph -= 1;
+            let tel = s.boss_lunge_telegraph;
+            // The bait is taken early and SHOWN: a lane from the body to
+            // where the player was, filling as the lunge nears, gone just
+            // before the body moves. It used to be locked on the frame the
+            // lunge began, with no warning at all.
+            let check = std::env::var("DEVOURER_GEN_CHECK").is_ok();
+            if tel == DEVOURER_LUNGE_LOCK_TICKS {
+                s.boss_lunge_target = (s.px, s.py);
+                if check { eprintln!("gen-check: lunge bait locked, lane up"); }
+            }
+            if tel == 0 {
+                s.boss_lunge_ticks = 90;
+                if check { eprintln!("gen-check: lunge launched, telegraph cleared"); }
+            }
+            if tel < DEVOURER_LUNGE_LOCK_TICKS && tel > DEVOURER_LUNGE_CLEAR_TICKS {
+                let span = (DEVOURER_LUNGE_LOCK_TICKS - DEVOURER_LUNGE_CLEAR_TICKS) as f32;
+                let progress = 1.0 - (tel - DEVOURER_LUNGE_CLEAR_TICKS) as f32 / span;
+                lane = Some(((bcx, bcy), s.boss_lunge_target, progress));
+            }
+            if tel < DEVOURER_LUNGE_WINDUP_TICKS {
+                windup = Some(1.0 - tel as f32 / DEVOURER_LUNGE_WINDUP_TICKS as f32);
+            }
+        } else if s.boss_lunge_ticks > 0 {
+            s.boss_lunge_ticks -= 1;
+            let (tx, ty) = s.boss_lunge_target;
+            let dx = tx - bcx;
+            let dy = ty - bcy;
+            let d = (dx * dx + dy * dy).sqrt().max(1.0);
+            let spd = 42.0;
+            let nvx = dx / d * spd;
+            let nvy = dy / d * spd;
+            s.boss_vx = nvx;
+            s.boss_vy = nvy;
+            let done = s.boss_lunge_ticks == 0;
+            if done {
+                s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH;
+            }
+            drop(s);
+            // NOTE: no sun-line kill here any more. The boss overshooting the
+            // top of the arena used to end the fight instantly, which
+            // short-circuited the generators-then-weakpoint loop that is now
+            // the whole fight. Clamp instead, so a lunge cannot carry it out
+            // of the arena.
+            let nx = bcx + nvx;
+            let ny = (bcy + nvy).max(BOSS_ARENA_TOP_Y);
+            if let Some(obj) = c.get_game_object_mut("boss") {
+                obj.position = (nx - DEVOURER_BODY_SIZE * 0.5, ny - DEVOURER_BODY_SIZE * 0.5);
+            }
+        } else {
+            s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH.max(s.boss_lunge_telegraph);
+        }
     }
 
-    let mut s = st.lock().unwrap();
-    if s.boss_lunge_telegraph > 0 {
-        s.boss_lunge_telegraph -= 1;
-        if s.boss_lunge_telegraph == 0 {
-            // Lock target to the player's current position (the bait).
-            s.boss_lunge_target = (s.px, s.py);
-            s.boss_lunge_ticks = 90;
+    match lane {
+        Some((from, to, progress)) => {
+            let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+            let len = (dx * dx + dy * dy).sqrt().max(1.0);
+            let w = DEVOURER_LUNGE_LANE_W;
+            let mid = ((from.0 + to.0) * 0.5, (from.1 + to.1) * 0.5);
+            if let Some(o) = c.get_game_object_mut("devourer_lunge_lane") {
+                o.size = (len, w);
+                o.rotation = dy.atan2(dx).to_degrees();
+                o.position = (mid.0 - len * 0.5, mid.1 - w * 0.5);
+                o.visible = true;
+            }
+            c.attach_effect("devourer_lunge_lane", Effect::StrikeLane { intensity: 1.0, progress },
+                            crate::scenes::game::fx::lin(MARKER_WINDUP_RGB), (len, w));
         }
-        drop(s);
-        return;
+        None => {
+            c.clear_effect("devourer_lunge_lane");
+            if let Some(o) = c.get_game_object_mut("devourer_lunge_lane") {
+                o.visible = false;
+            }
+        }
     }
-    if s.boss_lunge_ticks > 0 {
-        s.boss_lunge_ticks -= 1;
-        let (tx, ty) = s.boss_lunge_target;
-        let boss_pos = c.get_game_object("boss").map(|o| o.position).unwrap_or((0.0, 0.0));
-        let bcx = boss_pos.0 + DEVOURER_BODY_SIZE * 0.5;
-        let bcy = boss_pos.1 + DEVOURER_BODY_SIZE * 0.5;
-        let dx = tx - bcx;
-        let dy = ty - bcy;
-        let d = (dx * dx + dy * dy).sqrt().max(1.0);
-        let spd = 42.0;
-        let nvx = dx / d * spd;
-        let nvy = dy / d * spd;
-        let nx = bcx + nvx;
-        let ny = bcy + nvy;
-        s.boss_vx = nvx;
-        s.boss_vy = nvy;
-        let done = s.boss_lunge_ticks == 0;
-        drop(s);
-        if let Some(obj) = c.get_game_object_mut("boss") {
-            obj.position = (nx - DEVOURER_BODY_SIZE * 0.5, ny - DEVOURER_BODY_SIZE * 0.5);
-        }
-        // NOTE: no sun-line kill here any more. The boss overshooting the top
-        // of the arena used to end the fight instantly, which short-circuited
-        // the generators-then-weakpoint loop that is now the whole fight.
-        // Clamp instead, so a lunge cannot carry it out of the arena.
-        let ny = ny.max(BOSS_ARENA_TOP_Y);
-        if let Some(obj) = c.get_game_object_mut("boss") {
-            obj.position.1 = ny - DEVOURER_BODY_SIZE * 0.5;
-        }
-        if done {
-            let mut s = st.lock().unwrap();
-            s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH;
-        }
-        return;
+    match windup {
+        // Rings collapsing inward on the body: "something is coming" in the
+        // house vocabulary, rising as the lunge nears.
+        Some(k) => crate::scenes::game::fx::attach_circle_marker(
+            c, "boss", (DEVOURER_BODY_SIZE, DEVOURER_BODY_SIZE),
+            MARKER_WINDUP_RGB, 0.55 + 0.45 * k, MarkerMode::WindingUp),
+        None => c.clear_effect("boss"),
     }
-    s.boss_lunge_telegraph = BOSS_LUNGE_TELEGRAPH.max(s.boss_lunge_telegraph);
 }
 
 pub(crate) fn tick_boss_appearance(c: &mut Canvas, st: &Arc<Mutex<State>>) {
@@ -943,10 +990,12 @@ pub(crate) fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>)
         || (!s.boss_generator_hp.is_empty() && s.boss_generator_hp.iter().all(|&hp| hp <= 0));
 
     let mut contact_damage = false;
+    let mut hit_boss = false;
     let (nwx, nwy, did_unhook) = if buffed && near_weakpoint && generators_down {
         // Buffed weakpoint hit with the forcefield down: damage the boss.
         s.boss_hp -= 1;
         s.buff_hit_flash = 20;
+        hit_boss = true;
         (nx * 26.0, ny * 26.0, false)
     } else {
         // Unbuffed contact with the boss body COSTS a heart, it does not merely
@@ -984,6 +1033,13 @@ pub(crate) fn tick_boss_player_hits_boss(c: &mut Canvas, st: &Arc<Mutex<State>>)
     if contact_damage {
         // Applied after the State lock is dropped — `lose_heart` takes it too.
         crate::scenes::game::hearts::lose_heart(c, st);
+    }
+    if hit_boss {
+        // The rebound is the push above; this adds the flash, the shake and
+        // the hit-stop, released along it.
+        let at = (px - nx * PLAYER_R, py - ny * PLAYER_R);
+        crate::scenes::game::boss::common::land_hit(
+            c, st, "boss", at, BOSS_WEAKPOINT_R * 2.5, DEVOURER_MARKER_VULNERABLE_RGB, (nx, ny));
     }
 
     if hp <= 0 {

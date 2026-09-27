@@ -34,14 +34,8 @@ pub fn tick_background(
             obj.visible = true;
             obj.update_image_shape();
         }
-        if let Some(obj) = c.get_game_object_mut("danger_floor") {
-            obj.visible = false;
-        }
     } else {
         // Outside space: bg is resized to aurora gradient each tick.
-        if let Some(obj) = c.get_game_object_mut("danger_floor") {
-            obj.visible = true;
-        }
 
         // Smoothly scale background once player rises above py = 500.
         // Starts at py = 500 (upper area of screen), reaches full effect at py = 500 - 1400 = -900.

@@ -875,7 +875,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 // Large world objects cast shadows during darkness phases.
                 canvas.set_shadow_caster("player", true);
                 canvas.set_shadow_caster("boss", true);
-                canvas.set_shadow_caster("danger_floor", true);
             }
 
             // ── Terrain collision plugin (dynamic outline support) ──────
@@ -1403,6 +1402,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_vy:           0.0, boss_shoot_timer:  crate::constants::BOSS_SHOOT_INTERVAL,
                 boss_bolt_live:    Vec::new(), boss_bolt_free:    boss_bolt_free.clone(),
                 impact_live: Vec::new(), impact_free: impact_free.clone(),
+                hitstop_ticks: 0, hitstop_pos: (0.0, 0.0), hitstop_vel: (0.0, 0.0),
+                hitstop_target: String::new(),
                 boss_asteroids:    boss_asteroid_ids.clone(), hud_last_boss_hp:  -999,
                 boss_dark_cooldown: BOSS_DARK_INTERVAL, boss_dark_ticks: 0,
                 boss_dark_active:   false,
@@ -1412,12 +1413,20 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 boss_lunge_telegraph: BOSS_LUNGE_TELEGRAPH, boss_lunge_ticks: 0,
                 boss_lunge_target:  (0.0, 0.0),
                 boss_flare_window_ticks: 0,
-                boss_gravity_flip_ticks: 0,
-                boss_pull_ticks: 0,
+                magnetar_clock: 0, magnetar_clock_ticks: 0, magnetar_beam: 0,
+                magnetar_beam_ticks: 0, magnetar_beam_cycles: 0, magnetar_beam_hit: 0,
+                magnetar_angle: 0.0, magnetar_spin: 1.0, magnetar_pull_next: true,
+                magnetar_pulses: 0,
                 boss_beat_ticks: 0, boss_beat_interval: 36, boss_resonance: 0,
                 boss_was_hooked: false, boss_release_window: 0,
                 boss_pattern_cooldown: 0,
                 boss_meteor_lock_ticks: 0,
+                weaver_flip_ticks: 0, weaver_flip_open: 0, weaver_orbit: 0.0,
+                weaver_inverted: false, weaver_flips: 0,
+                weaver_gauntlet: 0, weaver_gauntlet_ticks: 0, weaver_gauntlet_done: 0,
+                weaver_gauntlet_parts: [0, 0], weaver_gauntlet_y: 0.0, weaver_gauntlet_fired: false,
+                titan_clock: 0, titan_clock_ticks: 0, titan_orbit: 0.0, titan_flares: 0,
+                titan_charged: false, titan_burn_timer: 0,
                 boss_contact_cooldown: 0,
                 conductor_beat_phase: 0.0,
                 conductor_beat_clock: None,
@@ -1992,13 +2001,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         .camera()
                         .map(|cam| cam.position.0)
                         .unwrap_or(0.0);
-                    let floor_y = {
-                        let s = st.lock().unwrap();
-                        if s.gravity_dir < 0.0 { 0.0 } else { VH - 28.0 }
-                    };
-                    if let Some(obj) = c.get_game_object_mut("danger_floor") {
-                        obj.position = (0.0, floor_y);
-                    }
 
                     // ── Pause entrance animation ─────────────────────────
                     if matches!(
@@ -2686,7 +2688,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     let dead_now = !s.god_mode && (died_to_sun || died_to_oxygen || s.hearts <= 0
                         || (s.gravity_dir > 0.0
                         && s.py > VH + 150.0)
-                        || (s.gravity_dir < 0.0 && s.py < -150.0));
+                        || (s.gravity_dir < 0.0 && s.py < s.fall_ceiling_y()));
                     if dead_now {
                         // ── Falls can be survived with hearts remaining ──
                         let is_fall = !died_to_sun && !died_to_oxygen;

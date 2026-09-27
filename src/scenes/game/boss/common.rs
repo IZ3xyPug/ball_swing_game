@@ -357,3 +357,187 @@ mod impact_tests {
                 "dealt and taken damage are too close in colour ({dist:.2})");
     }
 }
+
+// ── Solid parts and hit feel ────────────────────────────────────────────────
+//
+// A boss part is SOLID: the player cannot pass through it, and touching it
+// throws them back off its surface. And a hit that lands is FELT: the part
+// flashes and shakes, the player hangs at the contact point for a few
+// frames (hit-stop), the camera kicks, and they rebound. Before this, a
+// buffed hit on an open part passed straight through it with a burst at a
+// distance — nothing said "that connected", and nothing stopped the player
+// sailing into a closed part except the heart it cost.
+
+/// Resolve the player against a boss part's collision circle (`r` around
+/// `centre`): pushed out to its surface, inward speed reflected with
+/// `BOSS_PART_RESTITUTION`, at least `BOSS_PART_MIN_BOUNCE` outward, and off
+/// the rope (the rope would pull them straight back in). Returns the
+/// outward normal if they touched this frame.
+pub(crate) fn bounce_off_part(
+    c: &mut Canvas, st: &Arc<Mutex<State>>, centre: (f32, f32), r: f32,
+) -> Option<(f32, f32)> {
+    let (px, py, vx, vy, hooked, holding) = {
+        let s = st.lock().unwrap();
+        (s.px, s.py, s.vx, s.vy, s.hooked, s.hitstop_ticks > 0)
+    };
+    // Hanging in a hit-stop: already resolved, and moving them now would
+    // tug the freeze.
+    if holding {
+        return None;
+    }
+    let reach = r + PLAYER_R;
+    let (dx, dy) = (px - centre.0, py - centre.1);
+    let d2 = dx * dx + dy * dy;
+    if d2 >= reach * reach {
+        return None;
+    }
+    let d = d2.sqrt();
+    // Dead centre (a pinned test, or a part spawning on the player): out
+    // the way they were moving, or up.
+    let n = if d > 0.001 {
+        (dx / d, dy / d)
+    } else {
+        let sp = (vx * vx + vy * vy).sqrt();
+        if sp > 0.001 { (-vx / sp, -vy / sp) } else { (0.0, -1.0) }
+    };
+    let out = (centre.0 + n.0 * (reach + 1.0), centre.1 + n.1 * (reach + 1.0));
+    let vn = vx * n.0 + vy * n.1;
+    let (mut nvx, mut nvy) = (vx, vy);
+    if vn < 0.0 {
+        nvx -= (1.0 + BOSS_PART_RESTITUTION) * vn * n.0;
+        nvy -= (1.0 + BOSS_PART_RESTITUTION) * vn * n.1;
+    }
+    let away = nvx * n.0 + nvy * n.1;
+    if away < BOSS_PART_MIN_BOUNCE {
+        let add = BOSS_PART_MIN_BOUNCE - away;
+        nvx += n.0 * add;
+        nvy += n.1 * add;
+    }
+    {
+        let mut s = st.lock().unwrap();
+        s.px = out.0;
+        s.py = out.1;
+        s.vx = nvx;
+        s.vy = nvy;
+        if hooked {
+            s.hooked = false;
+            s.active_hook = String::new();
+        }
+    }
+    if hooked {
+        c.run(Action::Hide { target: Target::name("rope") });
+    }
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.position = (out.0 - PLAYER_R, out.1 - PLAYER_R);
+        obj.momentum = (nvx, nvy);
+    }
+    // Let the rebound exceed the momentum cap for a moment, or it is
+    // clamped away before it reads.
+    c.set_var("boss_knockback_ticks", Value::I32(10));
+    Some(n)
+}
+
+/// A hit landed on `part_id` at `at`: burst, white flash, camera kick, and a
+/// hit-stop — the part shakes and the player hangs where they are, then
+/// rebounds at no less than `HIT_REBOUND_SPEED` along `normal` (outward
+/// from the part). Call AFTER `bounce_off_part`, so the hang is at the
+/// surface and the rebound starts from the bounce.
+pub(crate) fn land_hit(
+    c: &mut Canvas, st: &Arc<Mutex<State>>, part_id: &str,
+    at: (f32, f32), size: f32, rgb: (f32, f32, f32), normal: (f32, f32),
+) {
+    spawn_impact(c, st, at, size, rgb, false);
+    crate::scenes::game::fx::flash_hit(c, part_id);
+    if let Some(cam) = c.camera_mut() {
+        cam.shake(HIT_SHAKE_INTENSITY, HIT_SHAKE_SECS);
+    }
+    let mut s = st.lock().unwrap();
+    let (mut vx, mut vy) = (s.vx, s.vy);
+    let away = vx * normal.0 + vy * normal.1;
+    if away < HIT_REBOUND_SPEED {
+        vx += normal.0 * (HIT_REBOUND_SPEED - away);
+        vy += normal.1 * (HIT_REBOUND_SPEED - away);
+    }
+    s.hitstop_ticks = HITSTOP_TICKS;
+    s.hitstop_pos = (s.px, s.py);
+    s.hitstop_vel = (vx, vy);
+    s.hitstop_target = part_id.to_owned();
+}
+
+/// Hold the player through a hit-stop, and release the rebound on its last
+/// frame. Run before the fight each tick; true while holding.
+pub(crate) fn tick_hitstop_hold(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    let (ticks, pos, vel) = {
+        let mut s = st.lock().unwrap();
+        if s.hitstop_ticks == 0 {
+            return false;
+        }
+        s.hitstop_ticks -= 1;
+        (s.hitstop_ticks, s.hitstop_pos, s.hitstop_vel)
+    };
+    let (m, p) = if ticks > 0 { ((0.0, 0.0), pos) } else { (vel, pos) };
+    {
+        let mut s = st.lock().unwrap();
+        s.px = p.0;
+        s.py = p.1;
+        s.vx = m.0;
+        s.vy = m.1;
+    }
+    if let Some(obj) = c.get_game_object_mut("player") {
+        obj.position = (p.0 - PLAYER_R, p.1 - PLAYER_R);
+        obj.momentum = m;
+    }
+    if ticks == 0 {
+        c.set_var("boss_knockback_ticks", Value::I32(12));
+    }
+    ticks > 0
+}
+
+/// Shake the struck part during a hit-stop. Run AFTER the fight has placed
+/// its parts this tick, or the placement erases the shake.
+pub(crate) fn tick_hitstop_shake(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let (ticks, target) = {
+        let s = st.lock().unwrap();
+        (s.hitstop_ticks, s.hitstop_target.clone())
+    };
+    if ticks == 0 || target.is_empty() {
+        return;
+    }
+    // Alternating, decaying: a knock, not a wobble.
+    let k = ticks as f32 / HITSTOP_TICKS as f32;
+    let sgn = if ticks % 2 == 0 { 1.0 } else { -1.0 };
+    if let Some(obj) = c.get_game_object_mut(&target) {
+        obj.position.0 += sgn * HITSTOP_JITTER * k;
+        obj.position.1 -= sgn * HITSTOP_JITTER * 0.5 * k;
+    }
+}
+
+#[cfg(test)]
+mod solid_part_tests {
+    /// The bounce maths, extracted: reflect the inward speed, keep a minimum
+    /// outward speed.
+    fn bounce(v: (f32, f32), n: (f32, f32), e: f32, min: f32) -> (f32, f32) {
+        let vn = v.0 * n.0 + v.1 * n.1;
+        let (mut x, mut y) = v;
+        if vn < 0.0 {
+            x -= (1.0 + e) * vn * n.0;
+            y -= (1.0 + e) * vn * n.1;
+        }
+        let away = x * n.0 + y * n.1;
+        if away < min {
+            x += n.0 * (min - away);
+            y += n.1 * (min - away);
+        }
+        (x, y)
+    }
+
+    #[test]
+    fn a_head_on_touch_rebounds_and_a_graze_still_leaves() {
+        // Head-on at 40 into a surface facing +x: back out at 22 (0.55).
+        let (x, _) = bounce((-40.0, 0.0), (1.0, 0.0), 0.55, 16.0);
+        assert!((x - 22.0).abs() < 1e-3, "{x}");
+        // Sliding along the surface: tangent kept, pushed off at the minimum.
+        let (x, y) = bounce((0.0, 30.0), (1.0, 0.0), 0.55, 16.0);
+        assert!((x - 16.0).abs() < 1e-3 && (y - 30.0).abs() < 1e-3, "({x}, {y})");
+    }
+}

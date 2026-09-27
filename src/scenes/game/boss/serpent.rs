@@ -666,11 +666,9 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.rotation = piece.rot;
             obj.position = (piece.pos.0 - half, piece.pos.1 - half);
             obj.visible = true;
-            if piece.open {
-                obj.set_glow(GlowConfig { color: Color(255, 190, 70, 190), width: 30.0 });
-            } else {
-                obj.clear_glow();
-            }
+            // The open state is carried by the shared vulnerable marker below
+            // (the outline burn every boss uses), not by a flat glow.
+            obj.clear_glow();
         }
         // The energised forcefield, attached so it takes the segment's own
         // depth and position — see `Canvas::attach_effect`.
@@ -682,6 +680,12 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 EffectColor::linear(0.45, 1.0, 0.75),
                 (piece.draw * 1.12, piece.draw * 1.12),
             );
+        } else if piece.open {
+            // Open plating: the vulnerable burn on the piece's own outline,
+            // flashing as it opens — the same "hit it now" as every boss.
+            crate::scenes::game::fx::attach_state_marker(
+                c, &name, (piece.draw, piece.draw),
+                SERPENT_MARKER_VULNERABLE_RGB, 1.0, MarkerMode::Vulnerable);
         } else {
             c.clear_effect(&name);
         }
@@ -705,7 +709,7 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let mut killed = false;
         // Where the hit landed, so the burst can be spawned once the state
         // lock is released — `spawn_impact` takes the canvas and the state.
-        let mut hit_at: Option<((f32, f32), f32)> = None;
+        let mut hit_at: Option<((f32, f32), f32, usize)> = None;
         let mut s = st.lock().unwrap();
         for piece in &pieces {
             if !piece.open { continue; }
@@ -716,11 +720,17 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     p.hp -= 1;
                     if p.hp <= 0 {
                         p.alive = false;
-                        s.boss_part_invuln_ticks = COLOSSUS_PART_INVULN_TICKS;
                         killed = true;
                     }
+                    // After EVERY hit, not only a kill: a non-lethal hit used to
+                    // leave the piece open to one more hit per frame of overlap.
+                    s.boss_part_invuln_ticks = if killed {
+                        COLOSSUS_PART_INVULN_TICKS
+                    } else {
+                        COLOSSUS_HIT_INVULN_TICKS
+                    };
                     s.buff_hit_flash = 20;
-                    hit_at = Some((piece.pos, piece.draw));
+                    hit_at = Some((piece.pos, piece.draw, piece.idx));
                 }
                 break;
             }
@@ -728,9 +738,20 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let _ = killed;
         if s.boss_part_invuln_ticks > 0 { s.boss_part_invuln_ticks -= 1; }
         drop(s);
-        if let Some((pos, size)) = hit_at {
-            crate::scenes::game::boss::common::spawn_impact(
-                c, st, pos, size, SERPENT_MARKER_VULNERABLE_RGB, false);
+        if let Some((pos, size, idx)) = hit_at {
+            // Felt: off the plate you struck, with the flash, the shake and
+            // the hit-stop. (The body stays rideable — only a HIT rebounds.)
+            let r = size * SERPENT_CONTACT_R;
+            let normal = crate::scenes::game::boss::common::bounce_off_part(c, st, pos, r)
+                .unwrap_or_else(|| {
+                    let (dx, dy) = (px - pos.0, py - pos.1);
+                    let d = (dx * dx + dy * dy).sqrt().max(0.001);
+                    (dx / d, dy / d)
+                });
+            let at = (pos.0 + normal.0 * r, pos.1 + normal.1 * r);
+            crate::scenes::game::boss::common::land_hit(
+                c, st, &format!("serpent_part_{idx}"), at, size * 0.6,
+                SERPENT_MARKER_VULNERABLE_RGB, normal);
         }
     } else {
         let mut s = st.lock().unwrap();
@@ -744,9 +765,13 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let contact = {
         let s = st.lock().unwrap();
         if s.serpent_contact_cooldown > 0 || s.dead { None } else {
+            // An OPEN piece touched while buffed is a hit, not a collision:
+            // counting it as contact too threw the player AND spent a buff
+            // absorption on every hit they landed.
             pieces.iter().find(|piece| {
                 let r = piece.draw * SERPENT_CONTACT_R + PLAYER_R;
-                (px - piece.pos.0).powi(2) + (py - piece.pos.1).powi(2) < r * r
+                !(piece.open && buffed)
+                    && (px - piece.pos.0).powi(2) + (py - piece.pos.1).powi(2) < r * r
             }).map(|piece| (piece.pos, piece.id))
         }
     };

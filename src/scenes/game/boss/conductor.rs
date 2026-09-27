@@ -922,7 +922,7 @@ fn tick_weakpoint(
         if open {
             let urgency = 1.0 -
                 (window as f32 / CONDUCTOR_WINDOW_TICKS as f32).clamp(0.0, 1.0);
-            crate::scenes::game::fx::attach_state_marker(
+            crate::scenes::game::fx::attach_circle_marker(
                 c, "conductor_weak_zone", (d, d),
                 MARKER_VULNERABLE_RGB, (0.75 + 0.25 * urgency).min(1.0),
                 MarkerMode::Vulnerable);
@@ -948,11 +948,19 @@ fn tick_weakpoint(
     // Confirm the hit on the core itself. A buffed hit does double damage, so
     // it gets a bigger burst — the feedback reports the SIZE of what landed,
     // not merely that something did.
-    crate::scenes::game::boss::common::spawn_impact(
-        c, st, core,
+    // Felt: rebound off the core's strike zone, flash, shake, hit-stop.
+    let reach = (CONDUCTOR_WEAK_R - PLAYER_R).max(1.0);
+    let normal = crate::scenes::game::boss::common::bounce_off_part(c, st, core, reach)
+        .unwrap_or_else(|| {
+            let (dx, dy) = (player.0 - core.0, player.1 - core.1);
+            let d = (dx * dx + dy * dy).sqrt().max(0.001);
+            (dx / d, dy / d)
+        });
+    crate::scenes::game::boss::common::land_hit(
+        c, st, "conductor_core", core,
         CONDUCTOR_CORE_SIZE * if buffed { 0.85 } else { 0.6 },
         if buffed { CONDUCTOR_METER_ARMED_RGB } else { CONDUCTOR_TARGET_RGB },
-        false);
+        normal);
     let hp = {
         let mut s = st.lock().unwrap();
         s.boss_hp = (s.boss_hp - damage).max(0);
@@ -1511,7 +1519,7 @@ fn draw_conductor(c: &mut Canvas, st: &Arc<Mutex<State>>, core: (f32, f32)) {
                 o.visible = true;
                 o.set_tint(Color(255, 255, 255, 0));
             }
-            crate::scenes::game::fx::attach_state_marker(
+            crate::scenes::game::fx::attach_circle_marker(
                 c, "conductor_weak_zone", (d, d), rgb, amp, mode);
         }
     }

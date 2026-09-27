@@ -374,6 +374,9 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         strike_heart: bool,
         strike_consume_absorb: bool,
         strike_big_throw: bool,
+        /// A hand or torso strike physically landed this frame (hit or miss):
+        /// the telegraph is gone by now, so the landing itself needs a mark.
+        struck: bool,
         /// This part is the torso, mid meteor storm.
         storm: bool,
         /// This part is the torso, mid core vent.
@@ -419,7 +422,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     zone_pos: (bcx + home.0, bcy + home.1), zone_r,
                     path_visible: false, path_start: (bcx + home.0, bcy + home.1),
                     strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
-                    strike_consume_absorb: false, strike_big_throw: false, storm: false, vent: false, clap_wave: false, beam_t: None, beam_curve: 0.0,
+                    strike_consume_absorb: false, strike_big_throw: false, struck: false, storm: false, vent: false, clap_wave: false, beam_t: None, beam_curve: 0.0,
                 });
                 continue;
             }
@@ -440,7 +443,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     zone_pos: (bcx + home.0, bcy + home.1), zone_r,
                     path_visible: false, path_start: (bcx + home.0, bcy + home.1),
                     strike_unhook: false, strike_kick: (0.0, 0.0), strike_heart: false,
-                    strike_consume_absorb: false, strike_big_throw: false, storm: false, vent: false, clap_wave: false, beam_t: None, beam_curve: 0.0,
+                    strike_consume_absorb: false, strike_big_throw: false, struck: false, storm: false, vent: false, clap_wave: false, beam_t: None, beam_curve: 0.0,
                 });
                 continue;
             }
@@ -570,10 +573,15 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         // Each beam in the burst re-aims at wherever the player
                         // is NOW, so dodging the first one is the start of the
                         // attack rather than the end of it.
+                        //
+                        // It re-aims as the PREVIOUS sweep ends, not as the next
+                        // one starts: the gap between shots is then that shot's
+                        // telegraph, with its path drawn, cleared just before it
+                        // fires. Aimed at the start of its own sweep, a follow-up
+                        // beam had no warning except the path drawn under it.
                         if p.id == "head"
-                            && p.state_ticks > 0
-                            && p.state_ticks % beam_shot_len() == 0
-                            && p.state_ticks / beam_shot_len() < p.beam_shots
+                            && p.state_ticks % beam_shot_len() == COLOSSUS_BEAM_TICKS
+                            && p.state_ticks / beam_shot_len() + 1 < p.beam_shots
                         {
                             roll_beam_shot = true;
                         }
@@ -867,8 +875,19 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 // up both lies about where the next beam goes and keeps a
                 // full-length translucent quad on screen for half a second per
                 // shot. The charge orb covers the "recharging" read.
+                // The head's telegraph is its wind-up, and then each GAP of the
+                // burst, which is the next shot's wind-up — never the sweep
+                // itself: the beam is the attack, and a warning drawn under it
+                // only hides it.
+                let next_shot_in_gap = p.state == PartState::Attack && {
+                    let len = beam_shot_len();
+                    let shot_t = p.state_ticks % len;
+                    shot_t >= COLOSSUS_BEAM_TICKS
+                        && p.state_ticks / len + 1 < p.beam_shots
+                        && len - shot_t > COLOSSUS_TELEGRAPH_CLEAR
+                };
                 let head_showing = p.id == "head"
-                    && (p.state == PartState::Telegraph || beam_t.is_some());
+                    && (p.state == PartState::Telegraph || next_shot_in_gap);
                 // The lane clears just BEFORE the strike, not as it lands.
                 //
                 // A telegraph's job is finished the moment the player has read
@@ -931,7 +950,7 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 telegraph_clearing: clearing, zone_solid, zone_pos, zone_r,
                 path_visible, path_start,
                 strike_unhook, strike_kick, strike_heart, strike_consume_absorb,
-                strike_big_throw, storm: storm_frame, vent: vent_frame,
+                strike_big_throw, struck: strike, storm: storm_frame, vent: vent_frame,
                 clap_wave: hand_clap
                     && pid == "hand_l"
                     && s.boss_parts[i].state == PartState::Attack
@@ -1104,37 +1123,64 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
 
-        // Buffed hit on an exposed (unshielded, weakpoint-open) part damages it.
-        // The boss has a short invulnerability window after a part is destroyed,
-        // so two parts can't be killed back-to-back within the same second.
-        if f.alive && !f.shielded && f.weak_open && buffed {
+        // SOLID: the player cannot pass through a part, and touching one
+        // throws them back off it. Open and buffed, the touch is a HIT —
+        // felt: flash, shake, hit-stop, rebound. Closed or shielded, it is
+        // the contact penalty: a heart (once per cooldown) unbuffed; buffed,
+        // just the bounce, which already takes them off the rope. Open but
+        // unbuffed: the bounce alone.
+        if f.alive {
             let sx = bcx + f.offset.0;
             let sy = bcy + f.offset.1;
             let hit_r = colossus_part_hit_r(idx as u32);
-            if (px - sx).powi(2) + (py - sy).powi(2) < (PLAYER_R + hit_r).powi(2) {
-                let mut s = st.lock().unwrap();
-                if s.boss_part_invuln_ticks == 0 {
+            if let Some(normal) = crate::scenes::game::boss::common::bounce_off_part(
+                c, st, (sx, sy), hit_r)
+            {
+                if !f.shielded && f.weak_open && buffed {
                     let mut landed = false;
-                    if let Some(p) = s.boss_parts.iter_mut().find(|p| p.id == f.id && p.alive) {
-                        p.hp -= 1;
-                        if p.hp <= 0 {
-                            p.alive = false;
-                            s.boss_part_invuln_ticks = COLOSSUS_PART_INVULN_TICKS;
+                    {
+                        let mut s = st.lock().unwrap();
+                        if s.boss_part_invuln_ticks == 0 {
+                            if let Some(p) = s.boss_parts.iter_mut().find(|p| p.id == f.id && p.alive) {
+                                p.hp -= 1;
+                                let killed = p.hp <= 0;
+                                if killed {
+                                    p.alive = false;
+                                }
+                                // The boss has a short invulnerability after a
+                                // part is destroyed, so two parts can't die
+                                // back-to-back in the same second — and a
+                                // brief one after every hit.
+                                s.boss_part_invuln_ticks = if killed {
+                                    COLOSSUS_PART_INVULN_TICKS
+                                } else {
+                                    COLOSSUS_HIT_INVULN_TICKS
+                                };
+                                s.buff_hit_flash = 20;
+                                landed = true;
+                            }
                         }
-                        s.buff_hit_flash = 20;
-                        landed = true;
                     }
-                    drop(s);
                     if landed {
-                        // On the PART that was hit, in the Colossus's own
-                        // vulnerable colour, so the confirmation appears where
-                        // the player was aiming.
-                        crate::scenes::game::boss::common::spawn_impact(
-                            c, st, (sx, sy), part_size,
-                            COLOSSUS_MARKER_VULNERABLE_RGB, false);
+                        // On the part's surface where the player struck it,
+                        // in the Colossus's own vulnerable colour.
+                        let at = (sx + normal.0 * hit_r, sy + normal.1 * hit_r);
+                        crate::scenes::game::boss::common::land_hit(
+                            c, st, &format!("colossus_part_{idx}"), at, part_size * 0.5,
+                            COLOSSUS_MARKER_VULNERABLE_RGB, normal);
                     }
-                    let mut s = st.lock().unwrap();
-                    let _ = &mut s;
+                } else if !f.weak_open {
+                    let penalise = {
+                        let mut s = st.lock().unwrap();
+                        let fire = s.boss_contact_cooldown == 0 && !s.dead;
+                        if fire {
+                            s.boss_contact_cooldown = 45;
+                        }
+                        fire && !buffed
+                    };
+                    if penalise {
+                        crate::scenes::game::hearts::lose_heart(c, st);
+                    }
                 }
             }
         }
@@ -1210,29 +1256,40 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         {
             let name = format!("colossus_part_{idx}");
             let part_wh = (part_size, part_size);
-            let marker = if !f.alive {
+            // State, always shown while the part lives: the shield, the open
+            // burn (in the vent's hot colour while the chest is open), or a
+            // lighter shell when it is simply closed. A part with no marker
+            // read as hittable while winding up.
+            let state = if !f.alive {
                 None
             } else if f.shielded {
                 Some((COLOSSUS_MARKER_SHIELDED_RGB, 0.85, MarkerMode::Shielded))
             } else if f.weak_open {
-                // Highest priority after shielded: the strike window is the
-                // one thing that must never be ambiguous.
-                Some((COLOSSUS_MARKER_VULNERABLE_RGB, 1.0, MarkerMode::Vulnerable))
-            } else if f.vent {
-                // Vulnerable geometry in the vent's own hot colour: the chest
-                // is open, which means "come here" AND "carefully" at once.
-                Some((MARKER_VENT_RGB, 0.95, MarkerMode::Vulnerable))
+                let rgb = if f.vent { MARKER_VENT_RGB } else { COLOSSUS_MARKER_VULNERABLE_RGB };
+                Some((rgb, 1.0, MarkerMode::Vulnerable))
+            } else {
+                Some((COLOSSUS_MARKER_SHIELDED_RGB, COLOSSUS_CLOSED_SHELL, MarkerMode::Shielded))
+            };
+            // The telegraph OVER it, gone before the strike travels.
+            let windup = if !f.alive {
+                None
             } else if f.storm {
-                Some((MARKER_STORM_RGB, 0.9, MarkerMode::WindingUp))
-            } else if f.zone_visible {
-                Some((COLOSSUS_MARKER_WINDUP_RGB, 0.95, MarkerMode::WindingUp))
+                Some((MARKER_STORM_RGB, 0.9))
+            } else if f.vent && !f.weak_open {
+                Some((MARKER_VENT_RGB, 0.95))
+            } else if f.zone_visible && !f.zone_solid && !f.telegraph_clearing {
+                Some((COLOSSUS_MARKER_WINDUP_RGB, 0.95))
             } else {
                 None
             };
-            match marker {
+            match state {
                 Some((rgb, i, mode)) => crate::scenes::game::fx::attach_state_marker(
                     c, &name, part_wh, rgb, i, mode),
                 None => c.clear_effect(&name),
+            }
+            match windup {
+                Some((rgb, i)) => crate::scenes::game::fx::attach_windup(c, &name, part_wh, rgb, i),
+                None => crate::scenes::game::fx::clear_windup(c, &name),
             }
         }
 
@@ -1345,22 +1402,10 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
 
-        // Vulnerability ring: pulsing gold outline around a hittable part.
-        if let Some(obj) = c.get_game_object_mut(&format!("colossus_vuln_{idx}")) {
-            if f.alive && !f.shielded && f.weak_open {
-                let r = part_size * 0.55;
-                let (sx, sy) = (bcx + f.offset.0, bcy + f.offset.1);
-                obj.position = (sx - r, sy - r);
-                // Pulse the ring's visibility/scale so it throbs.
-                let on = ((f.zone_pos.0 as i32 / 3) + (f.zone_pos.1 as i32 / 3)).rem_euclid(5) < 3;
-                obj.visible = on;
-            } else {
-                obj.visible = false;
-            }
-        }
-
         // Impact marker where the strike will land (only while telegraphing).
-        let mut impact: Option<(f32, bool)> = None;
+        // `(diameter, progress)`: the DANGER ZONE ring closes onto the strike
+        // disc as the wind-up runs, and flashes at 1.0 — the hit landing.
+        let mut impact: Option<(f32, f32)> = None;
         if let Some(obj) = c.get_game_object_mut(&format!("colossus_zone_{idx}")) {
             if f.id == "head" {
                 // Head: a small targeting reticle that runs the course of the
@@ -1386,7 +1431,15 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 // other and read as a rendering artefact rather than a threat.
                 obj.visible = true;
                 obj.set_tint(Color(255, 255, 255, 0));
-                impact = Some((f.zone_r * 2.0, f.zone_solid));
+                // The zone is a WARNING, and a warning's job ends when the
+                // strike starts: it is gone once the hand is travelling, so
+                // the fist and the hit arrive on a clean frame. (The same
+                // rule as the lane's `COLOSSUS_TELEGRAPH_CLEAR`.)
+                if !f.zone_solid {
+                    let progress = (f.state_ticks as f32 / COLOSSUS_TELEGRAPH_TICKS as f32)
+                        .clamp(0.0, 0.999);
+                    impact = Some((f.zone_r * 2.0, progress));
+                }
             } else {
                 obj.visible = false;
             }
@@ -1394,13 +1447,24 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         {
             let name = format!("colossus_zone_{idx}");
             match impact {
-                Some((d, solid)) => crate::scenes::game::fx::attach_state_marker(
-                    c, &name, (d, d), COLOSSUS_MARKER_WINDUP_RGB,
-                    if solid { 1.0 } else { 0.8 }, MarkerMode::WindingUp),
+                // Drawn 1.6x the strike so the ring has room to close from;
+                // the strike disc itself is the inner 62% of that.
+                Some((d, progress)) => {
+                    let q = d * 1.6;
+                    c.attach_effect(&name, Effect::DangerZone { intensity: 0.95, progress },
+                                    crate::scenes::game::fx::lin(COLOSSUS_MARKER_WINDUP_RGB), (q, q));
+                }
                 None => c.clear_effect(&name),
             }
         }
 
+        // The landing, marked on the frame it happens: a burst in the strike's
+        // own colour at the point it hit. The telegraph cleared a moment ago
+        // so the fist lands on a clean frame; this says "that was it".
+        if f.struck && (f.id == "hand_l" || f.id == "hand_r") {
+            crate::scenes::game::boss::common::spawn_impact(
+                c, st, f.zone_pos, f.zone_r * 2.0, COLOSSUS_MARKER_WINDUP_RGB, false);
+        }
         // Strike effects (unhook / kick / heart) — resolved once per attack.
         if f.strike_unhook {
             let mut s = st.lock().unwrap();
@@ -1424,7 +1488,13 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         if f.strike_heart {
-            let dead = { let s = st.lock().unwrap(); s.dead };
+            // One heart per strike: the fist arriving is also a contact, and
+            // the solid-part penalty must not charge for it a second time.
+            let dead = {
+                let mut s = st.lock().unwrap();
+                s.boss_contact_cooldown = s.boss_contact_cooldown.max(45);
+                s.dead
+            };
             if !dead { crate::scenes::game::hearts::lose_heart(c, st); }
         }
         if f.clap_wave {
@@ -1515,49 +1585,11 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    // Contact-rule inversion: touching a part you are NOT currently able to hit
-    // (it's shielded or idle/winding up) costs one heart — but not your whole
-    // life (the cooldown stops repeated contact from draining every heart in a
-    // couple of frames). With the buff it costs no heart, just tears you off.
-    // This is a light contact push; the attack STRIKE is the one that throws you
-    // hard.
+    // The contact penalty's cooldown (the penalty itself is applied per part,
+    // on the solid contact above).
     {
         let mut s = st.lock().unwrap();
         if s.boss_contact_cooldown > 0 { s.boss_contact_cooldown -= 1; }
-        let touching = if s.boss_contact_cooldown == 0 && !s.dead {
-            frames.iter().enumerate().any(|(i, f)| {
-                f.alive && !f.weak_open && {
-                    let sx = bcx + f.offset.0;
-                    let sy = bcy + f.offset.1;
-                    let cr = colossus_part_hit_r(i as u32) + PLAYER_R;
-                    (px - sx).powi(2) + (py - sy).powi(2) < cr * cr
-                }
-            })
-        } else { false };
-        if touching { s.boss_contact_cooldown = 45; }
-        let dead = s.dead;
-        drop(s);
-        if touching && !dead {
-            let d = ((px - bcx).powi(2) + (py - bcy).powi(2)).sqrt().max(1.0);
-            let push = ((px - bcx) / d * 34.0, (py - bcy) / d * 34.0);
-            let mut s = st.lock().unwrap();
-            s.vx = push.0;
-            s.vy = push.1;
-            if !buffed {
-                // No buff: contact costs a heart (see the cooldown — one, not all).
-                drop(s);
-                crate::scenes::game::hearts::lose_heart(c, st);
-            } else {
-                // Buff shields the heart, but contact still tears you off.
-                s.hooked = false;
-                s.active_hook = String::new();
-                drop(s);
-                c.run(Action::Hide { target: Target::name("rope") });
-            }
-            if let Some(obj) = c.get_game_object_mut("player") {
-                obj.momentum = push;
-            }
-        }
     }
 
     // Win when no parts are alive.

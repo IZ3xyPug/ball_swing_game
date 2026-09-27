@@ -38,6 +38,12 @@ pub(crate) use magnetar::*;
 pub(crate) use sun_devourer::*;
 
 pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // Effect time first: markers read their state's age from it, and hit
+    // flashes that have run their course are cleared here.
+    crate::scenes::game::fx::tick_fx(c);
+    // A landed hit's freeze: the player hangs at the contact point, then
+    // rebounds. Before the fight, so it sees the held position.
+    tick_hitstop_hold(c, st);
     // Published every frame: several systems (distance tracking, the headless
     // harness, the HUD) need to know an arena is active, and deriving it from
     // boss HP is wrong during entry and victory stasis.
@@ -56,17 +62,18 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // The Serpent is a distinct multi-part fight (head-HP win, tetherable
         // chain); the Colossus uses the shared part loop.
         let kind = { let s = st.lock().unwrap(); s.boss_kind };
-        if kind == crate::constants::BossKind::Serpent {
-            tick_serpent(c, st);
-        } else {
-            tick_multi_part_boss(c, st);
+        match kind {
+            crate::constants::BossKind::Serpent => tick_serpent(c, st),
+            crate::constants::BossKind::GravityWeaver => tick_gravity_weaver(c, st),
+            crate::constants::BossKind::FlareTitan => tick_flare_titan(c, st),
+            crate::constants::BossKind::Magnetar => tick_magnetar(c, st),
+            _ => tick_multi_part_boss(c, st),
         }
     } else {
         let kind = { let s = st.lock().unwrap(); s.boss_kind };
         match kind {
-            crate::constants::BossKind::FlareTitan => tick_flare_titan(c, st),
-            crate::constants::BossKind::GravityWeaver => tick_gravity_weaver(c, st),
-            crate::constants::BossKind::Magnetar => tick_magnetar(c, st),
+            // The Weaver, the Titan and the Magnetar are multi-part and
+            // dispatched above.
             crate::constants::BossKind::Conductor => tick_conductor(c, st),
             _ => {
                 tick_boss_appearance(c, st);
@@ -78,7 +85,6 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 tick_boss_forcefield(c, st);
                 tick_generators(c, st);
                 tick_generator_tethers(c, st);
-                tick_barrier(c, st);
                 tick_desperation(c, st);
                 tick_boss_bolts(c, st);
                 tick_boss_bolt_player_collision(c, st);
@@ -87,6 +93,8 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
+    // After every fight has placed its parts: the struck one shakes.
+    tick_hitstop_shake(c, st);
     tick_colossus_meteors(c, st);
     // Hides itself whenever the Colossus's parts are not on screen.
     tick_colossus_plumes(c);
