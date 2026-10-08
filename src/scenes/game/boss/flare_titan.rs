@@ -193,7 +193,8 @@ pub(crate) fn hide_titan(c: &mut Canvas) {
 pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let s = st.lock().unwrap();
-        if !s.boss_active || s.dead || s.boss_stasis_active { return; }
+        // Not gated on `dead`: the fight carries on under the death screen.
+        if !s.boss_active || s.boss_stasis_active { return; }
     }
     // TITAN_CHECK: park a buffed player on the first open part, so every
     // hit, art swap, gating and clock path runs in a real fight loop.
@@ -313,6 +314,7 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if core.alive && core.shielded && live == 0 {
             core.shielded = false;
             if check { eprintln!("titan-check: core exposed"); }
+            super::start_phase_cine(&mut s, CineStyle::Flare, 1);
         }
         (live == 0, live <= TITAN_VENTS / 2)
     };
@@ -804,6 +806,7 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 } else {
                     (crate::scenes::game::fx::lin(TITAN_PLASMA_RGB), 1.0)
                 };
+                super::titan_fx::arc(i, &path, stage, progress);
                 c.attach_effect(&arc_id, Effect::ProminenceArc {
                     stage, intensity, progress,
                     bulge: l.bulge, thickness: l.thickness, aspect: l.aspect, flip: path.flip,
@@ -831,6 +834,7 @@ pub(crate) fn tick_flare_titan(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         if let Some(at) = f.landed {
+            super::titan_fx::landed(at);
             crate::scenes::game::boss::common::spawn_impact(c, st, at, TITAN_ARC_SPLASH_R * 2.2, TITAN_PLASMA_RGB, false);
             if let Some(cam) = c.camera_mut() {
                 cam.shake(HIT_SHAKE_INTENSITY * 0.6, HIT_SHAKE_SECS);

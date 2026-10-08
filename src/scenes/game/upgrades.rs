@@ -136,6 +136,12 @@ fn run_momentum_cost(s: &State) -> u32 {
 fn run_heart_refill_cost(s: &State) -> u32 {
     (UPGRADE_HEART_REFILL_BASE as f32 * UPGRADE_HEART_REFILL_GROWTH.powi(s.run_heart_refill_buys as i32)).round() as u32
 }
+/// What a perk costs at an upgrade node: cheap at first, climbing with every
+/// perk already taken this run.
+fn perk_cost(s: &State) -> u32 {
+    (UPGRADE_MAGNET_BASE as f32 * 1.4f32.powi(s.perks_taken.min(12) as i32)).round() as u32
+}
+#[allow(dead_code)]
 fn run_magnet_cost(s: &State) -> u32 {
     (UPGRADE_MAGNET_BASE as f32 * UPGRADE_MAGNET_GROWTH.powi(s.run_magnet_buys as i32)).round() as u32
 }
@@ -197,6 +203,12 @@ fn open_dialogue(c: &mut Canvas, st: &Arc<Mutex<State>>, node_id: String) {
     c.set_var("game_paused", true);
     c.run(Action::Hide { target: Target::name("rope") });
     c.set_var("rope_visible_at_pause", false);
+    // Three perks for this node, rolled from the pool.
+    {
+        let mut s = st.lock().unwrap();
+        let roll = super::perks::roll_three(&mut s, &super::perks::NODE_POOL);
+        s.node_offer = roll.map(super::perks::index_of);
+    }
     update_dialogue_text(c, st);
 }
 
@@ -299,7 +311,11 @@ pub fn upgrade_dialogue_select(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) 
         return true;
     }
     if !(1..=5).contains(&opt) { return false; }
+    let before = st.lock().unwrap().coin_count;
     buy_option(c, st, opt);
+    if st.lock().unwrap().coin_count < before {
+        crate::achievements::on_upgrade_taken();
+    }
     update_dialogue_text(c, st);
     true
 }
@@ -337,44 +353,18 @@ fn buy_option(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) {
             s.hearts += 1;
             s.run_heart_buys += 1;
         }
-        2 => {
-            let (cost, coins) = {
-                let s = st.lock().unwrap();
-                (run_magnet_cost(&s), s.coin_count)
-            };
-            if coins < cost {
+        2..=4 => {
+            let mut s = st.lock().unwrap();
+            let cost = perk_cost(&s);
+            if s.coin_count < cost {
                 return;
             }
-            let mut s = st.lock().unwrap();
             s.coin_count -= cost;
-            s.run_magnet_buys += 1;
-        }
-        3 => {
-            let (cost, coins) = {
-                let s = st.lock().unwrap();
-                (run_breath_cost(&s), s.coin_count)
-            };
-            if coins < cost {
-                return;
-            }
-            let mut s = st.lock().unwrap();
-            s.coin_count -= cost;
-            s.oxygen_drain_scale = UPGRADE_BREATH_DRAIN_SCALE.min(s.oxygen_drain_scale);
-            s.run_breath_buys += 1;
-        }
-        4 => {
-            let (cost, coins) = {
-                let s = st.lock().unwrap();
-                (run_momentum_cost(&s), s.coin_count)
-            };
-            if coins < cost {
-                return;
-            }
-            let mut s = st.lock().unwrap();
-            s.coin_count -= cost;
-            // Momentum is now a small % boost stacked per purchase (see
-            // `player_max_momentum`), so it no longer flips a cap jump flag.
-            s.run_momentum_buys += 1;
+            let p = super::perks::PERKS[s.node_offer[(opt - 2) as usize] as usize];
+            p.apply(&mut s);
+            // Bought: re-roll that slot so the same perk is not offered twice.
+            let fresh = super::perks::roll_three(&mut s, &super::perks::NODE_POOL);
+            s.node_offer[(opt - 2) as usize] = super::perks::index_of(fresh[0]);
         }
         5 => {
             let (cost, coins, hearts, max_hearts) = {
@@ -452,12 +442,15 @@ fn update_dialogue_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
     let (t0, c0) = line(coins >= rhc, format!("1)  Extra Heart (this run)  \u{2014}  {rhc} coins"));
     set_text(c, "upgrade_opt_0", &t0, c0);
-    let (t1, c1) = line(coins >= rmgc, format!("2)  Magnetism (run)  \u{2014}  {rmgc} coins"));
-    set_text(c, "upgrade_opt_1", &t1, c1);
-    let (t2, c2) = line(coins >= rbc, format!("3)  Controlled Breathing (run)  \u{2014}  {rbc} coins"));
-    set_text(c, "upgrade_opt_2", &t2, c2);
-    let (t3, c3) = line(coins >= rmc, format!("4)  Momentum (run)  \u{2014}  {rmc} coins"));
-    set_text(c, "upgrade_opt_3", &t3, c3);
+    let (offer, pc) = {
+        let s = st.lock().unwrap();
+        (s.node_offer, perk_cost(&s))
+    };
+    for k in 0..3 {
+        let p = super::perks::PERKS[offer[k] as usize];
+        let (t, col) = line(coins >= pc, format!("{})  {}: {}  \u{2014}  {pc} coins", k + 2, p.name(), p.blurb()));
+        set_text(c, &format!("upgrade_opt_{}", k + 1), &t, col);
+    }
     let can_refill = hearts < max_hearts;
     let (t4, c4) = line(coins >= rfc && can_refill, format!("5)  Heart Refill (this run)  \u{2014}  {rfc} coins"));
     set_text(c, "upgrade_opt_4", &t4, c4);

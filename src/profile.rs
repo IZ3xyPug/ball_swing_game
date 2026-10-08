@@ -75,6 +75,39 @@ pub struct PlayerProfile {
     pub runs_casual: u32,
     pub runs_normal: u32,
     pub runs_bossrush: u32,
+    /// Solar flares lived through (the run's own flares), lifetime.
+    pub flares_survived: u32,
+    /// The active ability taken into runs (an `ABILITIES` id), or empty.
+    /// Ranks owned of each ability live in `perm_levels` beside the upgrades.
+    pub equipped_ability: String,
+    /// Most coins held at the end of one run.
+    pub best_run_coins: u64,
+    /// Boss slugs defeated at least once, and those beaten without losing a
+    /// heart (achievements).
+    pub boss_kinds_defeated: Vec<String>,
+    pub untouchable_kinds: Vec<String>,
+    /// Rare decor seen (`DecorKind::name`s).
+    pub rare_seen: Vec<String>,
+    /// Daily reward: the day (days since the Unix epoch, local clock) it was
+    /// last claimed, and the run of consecutive days.
+    pub daily_last_claim: i64,
+    pub daily_streak: u32,
+    /// Daily challenge: the day last completed, and how many in all.
+    pub daily_done_day: i64,
+    pub dailies_done: u32,
+    /// Best distance in today's daily challenge, and the day it is for.
+    pub daily_best: u32,
+    pub daily_best_day: i64,
+    /// Graphics quality: 0 for the platform's default, else 1 + a
+    /// `graphics::Quality` index.
+    pub graphics_quality: i32,
+    /// Effect switches turned OFF in settings (`graphics::FX_*` bits).
+    pub fx_off: u32,
+}
+
+/// A comma list from the save file.
+fn list(v: &str) -> Vec<String> {
+    v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
 }
 
 impl PlayerProfile {
@@ -108,7 +141,7 @@ impl PlayerProfile {
                         // rather than kept, so retiring an upgrade cleans up.
                         _ if k.starts_with("perm_") => {
                             let id = &k[5..];
-                            if upgrade_by_id(id).is_some() {
+                            if upgrade_by_id(id).is_some() || ability_by_id(id).is_some() {
                                 p.perm_levels.push((id.to_string(), v.parse().unwrap_or(0)));
                             }
                         }
@@ -141,6 +174,20 @@ impl PlayerProfile {
                         "runs_casual" => p.runs_casual = v.parse().unwrap_or(0),
                         "runs_normal" => p.runs_normal = v.parse().unwrap_or(0),
                         "runs_bossrush" => p.runs_bossrush = v.parse().unwrap_or(0),
+                        "flares_survived" => p.flares_survived = v.parse().unwrap_or(0),
+                        "equipped_ability" => p.equipped_ability = v.to_string(),
+                        "best_run_coins" => p.best_run_coins = v.parse().unwrap_or(0),
+                        "boss_kinds_defeated" => p.boss_kinds_defeated = list(v),
+                        "untouchable_kinds" => p.untouchable_kinds = list(v),
+                        "rare_seen" => p.rare_seen = list(v),
+                        "daily_last_claim" => p.daily_last_claim = v.parse().unwrap_or(0),
+                        "daily_streak" => p.daily_streak = v.parse().unwrap_or(0),
+                        "daily_done_day" => p.daily_done_day = v.parse().unwrap_or(0),
+                        "dailies_done" => p.dailies_done = v.parse().unwrap_or(0),
+                        "daily_best" => p.daily_best = v.parse().unwrap_or(0),
+                        "daily_best_day" => p.daily_best_day = v.parse().unwrap_or(0),
+                        "graphics_quality" => p.graphics_quality = v.parse().unwrap_or(0),
+                        "fx_off" => p.fx_off = v.parse().unwrap_or(0),
                         _ => {}
                     }
                 }
@@ -169,10 +216,29 @@ impl PlayerProfile {
             self.runs_casual, self.runs_normal, self.runs_bossrush,
         );
         body.push_str(&format!(
-            "cosmetic_rope_style={}\nowned_cosmetics={}\n",
+            "cosmetic_rope_style={}\nowned_cosmetics={}\nflares_survived={}\nequipped_ability={}\n",
             self.cosmetic_rope_style,
             self.owned_cosmetics.join(","),
+            self.flares_survived,
+            self.equipped_ability,
         ));
+        body.push_str(&format!(
+            "best_run_coins={}\nboss_kinds_defeated={}\nuntouchable_kinds={}\nrare_seen={}\ndaily_last_claim={}\ndaily_streak={}\ndaily_done_day={}\ndailies_done={}\ndaily_best={}\ndaily_best_day={}\n",
+            self.best_run_coins,
+            self.boss_kinds_defeated.join(","),
+            self.untouchable_kinds.join(","),
+            self.rare_seen.join(","),
+            self.daily_last_claim, self.daily_streak,
+            self.daily_done_day, self.dailies_done,
+            self.daily_best, self.daily_best_day,
+        ));
+        body.push_str(&format!("graphics_quality={}\nfx_off={}\n", self.graphics_quality, self.fx_off));
+        for a in ABILITIES {
+            let level = self.upgrade_level(a.id);
+            if level > 0 {
+                body.push_str(&format!("perm_{}={}\n", a.id, level));
+            }
+        }
         // Written in table order, not insertion order, so the file is stable.
         for u in PERM_UPGRADES {
             if u.id == "heart" {
@@ -212,6 +278,7 @@ pub fn select_profile(idx: usize) {
     let p = PlayerProfile::load(idx);
     *profile().lock().unwrap() = p;
     *ACTIVE_INDEX.get_or_init(|| Mutex::new(0)).lock().unwrap() = idx;
+    crate::graphics::load_from_profile();
 }
 
 /// Number of profile slots.
@@ -263,6 +330,7 @@ pub fn record_run(mode_idx: i32, distance_px: f32, coins_on_hand: u64, seconds: 
         _ => { if d > p.best_distance_normal { p.best_distance_normal = d; } p.runs_normal += 1; }
     }
     p.total_coins = p.total_coins.saturating_add(coins_on_hand);
+    p.best_run_coins = p.best_run_coins.max(coins_on_hand);
     p.runs_played += 1;
     p.time_played_seconds = p.time_played_seconds.saturating_add(seconds);
     p.save(active_index());
@@ -274,6 +342,15 @@ pub fn record_death() {
     let mut p = g.lock().unwrap();
     p.deaths += 1;
     p.save(active_index());
+}
+
+/// Count one solar flare survived; returns the new lifetime total.
+pub fn record_flare_survived() -> u32 {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    p.flares_survived = p.flares_survived.saturating_add(1);
+    p.save(active_index());
+    p.flares_survived
 }
 
 /// Increment the active profile's boss-defeated counter.
@@ -442,13 +519,111 @@ pub const PERM_UPGRADES: &[PermUpgrade] = &[
     PermUpgrade {
         id: "secondwind",
         name: "SECOND WIND",
-        blurb: "1 FREE CHECKPOINT RESPAWN PER RUN",
+        blurb: "SURVIVE LOSING YOUR LAST HEART ONCE",
         max: 2,
         base_cost: 400,
         growth: 2.6,
         color: (128, 255, 188),
     },
 ];
+
+// ── Abilities (active powers, one equipped at a time) ────────────────────────
+//
+// Bought in the shop's ABILITIES category: rank 1 unlocks one, each further
+// rank upgrades it. One is equipped and taken into every run, where the
+// ability button (or E) fires it — see `scenes::game::abilities`.
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ability {
+    /// Stable save key (written as `perm_<id>`). Never rename.
+    pub id: &'static str,
+    pub name: &'static str,
+    /// What it does, one line, for the shop.
+    pub blurb: &'static str,
+    /// What each upgrade rank adds, one line.
+    pub per_rank: &'static str,
+    pub max: u32,
+    /// Cost of rank 1 (the unlock); rank n costs `unlock * growth^(n-1)`.
+    pub unlock_cost: u64,
+    pub growth: f32,
+    pub color: (u8, u8, u8),
+}
+
+/// In price order: Momentum Burst < Alternating Swing < Omni Boost.
+pub const ABILITIES: &[Ability] = &[
+    Ability {
+        id: "ab_burst", name: "MOMENTUM BURST",
+        blurb: "BOOST YOUR CURRENT MOMENTUM WHEN THE BAR IS FULL",
+        per_rank: "STRONGER PUSH, FASTER BAR",
+        max: 4, unlock_cost: 500, growth: 1.6, color: (255, 150, 60),
+    },
+    Ability {
+        id: "ab_swap", name: "ALTERNATING SWING",
+        blurb: "FLIP THE DIRECTION YOU'RE SWINGING",
+        per_rank: "+1 USE PER RUN",
+        max: 4, unlock_cost: 850, growth: 1.6, color: (90, 220, 200),
+    },
+    Ability {
+        id: "ab_omni", name: "OMNI BOOST",
+        blurb: "BOOST IN ANY DIRECTION YOU AIM",
+        per_rank: "+1 USE PER RUN",
+        max: 4, unlock_cost: 1300, growth: 1.6, color: (190, 120, 255),
+    },
+];
+
+pub fn ability_by_id(id: &str) -> Option<&'static Ability> {
+    ABILITIES.iter().find(|a| a.id == id)
+}
+
+/// Cost of the NEXT rank of `a` given the ranks owned; `None` when maxed.
+pub fn ability_cost(a: &Ability, owned: u32) -> Option<u64> {
+    if owned >= a.max { return None; }
+    Some((a.unlock_cost as f64 * (a.growth as f64).powi(owned as i32)).round() as u64)
+}
+
+/// Ranks owned of an ability (0 = locked).
+pub fn ability_level(id: &str) -> u32 {
+    let g = profile();
+    let l = g.lock().unwrap().upgrade_level(id);
+    l
+}
+
+/// The equipped ability and its rank, if one is equipped and owned.
+pub fn equipped_ability() -> Option<(&'static Ability, u32)> {
+    let g = profile();
+    let p = g.lock().unwrap();
+    let a = ability_by_id(&p.equipped_ability)?;
+    let rank = p.upgrade_level(a.id);
+    (rank > 0).then_some((a, rank))
+}
+
+/// Buy the next rank of `id` (rank 1 unlocks it). Unlocking also equips it.
+/// `Ok(new_rank)` or the reason for the shop to show.
+pub fn buy_ability_rank(id: &str) -> Result<u32, String> {
+    let Some(a) = ability_by_id(id) else { return Err("UNKNOWN ABILITY".into()) };
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    let owned = p.upgrade_level(id);
+    let Some(cost) = ability_cost(a, owned) else { return Err("ALREADY MAXED".into()) };
+    if p.meta_currency < cost {
+        return Err(format!("NEED {} MORE META", cost - p.meta_currency));
+    }
+    p.meta_currency -= cost;
+    p.set_upgrade_level(id, owned + 1);
+    if owned == 0 { p.equipped_ability = id.to_string(); }
+    p.save(active_index());
+    Ok(owned + 1)
+}
+
+/// Equip an owned ability.
+pub fn equip_ability(id: &str) {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    if p.upgrade_level(id) > 0 {
+        p.equipped_ability = id.to_string();
+        p.save(active_index());
+    }
+}
 
 pub fn upgrade_by_id(id: &str) -> Option<&'static PermUpgrade> {
     PERM_UPGRADES.iter().find(|u| u.id == id)

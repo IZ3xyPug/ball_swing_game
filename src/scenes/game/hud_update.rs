@@ -195,65 +195,82 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    let toast_active = gold_master_toast_active(c);
-    let toast_ticks = gold_master_toast_ticks(c);
-    if toast_active && toast_ticks < GOLD_MASTER_TOAST_TOTAL_TICKS {
-        let panel_w = GOLD_MASTER_TOAST_WIDTH;
-        let panel_h = GOLD_MASTER_TOAST_HEIGHT;
+    // Achievement toasts: one at a time from the queue, so several unlocks
+    // at once are all seen in turn.
+    if !toast_active(c) {
+        if let Some((title, desc, tier)) = crate::achievements::next_toast() {
+            c.set_var("achievement_toast_title", title);
+            c.set_var("achievement_toast_desc", desc);
+            let (r, g, b) = tier.rgb();
+            c.set_var("achievement_toast_rgb", Value::I32(((r as i32) << 16) | ((g as i32) << 8) | b as i32));
+            c.set_var(TOAST_ACTIVE_VAR, true);
+            c.set_var(TOAST_TICKS_VAR, 0i32);
+            c.set_var("achievement_toast_drawn", false);
+        }
+    }
+    let toast_active = toast_active(c);
+    let toast_ticks = toast_ticks(c);
+    if toast_active && toast_ticks < TOAST_TOTAL_TICKS {
+        let panel_w = TOAST_WIDTH;
+        let panel_h = TOAST_HEIGHT;
         let target_x = VW * 0.5 - panel_w * 0.5;
         let target_y = 20.0;
         let start_y = -panel_h - 28.0;
-        let slide_t = (toast_ticks.min(GOLD_MASTER_TOAST_RISE_TICKS) as f32)
-            / (GOLD_MASTER_TOAST_RISE_TICKS as f32);
-        let eased = 1.0 - (1.0 - slide_t).powi(3);
-        let y = if toast_ticks < GOLD_MASTER_TOAST_RISE_TICKS {
-            start_y + (target_y - start_y) * eased
-        } else {
-            target_y
-        };
+        // Slides down, holds, slides back up.
+        let out_from = TOAST_TOTAL_TICKS - TOAST_RISE_TICKS;
+        let slide_t = if toast_ticks < TOAST_RISE_TICKS {
+            toast_ticks as f32 / TOAST_RISE_TICKS as f32
+        } else if toast_ticks >= out_from {
+            1.0 - (toast_ticks - out_from) as f32 / TOAST_RISE_TICKS as f32
+        } else { 1.0 };
+        let eased = 1.0 - (1.0 - slide_t.clamp(0.0, 1.0)).powi(3);
+        let y = start_y + (target_y - start_y) * eased;
 
-        // Show the triggering achievement's title/description. The generic
-        // toast path stores them in achievement_toast_title/_desc; gold_master
-        // falls back to its constants when those are absent.
-        if let Some(font) = crate::scenes::game::helpers::ui_font() {
-            let s = c.virtual_scale();
-            let title = match c.get_var("achievement_toast_title") { Some(Value::Str(v)) => v.clone(), _ => GOLD_MASTER_TITLE.to_string() };
-            let desc  = match c.get_var("achievement_toast_desc")  { Some(Value::Str(v)) => v.clone(), _ => GOLD_MASTER_DESCRIPTION.to_string() };
-            if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
-                obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&title, &font, 46.0 * s, Color(250, 225, 120, 255), 1080.0 * s)));
-            }
-            if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
-                obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&desc, &font, 26.0 * s, Color(210, 220, 235, 230), 1080.0 * s)));
+        // The text is drawn once per toast, in its tier's colour.
+        if !c.get_bool("achievement_toast_drawn") {
+            c.set_var("achievement_toast_drawn", true);
+            if let Some(font) = crate::scenes::game::helpers::ui_font() {
+                let s = c.virtual_scale();
+                let title = match c.get_var("achievement_toast_title") { Some(Value::Str(v)) => v.clone(), _ => String::new() };
+                let desc  = match c.get_var("achievement_toast_desc")  { Some(Value::Str(v)) => v.clone(), _ => String::new() };
+                let rgb = c.get_i32("achievement_toast_rgb");
+                let tc = Color(((rgb >> 16) & 255) as u8, ((rgb >> 8) & 255) as u8, (rgb & 255) as u8, 255);
+                if let Some(obj) = c.get_game_object_mut(TOAST_TITLE_NAME) {
+                    obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&format!("ACHIEVEMENT  \u{00b7}  {title}"), &font, 44.0 * s, tc, 1080.0 * s)));
+                }
+                if let Some(obj) = c.get_game_object_mut(TOAST_DESC_NAME) {
+                    obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&desc, &font, 28.0 * s, Color(210, 220, 235, 230), 1080.0 * s)));
+                }
             }
         }
 
-        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_PANEL_NAME) {
+        if let Some(obj) = c.get_game_object_mut(TOAST_PANEL_NAME) {
             obj.position = (target_x, y);
             obj.visible = true;
         }
-        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
+        if let Some(obj) = c.get_game_object_mut(TOAST_TITLE_NAME) {
             obj.position = (target_x + 40.0, y + 22.0);
             obj.visible = true;
         }
-        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
-            obj.position = (target_x + 40.0, y + 74.0);
+        if let Some(obj) = c.get_game_object_mut(TOAST_DESC_NAME) {
+            obj.position = (target_x + 40.0, y + 78.0);
             obj.visible = true;
         }
-        if let Some(obj) = c.get_game_object_mut(GOLD_MASTER_TOAST_CHECK_NAME) {
+        if let Some(obj) = c.get_game_object_mut(TOAST_CHECK_NAME) {
             obj.position = (target_x + panel_w - 150.0, y + 34.0);
             obj.visible = true;
         }
 
-        c.set_var(GOLD_MASTER_TOAST_TICKS_VAR, toast_ticks.saturating_add(1) as i32);
-        if toast_ticks + 1 >= GOLD_MASTER_TOAST_TOTAL_TICKS {
-            c.set_var(GOLD_MASTER_TOAST_ACTIVE_VAR, false);
+        c.set_var(TOAST_TICKS_VAR, toast_ticks.saturating_add(1) as i32);
+        if toast_ticks + 1 >= TOAST_TOTAL_TICKS {
+            c.set_var(TOAST_ACTIVE_VAR, false);
         }
     } else {
         for name in [
-            GOLD_MASTER_TOAST_PANEL_NAME,
-            GOLD_MASTER_TOAST_TITLE_NAME,
-            GOLD_MASTER_TOAST_DESC_NAME,
-            GOLD_MASTER_TOAST_CHECK_NAME,
+            TOAST_PANEL_NAME,
+            TOAST_TITLE_NAME,
+            TOAST_DESC_NAME,
+            TOAST_CHECK_NAME,
         ] {
             if let Some(obj) = c.get_game_object_mut(name) {
                 obj.visible = false;

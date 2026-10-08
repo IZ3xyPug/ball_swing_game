@@ -220,6 +220,8 @@ pub fn spawn_impact(
     use crate::constants::*;
     let kind = if taken { IMPACT_KIND_TAKEN } else { IMPACT_KIND_DEALT };
     spawn_pooled_fx(c, st, pos, size * IMPACT_SCALE, rgb, kind, IMPACT_TICKS);
+    // A hit has weight: a short freeze and a kick (see `juice`).
+    crate::scenes::game::juice::on_impact(c, taken);
 }
 
 /// A sonic pulse at `pos` — the player's own beat feedback.
@@ -238,6 +240,24 @@ pub fn spawn_beat_pulse(
     let rgb = if hit { BEAT_HIT_RGB } else { BEAT_MISS_RGB };
     spawn_pooled_fx(c, st, pos, PLAYER_R * 2.0 * BEAT_PULSE_SCALE, rgb,
                     IMPACT_KIND_PULSE, BEAT_PULSE_TICKS);
+}
+
+/// A ring at `pos`, `d` across, for set pieces (a boss's phase change):
+/// `pulse` is the soft sonic ring, otherwise the shattering burst.
+pub(crate) fn spawn_fx_ring(
+    c: &mut quartz::Canvas,
+    st: &std::sync::Arc<std::sync::Mutex<crate::state::State>>,
+    pos: (f32, f32),
+    d: f32,
+    rgb: (f32, f32, f32),
+    pulse: bool,
+) {
+    use crate::constants::*;
+    if pulse {
+        spawn_pooled_fx(c, st, pos, d, rgb, IMPACT_KIND_PULSE, BEAT_PULSE_TICKS);
+    } else {
+        spawn_pooled_fx(c, st, pos, d, rgb, IMPACT_KIND_DEALT, IMPACT_TICKS);
+    }
 }
 
 fn spawn_pooled_fx(
@@ -376,10 +396,15 @@ mod impact_tests {
 pub(crate) fn bounce_off_part(
     c: &mut Canvas, st: &Arc<Mutex<State>>, centre: (f32, f32), r: f32,
 ) -> Option<(f32, f32)> {
-    let (px, py, vx, vy, hooked, holding) = {
+    let (px, py, vx, vy, hooked, holding, dead) = {
         let s = st.lock().unwrap();
-        (s.px, s.py, s.vx, s.vy, s.hooked, s.hitstop_ticks > 0)
+        (s.px, s.py, s.vx, s.vy, s.hooked, s.hitstop_ticks > 0, s.dead)
     };
+    // Dead, the body left where the player fell is not there: no bounce,
+    // and so no hit (every part hit is found through here).
+    if dead {
+        return None;
+    }
     // Hanging in a hit-stop: already resolved, and moving them now would
     // tug the freeze.
     if holding {

@@ -232,7 +232,36 @@ fn build_canvas(ctx: &mut prism::Context, start_minute: f32) -> Canvas {
     canvas.add_scene(build_daily_reward_scene(ctx));
     canvas.add_scene(build_profile_scene(ctx));
     crate::scenes::game::events::register_mouse_handlers(&mut canvas);
-    canvas.load_scene("game");
+    crate::scenes::game::death_screen::register_handlers(&mut canvas);
+    crate::transition::register_hold_key(&mut canvas);
+    // `HEADLESS_PERM=<id>:<rank>,...`: permanent upgrade ranks for this run
+    // (filming the shop's upgrade demos: the same run without, then with).
+    if let Ok(spec) = std::env::var("HEADLESS_PERM") {
+        let g = crate::profile::profile();
+        let mut p = g.lock().unwrap();
+        for part in spec.split(',') {
+            let Some((id, r)) = part.split_once(':') else { continue };
+            let r: u32 = r.parse().unwrap_or(0);
+            if id == "heart" { p.permanent_extra_hearts = r; continue; }
+            p.perm_levels.retain(|(k, _)| k != id);
+            p.perm_levels.push((id.to_string(), r));
+        }
+    }
+    // `HEADLESS_ABILITY=<id>:<rank>`: equip an ability for this run.
+    if let Some((id, rank)) = std::env::var("HEADLESS_ABILITY").ok().as_deref().and_then(|v| v.split_once(':').map(|(a, b)| (a.to_string(), b.parse::<u32>().unwrap_or(1)))) {
+        let g = crate::profile::profile();
+        let mut p = g.lock().unwrap();
+        p.perm_levels.retain(|(k, _)| k != &id);
+        p.perm_levels.push((id.clone(), rank));
+        p.equipped_ability = id;
+    }
+    // As the app does at start.
+    crate::scenes::game::build_scene::enable_game_lighting(&mut canvas);
+    // `HEADLESS_NO_PRELOAD=1`: do not enter the game first, so the first
+    // entry happens the way a player's does (from the menu).
+    if std::env::var("HEADLESS_NO_PRELOAD").is_err() {
+        canvas.load_scene("game");
+    }
     canvas
 }
 
@@ -268,6 +297,100 @@ fn get_i32_or(c: &Canvas, name: &str, default: i32) -> i32 {
 /// the look screens — the cat carousel, and two rope styles with the colour
 /// row — so shop changes can be reviewed without a device. Saves go to the
 /// headless temp dir (see `build_canvas`), never a real profile.
+/// `HEADLESS_MENU=<dir>`: the main menu as the game draws it, so its look
+/// can be reviewed without a device: frames over its first three seconds
+/// (anything animated shows as it moves), saved as `<dir>/frame_NNNNNN.png`.
+pub fn capture_menu(dir: &str) {
+    let (mut ctx, _recv) = prism::Context::new();
+    let mut canvas = build_canvas(&mut ctx, 0.0);
+    let sized = SizedTree::default();
+    // `HEADLESS_SCENE=<name>`: shoot that scene (settings, profile, ...) instead.
+    let scene = std::env::var("HEADLESS_SCENE").unwrap_or_else(|_| "menu".into());
+    canvas.load_scene(&scene);
+    // `HEADLESS_VAR_F32=name=value`: set a float var after loading (e.g. a
+    // page's scroll target), to shoot a state the page reaches by input.
+    if let Some((k, v)) = std::env::var("HEADLESS_VAR_F32").ok().as_deref().and_then(|s| s.split_once('=')) {
+        if let Ok(v) = v.parse::<f32>() { canvas.set_var(k, v); }
+    }
+    // `HEADLESS_MENU_TO_SHOP=1`: open the shop at tick 60 and film the trip
+    // up into it, then the categories, then the CHARACTERS carousel.
+    let to_shop = std::env::var("HEADLESS_MENU_TO_SHOP").is_ok();
+    // `HEADLESS_EVENT=<custom event>@<tick>`: fire it then (e.g. goto_game@60);
+    // `HEADLESS_SHOT_STEP=<n>` films every n ticks instead of every 30.
+    let event = std::env::var("HEADLESS_EVENT").ok().and_then(|v| {
+        let (n, t) = v.split_once('@')?;
+        Some((n.to_string(), t.parse::<u64>().ok()?))
+    });
+    let step: u64 = std::env::var("HEADLESS_SHOT_STEP").ok().and_then(|v| v.parse().ok()).unwrap_or(30).max(1);
+    // `HEADLESS_TICKS=<n>`: run that many ticks (default 180).
+    let ticks: u64 = std::env::var("HEADLESS_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(180);
+    for i in 1..=ticks {
+        let frame0 = std::time::Instant::now();
+        if let Some((name, at)) = &event {
+            if i == *at { canvas.run(Action::Custom { name: name.clone() }); }
+        }
+        // `HEADLESS_GO=<scene>@<tick>`: the slow shutter to a scene then.
+        if let Some((sc, at)) = std::env::var("HEADLESS_GO").ok().as_deref().and_then(|v| v.split_once('@')).and_then(|(n, t)| Some((n.to_string(), t.parse::<u64>().ok()?))) {
+            if i == at { crate::transition::go_slow(&mut canvas, &sc); }
+        }
+        // `HEADLESS_EVENT2=<event>@<tick>`: a second one.
+        if let Some((name, at)) = std::env::var("HEADLESS_EVENT2").ok().as_deref().and_then(|v| v.split_once('@')).and_then(|(n, t)| Some((n.to_string(), t.parse::<u64>().ok()?))) {
+            if i == at { canvas.run(Action::Custom { name }); }
+        }
+        // `HEADLESS_FREEZE_ORBIT=<tick>`: hold the start screen's orbit at
+        // that point, so the cat sits still (filming the start screen).
+        if let Some(at) = std::env::var("HEADLESS_FREEZE_ORBIT").ok().and_then(|v| v.parse::<i32>().ok()) {
+            if canvas.get_bool("start_prompt_active") { canvas.set_var("start_orbit_ticks", at); }
+        }
+        let tick0 = std::time::Instant::now();
+        // `HEADLESS_SPACE_AT=<tick>`: press (and hold) Space then.
+        if std::env::var("HEADLESS_SPACE_AT").ok().and_then(|v| v.parse::<u64>().ok()) == Some(i) {
+            send_key(&mut ctx, &mut canvas, &sized, KeyboardState::Pressed);
+        }
+        if std::env::var("TIMING_DBG").is_ok() { let e = tick0.elapsed(); if e.as_millis() > 40 { eprintln!("timing: tick {i} took {e:?}"); } }
+        if std::env::var("HEADLESS_TRACE").is_ok() && i % 10 == 0 {
+            let p = canvas.get_game_object("player").map(|o| (o.position, o.visible));
+            eprintln!("t={i} scene_game={} paused={} player={p:?} cam={:?} intro={} prompt={} hold={} space={} gp={}",
+                canvas.is_scene("game"), canvas.is_paused(),
+                canvas.camera().map(|c| (c.position, c.zoom)), canvas.get_i32("game_intro_t"),
+                canvas.get_bool("start_prompt_active"), canvas.get_i32("start_hold_ticks"), canvas.key("space"), canvas.get_bool("game_paused"));
+        }
+        if to_shop && i == 60 {
+            canvas.set_var("menu_cam_target_y", 0.0f32);
+            canvas.set_var("menu_in_shop", true);
+            crate::shop::init_shop(&mut canvas);
+        }
+        OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
+        // Lay out every tick, as a window does: sizes come from the last
+        // layout, so laying out only on the frames shot left a fast-moving
+        // camera's frames drawn at a stale scale.
+        {
+            use prism::drawable::Drawable;
+            let screen = (VW, VH);
+            let req = canvas.request_size();
+            let _ = canvas.build(screen, req);
+        }
+        if if to_shop { i >= 56 && i % 4 == 0 } else { i % step == 0 } {
+            shoot_frame(&mut canvas, dir, i);
+        }
+        // `HEADLESS_FRAME_MS=<ms>`: report any whole frame (tick + layout +
+        // shot) slower than that — first-time stalls show up here.
+        if let Some(lim) = std::env::var("HEADLESS_FRAME_MS").ok().and_then(|v| v.parse::<u128>().ok()) {
+            let e = frame0.elapsed();
+            if e.as_millis() > lim { eprintln!("slow frame {i}: {e:?} scene_game={}", canvas.is_scene("game")); }
+        }
+    }
+    if to_shop {
+        // `HEADLESS_SHOP_CAT=<n>`: which category's carousel to end on.
+        let cat = std::env::var("HEADLESS_SHOP_CAT").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        crate::shop::show_carousel(&mut canvas, cat);
+        for i in 181..=240u64 {
+            OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
+            if i == 240 { shoot_frame(&mut canvas, dir, i); }
+        }
+    }
+}
+
 pub fn capture_shop(dir: &str) {
     let (mut ctx, _recv) = prism::Context::new();
     let mut canvas = build_canvas(&mut ctx, 0.0);
@@ -296,7 +419,12 @@ pub fn capture_shop(dir: &str) {
         }
         return;
     }
-    let shots: [(i32, i32, i32, u64); 4] = [(0, 15, 0, 1), (0, 8, 0, 2), (1, 1, 5, 3), (1, 7, 8, 4)];
+    let mut shots: Vec<(i32, i32, i32, u64)> = vec![(0, 15, 0, 1), (0, 8, 0, 2), (1, 1, 5, 3), (1, 7, 8, 4)];
+    // `HEADLESS_SHOP_CAT=<category>`: that category's carousel instead, at
+    // its first and fourth items.
+    if let Some(cat) = std::env::var("HEADLESS_SHOP_CAT").ok().and_then(|v| v.parse::<i32>().ok()) {
+        shots = vec![(cat, 0, 0, 1), (cat, 3, 0, 2)];
+    }
     for (cat, sel, color, n) in shots {
         crate::shop::show_carousel(&mut canvas, cat);
         canvas.set_var("player_rope_selected", color);
@@ -309,13 +437,75 @@ pub fn capture_shop(dir: &str) {
     }
 }
 
+/// `HEADLESS_LABEL=<text>@<path>`: write `text` in the menu's glowing title
+/// style to a PNG (labels for the shop's upgrade demo clips).
+pub fn write_label(spec: &str) {
+    let Some((text, path)) = spec.split_once('@') else { return };
+    let px: f32 = std::env::var("HEADLESS_LABEL_PX").ok().and_then(|v| v.parse().ok()).unwrap_or(64.0);
+    if let Some(img) = crate::menu_look::glow_text(text, px) {
+        let _ = img.save(path);
+    }
+}
+
+/// `HEADLESS_SHOW_RING=reach|magnet`: a ring around the player at that
+/// radius, so a clip can SHOW a reach or pickup range.
+fn place_demo_ring(canvas: &mut Canvas) {
+    let Ok(kind) = std::env::var("HEADLESS_SHOW_RING") else { return };
+    let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() else { return };
+    let (r, (px, py), col) = {
+        let mut s = st.lock().unwrap();
+        // `HEADLESS_RING_GROW=<frame>`: the reach starts at the BASE reach and
+        // grows to this run's over the half second from then — the line
+        // visibly getting longer, and the node lighting up the moment it is
+        // in reach, as it does in play.
+        if kind != "magnet" {
+            if let Some(g) = std::env::var("HEADLESS_RING_GROW").ok().and_then(|v| v.parse::<u64>().ok()) {
+                static FULL: std::sync::Mutex<Option<f32>> = std::sync::Mutex::new(None);
+                let full = *FULL.lock().unwrap().get_or_insert(s.perm_reach_mult);
+                let f = crate::scenes::game::boss::fx_kit::FRAME.load(std::sync::atomic::Ordering::Relaxed);
+                let k = ((f.saturating_sub(g)) as f32 / 30.0).clamp(0.0, 1.0);
+                let k = k * k * (3.0 - 2.0 * k);
+                s.perm_reach_mult = 1.0 + (full - 1.0) * k;
+            }
+        }
+        let r = if kind == "magnet" { crate::gameplay::player_magnet_radius(&s) } else { crate::gameplay::player_grab_reach(&s) };
+        let col = if kind == "magnet" { [255, 220, 90] } else { [130, 210, 255] };
+        (r, (s.px, s.py), col)
+    };
+    if canvas.get_game_object("demo_ring").is_none() {
+        let n = 256u32;
+        let img = image::RgbaImage::from_fn(n, n, |x, y| {
+            let d = ((x as f32 + 0.5 - 128.0).powi(2) + (y as f32 + 0.5 - 128.0).powi(2)).sqrt();
+            let a = (1.0 - ((d - 124.0).abs() / 3.0)).clamp(0.0, 1.0) * 230.0 + if d < 124.0 { 28.0 } else { 0.0 };
+            image::Rgba([col[0], col[1], col[2], a as u8])
+        });
+        let o = GameObject::build("demo_ring").size(8.0, 8.0)
+            .image(Image { shape: ShapeType::Rectangle(0.0, (8.0, 8.0), 0.0), image: std::sync::Arc::new(img), color: None })
+            .layer(9_000).finish();
+        canvas.add_game_object("demo_ring".into(), o);
+    }
+    if let Some(o) = canvas.get_game_object_mut("demo_ring") {
+        o.size = (r * 2.0, r * 2.0);
+        o.position = (px - r, py - r);
+        o.visible = true;
+        o.update_image_shape();
+    }
+}
+
 fn shoot_frame(canvas: &mut Canvas, dir: &str, frame: u64) {
+    place_demo_ring(canvas);
     use prism::drawable::Drawable;
     thread_local! {
         static RENDERER: std::cell::RefCell<Option<prism::canvas::HeadlessRenderer>> =
             const { std::cell::RefCell::new(None) };
     }
-    let screen = (crate::constants::VW, crate::constants::VH);
+    // `HEADLESS_SHOT_W=<px>`: render straight at that width (16:9) instead of
+    // 4K-then-halved — for filming clips, where 4K per frame is far too slow.
+    let small = std::env::var("HEADLESS_SHOT_W").ok().and_then(|v| v.parse::<f32>().ok());
+    let screen = match small {
+        Some(w) => (w, (w * 9.0 / 16.0).round()),
+        None => (crate::constants::VW, crate::constants::VH),
+    };
     let req = canvas.request_size();
     let sized = canvas.build(screen, req);
     let items = canvas.draw(&sized, (0.0, 0.0), (0.0, 0.0, screen.0, screen.1));
@@ -331,7 +521,9 @@ fn shoot_frame(canvas: &mut Canvas, dir: &str, frame: u64) {
         return;
     };
     let Some(img) = image::RgbaImage::from_raw(w, h, px) else { return };
-    let half = image::imageops::resize(&img, w / 2, h / 2, image::imageops::FilterType::Triangle);
+    let half = if small.is_some() { img } else {
+        image::imageops::resize(&img, w / 2, h / 2, image::imageops::FilterType::Triangle)
+    };
     let _ = std::fs::create_dir_all(dir);
     let path = format!("{dir}/frame_{frame:06}.png");
     match half.save(&path) {
@@ -560,6 +752,291 @@ fn send_key(ctx: &mut prism::Context, c: &mut Canvas, sized: &SizedTree, state: 
     OnEvent::on_event(c, ctx, sized, Box::new(evt) as Box<dyn Event>);
 }
 
+/// `HEADLESS_STAGE=<frame>` with `HEADLESS_STAGE_KIND=reach|swing`: a clean
+/// stage for filming one upgrade's demo. From that frame everything in the
+/// world near the player — nodes, coins, bounce pads, cannons, spinners — is
+/// parked out of sight every tick, except the stage's own nodes, and the bot
+/// stops steering (space is held, so a rope once caught stays caught).
+///
+/// * `reach` (LONG LINE): the player hangs still with two nodes drifting in
+///   from either side; the game's own grab runs every tick, so the rope fires
+///   the moment one crosses the reach. Then the player swings.
+/// * `swing` (FLYWHEEL): the player catches a node level with it and is kicked
+///   far past any cap, so the cap is what sets the speed; a speed meter (this
+///   clip's alone — never in the game) shows the speed and the top speed.
+///
+/// Returns whether the stage is running (the bot's input is then overridden).
+#[derive(Default)]
+struct Stage { center: (f32, f32), hooks: Vec<String>, spots: Vec<(f32, f32)>, grabbed: bool, kicked: u32, peak: f32, released: bool, hooked_ticks: u32 }
+static STAGE: std::sync::Mutex<Option<Stage>> = std::sync::Mutex::new(None);
+
+/// After each tick, while a stage runs: the camera held on it
+/// (`HEADLESS_STAGE_ZOOM`, default 0.8), so both sides are in shot and the
+/// view does not chase the swing.
+fn stage_camera(canvas: &mut Canvas) {
+    let mut guard = STAGE.lock().unwrap();
+    let Some(g) = guard.as_mut() else { return };
+    let (cx, cy) = g.center;
+    // A swing is framed on its node, so the whole loop is in shot.
+    let center = if std::env::var("HEADLESS_STAGE_KIND").map_or(false, |k| k == "swing") {
+        g.spots.first().copied().unwrap_or(g.center)
+    } else {
+        g.center
+    };
+    // The stage's nodes: where the stage says, every tick (the game recycles
+    // and bobs its nodes, and would carry these off).
+    for (h, (x, y)) in g.hooks.iter().zip(g.spots.iter()) {
+        if let Some(o) = canvas.get_game_object_mut(h) {
+            o.position = (x - o.size.0 * 0.5, y - o.size.1 * 0.5);
+            o.momentum = (0.0, 0.0);
+            o.visible = true;
+        }
+    }
+
+    // Park the rest of the world.
+    let nearby: Vec<String> = match canvas.get_game_object("player") {
+        Some(p) => canvas.objects_in_radius(p, 9000.0).into_iter().filter(|o| {
+            let t = |n: &str| o.tags.iter().any(|x| x == n);
+            (t("hook") || t("coin") || t("pad") || t("pad_thruster") || t("gravity_cannon") || t("upgrade_node") || t("decor")
+                || ["spinner", "gwell", "turret", "comet"].iter().any(|p| o.id.starts_with(p)))
+                && !g.hooks.contains(&o.id)
+        }).map(|o| o.id.clone()).collect(),
+        None => Vec::new(),
+    };
+    // And every live node but the stage's own, wherever it is (a node parked
+    // last tick is out of that radius, and the world would bring it back).
+    let mut nearby = nearby;
+    if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+        for h in st.lock().unwrap().live_hooks.iter() {
+            if !g.hooks.contains(h) && !nearby.contains(h) { nearby.push(h.clone()); }
+        }
+    }
+    for id in nearby {
+        if let Some(o) = canvas.get_game_object_mut(&id) {
+            o.visible = false;
+            o.position = (cx, cy + 2.0e6);
+        }
+    }
+
+    // The swing's meter, read AFTER the tick: the game's speed cap has been
+    // applied by then (before it, the stage's push is still in there).
+    if std::env::var("HEADLESS_STAGE_KIND").map_or(false, |k| k == "swing") {
+        if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+            let (vx, vy) = { let s = st.lock().unwrap(); (s.vx, s.vy) };
+            let v = (vx * vx + vy * vy).sqrt();
+            if g.grabbed && g.hooked_ticks > 2 { g.peak = g.peak.max(v); }
+            let (show, peak) = (if g.grabbed { v } else { 0.0 }, g.peak);
+            speed_meter(canvas, show, peak);
+        }
+    }
+    // The static stage: the cat curled (its swinging poses would differ
+    // between the two halves of the clip).
+    if std::env::var("HEADLESS_STAGE_KIND").map_or(false, |k| k == "static") {
+        if let Some(o) = canvas.get_game_object_mut("player") {
+            if let Some(a) = o.animated_sprite.as_mut() { a.set_frame(0); }
+        }
+    }
+    // Still hanging: held where the stage began (the tick's gravity undone).
+    if !g.grabbed {
+        if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+            let mut s = st.lock().unwrap();
+            if std::env::var("HEADLESS_STAGE_KIND").map_or(false, |k| k == "static") {
+                s.hooked = false;
+                s.active_hook = String::new();
+            }
+            if !s.hooked { s.px = cx; s.py = cy; s.vx = 0.0; s.vy = 0.0; }
+        }
+        if let Some(o) = canvas.get_game_object_mut("player") {
+            o.position = (cx - PLAYER_R, cy - PLAYER_R);
+            o.momentum = (0.0, 0.0);
+        }
+    }
+    drop(guard);
+    let z: f32 = std::env::var("HEADLESS_STAGE_ZOOM").ok().and_then(|v| v.parse().ok()).unwrap_or(0.8);
+    if let Some(cam) = canvas.camera_mut() {
+        cam.follow(None);
+        cam.zoom_anchor = None;
+        cam.lerp_speed = 1.0;
+        cam.zoom = z;
+        cam.zoom_target = z;
+        cam.position = (center.0 - VW * 0.5 / z, center.1 - VH * 0.5 / z);
+    }
+}
+
+fn stage_tick(canvas: &mut Canvas, ctx: &mut prism::Context, sized: &SizedTree, frames: u64) -> bool {
+    let Some(at) = std::env::var("HEADLESS_STAGE").ok().and_then(|v| v.parse::<u64>().ok()) else { return false };
+    if frames < at { return false; }
+    let kind = std::env::var("HEADLESS_STAGE_KIND").unwrap_or_else(|_| "reach".into());
+    let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() else { return false };
+    let mut guard = STAGE.lock().unwrap();
+    if frames == at || guard.is_none() {
+        let s = st.lock().unwrap();
+        if std::env::var("STAGE_DBG").is_ok() {
+            eprintln!("STAGE live {} first {:?}", s.live_hooks.len(),
+                s.live_hooks.iter().take(4).map(|h| canvas.get_game_object(h).map(|o| o.tags.clone())).collect::<Vec<_>>());
+        }
+        let want = if kind == "reach" { 2 } else { 1 };
+        let hooks: Vec<String> = s.live_hooks.iter().filter(|h| {
+            canvas.get_game_object(h).map_or(false, |o| {
+                let t = |n: &str| o.tags.iter().any(|x| x == n);
+                t("hook") && !t("checkpoint_node") && !t(SPECIAL_HOOK_TAG) && !t(EXTENDED_HOOK_TAG)
+            })
+        }).take(want).cloned().collect();
+        // A fixed height in the play band, not wherever the bot happened to
+        // be (mid-fall, or below the screen respawning).
+        *guard = Some(Stage { center: (s.px, 640.0), hooks, ..Default::default() });
+        drop(s);
+        // Drop the rope the bot was on: the stage starts in the air.
+        {
+            let mut s = st.lock().unwrap();
+            s.hooked = false;
+            s.active_hook = String::new();
+            s.respawn_active = false;
+        }
+        canvas.run(Action::Hide { target: Target::name("rope") });
+        let g = guard.as_mut().unwrap();
+        let (cx, cy) = g.center;
+        let spots: Vec<(f32, f32)> = if kind == "swing" {
+            // Up and ahead, inside any reach.
+            vec![(cx + 460.0, cy - 460.0)]
+        } else if kind == "static" {
+            // LONG LINE: one node right on the BASE reach, so the base ring's
+            // edge just touches it and an upgraded ring takes it in.
+            // Just past the BASE reach: the base ring's edge just short of it
+            // (no highlight); an upgraded ring takes it in, and it lights.
+            vec![(cx + ROPE_LEN_MAX + 40.0, cy)]
+        } else {
+            vec![(cx + 1500.0, cy - 250.0), (cx - 1500.0, cy - 250.0)]
+        };
+        g.spots = spots.into_iter().take(g.hooks.len()).collect();
+    }
+    let g = guard.as_mut().unwrap();
+    let (cx, cy) = g.center;
+    if std::env::var("STAGE_DBG").is_ok() && frames % 10 == 0 {
+        let prox = match canvas.get_var("hook_prox_id") { Some(Value::Str(v)) => v, _ => String::new() };
+        let sp = g.hooks.first().and_then(|h| canvas.get_game_object(h)).and_then(|o| o.animated_sprite.as_ref().map(|a| a.current_frame_index()));
+        let mult = st.lock().unwrap().perm_reach_mult;
+        eprintln!("HL f{frames} staged {:?} prox {prox:?} frame {sp:?} mult {mult:.2}", g.hooks.first());
+    }
+    if std::env::var("STAGE_DBG").is_ok() && frames % 20 == 0 {
+        let hs: Vec<_> = g.hooks.iter().map(|h| canvas.get_game_object(h).map(|o| (o.position, o.visible))).collect();
+        eprintln!("STAGE f{frames} center {:?} hooks {:?} {hs:?}", g.center, g.hooks);
+    }
+
+    // The stage's nodes stay LIVE: the world recycles nodes the bot has left
+    // behind, and a node not in the live list is never highlighted or caught.
+    {
+        let mut s = st.lock().unwrap();
+        for h in &g.hooks { if !s.live_hooks.contains(h) { s.live_hooks.push(h.clone()); } }
+    }
+    // Only the stage's own node counts: a rope still on one of the world's
+    // (a grab already in flight when the stage began) is cut.
+    {
+        let mut s = st.lock().unwrap();
+        if s.hooked && !g.hooks.contains(&s.active_hook) && !g.grabbed {
+            s.hooked = false;
+            s.active_hook = String::new();
+        }
+    }
+    let hooked = st.lock().unwrap().hooked;
+    if hooked { g.grabbed = true; }
+    if !g.grabbed {
+        // Hang still where the stage began.
+        {
+            let mut s = st.lock().unwrap();
+            s.px = cx; s.py = cy; s.vx = 0.0; s.vy = 0.0;
+        }
+        if let Some(o) = canvas.get_game_object_mut("player") {
+            o.position = (cx - PLAYER_R, cy - PLAYER_R);
+            o.momentum = (0.0, 0.0);
+        }
+        if kind == "reach" {
+            let drift: f32 = std::env::var("HEADLESS_STAGE_DRIFT").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
+            for p in g.spots.iter_mut() { p.0 += if p.0 > cx { -drift } else { drift }; }
+        }
+        if frames > at + 10 && kind != "static" { canvas.run(Action::Custom { name: "do_grab".into() }); }
+    } else if kind == "swing" && !g.released {
+        // On the rope: driven along the swing, far past any cap, for the
+        // first stretch, so the cap is what sets the speed; then released
+        // as the swing carries it up and forward.
+        g.hooked_ticks += 1;
+        let (px, py, hx, hy, vx, vy) = { let s = st.lock().unwrap(); (s.px, s.py, s.hook_x, s.hook_y, s.vx, s.vy) };
+        let (rx, ry) = (px - hx, py - hy);
+        let len = (rx * rx + ry * ry).sqrt().max(1.0);
+        if std::env::var("STAGE_DBG").is_ok() && g.hooked_ticks % 5 == 0 {
+            let s2 = st.lock().unwrap();
+            eprintln!("SWING t{} rel ({rx:.0},{ry:.0}) v ({vx:.1},{vy:.1}) hook {} dlg {} hold {} cap {} gp {} paused {}", g.hooked_ticks,
+                s2.active_hook, s2.upgrade_dialogue_active, s2.upgrade_hold_until_tether, s2.cannon_captured,
+                canvas.get_bool("game_paused"), canvas.is_paused());
+        }
+        if g.hooked_ticks < 14 {
+            // Tangent pointing down-and-forward from the start (clockwise).
+            let t = (-ry / len, rx / len);
+            let t = if t.0 > 0.0 || (t.0 == 0.0 && t.1 > 0.0) { t } else { (-t.0, -t.1) };
+            let t = if ry < 0.0 { (-t.0, -t.1) } else { t };
+            let kick = (t.0 * 160.0, t.1 * 160.0);
+            { let mut s = st.lock().unwrap(); s.vx = kick.0; s.vy = kick.1; }
+            if let Some(o) = canvas.get_game_object_mut("player") { o.momentum = kick; }
+        } else if (vx > 0.0 && vy < 0.0 && rx > 0.0 && ry < 260.0) || g.hooked_ticks > 200 {
+            // Up the far side, moving up and forward: let go.
+            g.released = true;
+        }
+    }
+    let _ = (ctx, sized);
+
+    true
+}
+
+/// The FLYWHEEL clip's speed meter: a bar, the speed, and the top speed.
+fn speed_meter(canvas: &mut Canvas, v: f32, peak: f32) {
+    const FULL: f32 = 80.0;
+    let (bw, bh) = (1800.0f32, 70.0f32);
+    let (bx, by) = ((VW - bw) * 0.5, VH - 520.0);
+    let solid = |r: u8, g: u8, b: u8, a: u8| std::sync::Arc::new(image::RgbaImage::from_pixel(1, 1, image::Rgba([r, g, b, a])));
+    let mk = |canvas: &mut Canvas, id: &str, img: std::sync::Arc<image::RgbaImage>| {
+        if canvas.get_game_object(id).is_none() {
+            let mut o = GameObject::build(id).size(8.0, 8.0)
+                .image(Image { shape: ShapeType::Rectangle(0.0, (8.0, 8.0), 0.0), image: img, color: None })
+                .layer(9_100).ignore_zoom().finish();
+            o.unlit = true;
+            o.gravity = 0.0;
+            canvas.add_game_object(id.into(), o);
+        }
+    };
+    mk(canvas, "demo_meter_bg", solid(20, 16, 40, 210));
+    mk(canvas, "demo_meter_fill", solid(255, 190, 70, 255));
+    mk(canvas, "demo_meter_peak", solid(255, 255, 255, 255));
+    let place = |canvas: &mut Canvas, id: &str, pos: (f32, f32), size: (f32, f32)| {
+        if let Some(o) = canvas.get_game_object_mut(id) {
+            o.position = pos; o.size = size; o.visible = size.0 > 0.5;
+        }
+    };
+    let pad = 10.0;
+    place(canvas, "demo_meter_bg", (bx - pad, by - pad), (bw + pad * 2.0, bh + pad * 2.0));
+    let fw = (v / FULL).clamp(0.0, 1.0) * bw;
+    place(canvas, "demo_meter_fill", (bx, by), (fw, bh));
+    let px = bx + (peak / FULL).clamp(0.0, 1.0) * bw;
+    place(canvas, "demo_meter_peak", (px - 6.0, by - 24.0), (if peak > 0.0 { 12.0 } else { 0.0 }, bh + 48.0));
+    for o in ["demo_meter_bg", "demo_meter_fill", "demo_meter_peak"] {
+        if let Some(obj) = canvas.get_game_object_mut(o) {
+            let size = obj.size;
+            let img = match o { "demo_meter_bg" => solid(20, 16, 40, 210), "demo_meter_fill" => solid(255, 190, 70, 255), _ => solid(255, 255, 255, 255) };
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, size, 0.0), image: img, color: None });
+        }
+    }
+    let label = format!("SPEED {:>3}     TOP {:>3}", v.round() as i32, peak.round() as i32);
+    if let Some(img) = crate::menu_look::glow_text(&label, 120.0) {
+        let size = (img.width() as f32, img.height() as f32);
+        mk(canvas, "demo_meter_txt", img.clone());
+        if let Some(o) = canvas.get_game_object_mut("demo_meter_txt") {
+            o.size = size;
+            o.position = ((VW - size.0) * 0.5, by - size.1 - 10.0);
+            o.visible = true;
+            o.set_image(Image { shape: ShapeType::Rectangle(0.0, size, 0.0), image: img, color: None });
+        }
+    }
+}
+
 fn zone_for_distance(d: f32) -> usize {
     crate::difficulty::zone_index_for_distance(d)
 }
@@ -648,9 +1125,19 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
         .and_then(|v| v.parse().ok())
         .unwrap_or(600)
         .max(1);
+    // `HEADLESS_SHOT_FROM=<frame>`: no shots before it (film a window).
+    let shot_from: u64 = std::env::var("HEADLESS_SHOT_FROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let cine_at: Option<u64> = std::env::var("HEADLESS_PHASE_CINE").ok().and_then(|v| v.parse().ok());
+    let ab_at: Option<u64> = std::env::var("HEADLESS_AB_AT").ok().and_then(|v| v.parse().ok());
+    // `HEADLESS_KILL_AT=<frame>`: spend every heart then; `HEADLESS_DEATH_HOLD=
+    // <frames>`: keep running that long after dying (filming the death screen).
+    let kill_at: Option<u64> = std::env::var("HEADLESS_KILL_AT").ok().and_then(|v| v.parse().ok());
+    let death_hold: u64 = std::env::var("HEADLESS_DEATH_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mut died_at: Option<u64> = None;
     while frames < max_frames {
+        crate::scenes::game::boss::fx_kit::FRAME.store(frames, std::sync::atomic::Ordering::Relaxed);
         if let Some(dir) = &shot_dir {
-            if frames > 0 && frames % shot_every == 0 {
+            if frames > 0 && frames % shot_every == 0 && frames >= shot_from {
                 shoot_frame(&mut canvas, dir, frames);
             }
         }
@@ -851,6 +1338,79 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
             decide(&o, hooked_ticks, force_fall, frames, buffed, boss_center, flare_threat, sheltered)
         };
 
+        // `HEADLESS_GOD_AT=<frame>`: press 0 (god mode: the player stops
+        // dead, the rope goes) on that frame, and the bot lets go for good —
+        // for filming the HUD with nothing moving.
+        let god_at: Option<u64> = std::env::var("HEADLESS_GOD_AT").ok().and_then(|v| v.parse().ok());
+        if god_at == Some(frames) {
+            for state in [KeyboardState::Pressed, KeyboardState::Released] {
+                let evt = KeyboardEvent { key: Key::Character("0".into()), state, modifiers: Modifiers::none() };
+                OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(evt) as Box<dyn Event>);
+            }
+        }
+        let (hold, target) = if god_at.map_or(false, |g| frames >= g) { (false, None) } else { (hold, target) };
+        // `HEADLESS_FLARE_AT=<frame>`: a solar flare goes off then (filming it).
+        if std::env::var("HEADLESS_FLARE_AT").ok().and_then(|v| v.parse::<u64>().ok()) == Some(frames) {
+            canvas.set_var("debug_flare_interval", 100_000i32);
+            if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                let mut s = st.lock().unwrap();
+                s.flare_warn = 0;
+                s.flare_active = true;
+                // `HEADLESS_FLARE_TICKS=<n>`: a shorter (or longer) flare.
+                s.flare_active_ticks = std::env::var("HEADLESS_FLARE_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(FLARE_ACTIVE_TICKS);
+                // As a real eruption: the first burn a second in, the
+                // SUNPROOFING wards full.
+                s.flare_damage_timer = FLARE_DAMAGE_GRACE;
+                s.flare_wards_left = s.perm_flare_wards;
+                // `HEADLESS_HEARTS=<n>`: hearts left as it goes off.
+                if let Some(n) = std::env::var("HEADLESS_HEARTS").ok().and_then(|v| v.parse::<i32>().ok()) {
+                    s.hearts = n.min(s.max_hearts);
+                }
+            }
+        }
+        let staged = stage_tick(&mut canvas, &mut ctx, &sized, frames);
+        let released = STAGE.lock().unwrap().as_ref().map_or(false, |g| g.released);
+        let static_stage = std::env::var("HEADLESS_STAGE_KIND").map_or(false, |k| k == "static");
+        let (hold, target) = if staged { (!static_stage && !released, None) } else { (hold, target) };
+        // `HEADLESS_COIN_ROW=<frame>`: lay coins out in a row either side of
+        // the player then, well outside any pickup range, and drift them in
+        // (`HEADLESS_COIN_DRIFT` px a tick, default 5) — each is snatched the
+        // moment it crosses the range, which SHOWS how far MAGNETISM reaches.
+        // Pair it with HEADLESS_GOD_AT so the player holds still.
+        if let Some(row_at) = std::env::var("HEADLESS_COIN_ROW").ok().and_then(|v| v.parse::<u64>().ok()) {
+            if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                static ROW: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+                let (px, py) = { let s = st.lock().unwrap(); (s.px, s.py) };
+                if frames == row_at {
+                    let live = {
+                        let mut s = st.lock().unwrap();
+                        s.coin_magnet_locked.clear();
+                        s.coin_live.clone()
+                    };
+                    let mut spots = Vec::new();
+                    for d in [420.0f32, 540.0, 660.0] { spots.push((px + d, py)); spots.push((px - d, py)); }
+                    let mut row = ROW.lock().unwrap();
+                    row.clear();
+                    for (id, (x, y)) in live.iter().zip(spots) {
+                        if let Some(o) = canvas.get_game_object_mut(id) {
+                            o.position = (x - COIN_R, y - COIN_R);
+                            o.visible = true;
+                            row.push(id.clone());
+                        }
+                    }
+                } else if frames > row_at {
+                    let drift: f32 = std::env::var("HEADLESS_COIN_DRIFT").ok().and_then(|v| v.parse().ok()).unwrap_or(5.0);
+                    let locked = st.lock().unwrap().coin_magnet_locked.clone();
+                    for id in ROW.lock().unwrap().iter() {
+                        if locked.contains(id) { continue; }
+                        if let Some(o) = canvas.get_game_object_mut(id) {
+                            let cx = o.position.0 + COIN_R;
+                            o.position.0 += if cx > px { -drift } else { drift };
+                        }
+                    }
+                }
+            }
+        }
         if let Some((tx, ty)) = target {
             canvas.set_var("mouse_grab_x", Value::F32(tx));
             canvas.set_var("mouse_grab_y", Value::F32(ty));
@@ -861,22 +1421,171 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
             space_held = hold;
         }
 
+        if kill_at == Some(frames) {
+            canvas.set_var("debug_immortal", false);
+            if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                let mut s = st.lock().unwrap();
+                s.hearts = 0;
+                s.free_respawns_left = 0;
+            }
+        }
+
+        // `HOOK_DUMP=<frame>`: print every live node's centre, sorted by x,
+        // with the gap to the previous one (measuring node spacing).
+        if std::env::var("HOOK_DUMP").ok().and_then(|v| v.parse::<u64>().ok()) == Some(frames) {
+            if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                let ids = st.lock().unwrap().live_hooks.clone();
+                let mut pts: Vec<(f32, f32, String)> = ids.iter().filter_map(|id| canvas.get_game_object(id)
+                    .filter(|o| o.visible).map(|o| (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5, o.tags.join("|")))).collect();
+                pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                let mut prev: Option<(f32, f32)> = None;
+                for (x, y, tags) in &pts {
+                    let d = prev.map(|(px, py)| ((x - px).powi(2) + (y - py).powi(2)).sqrt()).unwrap_or(0.0);
+                    eprintln!("HOOK x={x:.0} y={y:.0} gap={d:.0} {tags}");
+                    prev = Some((*x, *y));
+                }
+            }
+        }
+        // `BOSS_WIN_AT=<frame>`: the boss dies then (the victory, its reward
+        // cards); `REWARD_PICK=<1..3>@<frame>`: choose a card then.
+        if let Some(at) = std::env::var("BOSS_WIN_AT").ok().and_then(|v| v.parse::<u64>().ok()) {
+            if frames == at {
+                if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                    let up = { let s = st.lock().unwrap(); s.boss_active && s.boss_spawned };
+                    if up { crate::scenes::game::boss::arena::finish_boss(&mut canvas, &st); }
+                    else { eprintln!("BOSS_WIN_AT: no boss up at frame {frames}"); }
+                }
+            }
+        }
+        if let Some((k, at)) = std::env::var("REWARD_PICK").ok().as_deref().and_then(|v| v.split_once('@'))
+            .and_then(|(k, a)| Some((k.parse::<usize>().ok()?, a.parse::<u64>().ok()?))) {
+            if frames == at {
+                if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                    let ok = crate::scenes::game::perks::choose(&mut canvas, &st, k.saturating_sub(1));
+                    eprintln!("REWARD_PICK {k}: {ok}");
+                }
+            }
+        }
+
+        // `HEADLESS_COLOSSUS_TORSO=1`: once the Colossus is up, kill its
+        // hands, so the torso fights (its vent and meteor storm).
+        if std::env::var("HEADLESS_COLOSSUS_TORSO").is_ok() {
+            if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                let mut s = st.lock().unwrap();
+                if s.boss_spawned && s.boss_kind == BossKind::Colossus && s.boss_parts.len() >= 4
+                    && s.boss_parts[..2].iter().any(|p| p.alive) {
+                    for p in s.boss_parts[..2].iter_mut() { p.alive = false; p.hp = 0; }
+                }
+            }
+        }
+        // `HEADLESS_COLOSSUS_HEAD=1`: once the Colossus is up, kill its hands
+        // and torso, so the fight is at its last stage (the head alone).
+        if std::env::var("HEADLESS_COLOSSUS_HEAD").is_ok() {
+            if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                let mut s = st.lock().unwrap();
+                if s.boss_spawned && s.boss_kind == BossKind::Colossus && s.boss_parts.len() >= 4
+                    && s.boss_parts[..3].iter().any(|p| p.alive) {
+                    for p in s.boss_parts[..3].iter_mut() { p.alive = false; p.hp = 0; }
+                }
+            }
+        }
+        // `HEADLESS_AB_AT=<frame>`: press E (fire the equipped ability) on
+        // that frame, and log the player's velocity either side of it.
+        if ab_at == Some(frames) || ab_at.map_or(false, |f| frames == f + 1) {
+            let v = canvas.get_game_object("player").map(|o| o.momentum).unwrap_or((0.0, 0.0));
+            eprintln!("ability-check: frame {frames} vel ({:.1}, {:.1}) bar {:.2} charges {}",
+                v.0, v.1, canvas.get_f32("ab_bar"), canvas.get_i32("ab_charges"));
+        }
+        if ab_at == Some(frames) {
+            let evt = KeyboardEvent { key: Key::Character("e".into()), state: KeyboardState::Pressed, modifiers: Modifiers::none() };
+            OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(evt) as Box<dyn Event>);
+            let v = canvas.get_game_object("player").map(|o| o.momentum).unwrap_or((0.0, 0.0));
+            eprintln!("ability-check: fired, vel now ({:.1}, {:.1}) bar {:.2} charges {}",
+                v.0, v.1, canvas.get_f32("ab_bar"), canvas.get_i32("ab_charges"));
+        }
+        // `HEADLESS_PHASE_CINE=<frame>`: press M (play the boss's phase
+        // change) on that frame, to film it with HEADLESS_SHOT_DIR.
+        if cine_at == Some(frames) {
+            let evt = KeyboardEvent { key: Key::Character("m".into()), state: KeyboardState::Pressed, modifiers: Modifiers::none() };
+            OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(evt) as Box<dyn Event>);
+        }
+
         // Run one engine frame.
         OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
 
         frames += 1;
 
+        stage_camera(&mut canvas);
+        // `HEADLESS_SPEED_METER=<frame>`: the FLYWHEEL clip's speed meter over
+        // ordinary play, its TOP counting from that frame.
+        if let Some(from) = std::env::var("HEADLESS_SPEED_METER").ok().and_then(|v| v.parse::<u64>().ok()) {
+            static PEAK: std::sync::Mutex<(f32, f32)> = std::sync::Mutex::new((0.0, 0.0));
+            let raw = canvas.get_game_object("player").map(|o| (o.momentum.0.powi(2) + o.momentum.1.powi(2)).sqrt()).unwrap_or(0.0);
+            let mut p = PEAK.lock().unwrap();
+            // A bounce pad lets one frame past the cap; that spike is not
+            // the swing's speed, so a frame counts only as fast as the one
+            // before it.
+            let v = raw.min(p.1);
+            p.1 = raw;
+            if frames >= from { p.0 = p.0.max(v); }
+            let peak = p.0;
+            drop(p);
+            speed_meter(&mut canvas, v, peak);
+        }
+        // `HEADLESS_CAM_BOSS=<zoom>`: film the boss, not the player — the
+        // camera is put on the boss body after each tick (the game's own
+        // camera moves it back during the next).
+        if let Some(z) = std::env::var("HEADLESS_CAM_BOSS").ok().and_then(|v| v.parse::<f32>().ok()) {
+            let at = canvas.get_game_object("boss").map(|o| (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5));
+            if let (Some((x, y)), Some(cam)) = (at, canvas.camera_mut()) {
+                cam.zoom = z;
+                cam.zoom_target = z;
+                cam.position = (x - VW * 0.5 / z, y - VH * 0.5 / z);
+            }
+        }
+
         // Detect death BEFORE observing — the player object is removed on a
         // scene switch, so observe() would return None and mask the death.
-        if canvas.is_scene("gameover_sun") {
-            death_scene = Some("sun".to_string());
-            break;
-        } else if canvas.is_scene("gameover_oxygen") {
-            death_scene = Some("oxygen".to_string());
-            break;
-        } else if canvas.is_scene("gameover") {
-            death_scene = Some("fall".to_string());
-            break;
+        // Dying puts the death screen up over the run (the scene stays
+        // "game"); its cause is published for exactly this.
+        if canvas.get_bool("death_screen") {
+            death_scene = Some(match canvas.get_var("death_cause") {
+                Some(Value::Str(s)) => s,
+                _ => "fall".to_string(),
+            });
+            let at = *died_at.get_or_insert(frames);
+            // `HEADLESS_DEATH_KEY=space|escape`: press it as the hold ends
+            // (RETRY / MENU), then run on and report where it went.
+            if frames == at + death_hold {
+                if let Ok(k) = std::env::var("HEADLESS_DEATH_KEY") {
+                    let key = if k == "escape" { Key::Named(NamedKey::Escape) } else { Key::Named(NamedKey::Space) };
+                    // Let go first: the auto-player may still be holding it,
+                    // and a held key does not press again.
+                    for state in [KeyboardState::Released, KeyboardState::Pressed] {
+                        let evt = KeyboardEvent { key: key.clone(), state, modifiers: Modifiers::none() };
+                        OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(evt) as Box<dyn Event>);
+                    }
+                    for i in 0..150u64 {
+                        OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
+                        if let Some(dir) = &shot_dir {
+                            if i % 50 == 49 { shoot_frame(&mut canvas, dir, 900_000 + i); }
+                        }
+                    }
+                    let left = ["dth_veil", "dth_title", "dth_retry_btn"].iter().filter(|n| canvas.get_game_object(n).is_some()).count();
+                    let dead = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().map(|st| st.lock().unwrap().dead);
+                    let mut lit: Vec<String> = Vec::new();
+                    let mut ids = vec!["boss_light".to_string(), "__player_light".to_string()];
+                    for i in 0..BOSS_BOLT_POOL_SIZE { ids.push(format!("boss_bolt_light_{i}")); }
+                    for id in ids { if canvas.get_light(&id).map_or(false, |l| l.enabled) { lit.push(id); } }
+                    eprintln!("death-key: lights still on {lit:?} ambient {:?}", canvas.ambient().map(|a| (a.color, a.strength)));
+                    eprintln!("death-key: ability button visible {:?}", canvas.get_game_object("ab_btn").map(|o| o.visible));
+                    eprintln!("death-key: scene {:?} screen {} overlay objects left {left} dead {dead:?} player visible {:?}",
+                        canvas.active_scene(), canvas.get_bool("death_screen"),
+                        canvas.get_game_object("player").map(|o| o.visible));
+                }
+            }
+            if frames >= at + death_hold { break; }
+            continue;
         }
 
         // Post-frame observation.

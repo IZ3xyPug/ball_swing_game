@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use crate::constants::*;
 use crate::state::*;
 use crate::images::circle_cached;
-use crate::scenes::game::bootstrap::hook_asteroid_anim_for_spawn;
 use crate::scenes::game::helpers::center_warp_on_player;
 use crate::scenes::game::space_zone::wormhole2_template;
 #[allow(unused_imports)]
@@ -15,7 +14,8 @@ use super::*;
 /// The walls extend from high above the highest possible launch up to the bottom
 /// of the visible play area, so it never looks like you can hop over them.
 pub(crate) fn tick_arena_walls(c: &mut Canvas, st: &Arc<Mutex<State>>) {
-    let active = { let s = st.lock().unwrap(); s.boss_active && !s.dead };
+    // Up while dead too: the fight carries on under the death screen.
+    let active = { let s = st.lock().unwrap(); s.boss_active };
     let (x1, x2) = arena_bounds(c);
     let top = -9000.0;
     let bottom = 600.0;
@@ -364,7 +364,7 @@ pub(crate) fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.boss_approach_nodes_spawned = false; // re-arm for the next fight
         drop(s);
         c.set_var("boss_defeated_this_fight", false);
-        let mut s = st.lock().unwrap();
+        let s = st.lock().unwrap();
         let index = s.boss_index;
         drop(s);
         place_arena(c, index);
@@ -454,13 +454,9 @@ pub(crate) fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         world_asteroids.retain(|id| !boss_asteroid_ids.contains(id));
         for id in &world_asteroids { s.space_asteroid_free.push(id.clone()); }
 
-        // Register boss asteroids as live so collision systems treat them
-        // exactly like regular floating asteroids.
-        for id in &boss_asteroid_ids {
-            if !s.space_asteroid_live.contains(id) {
-                s.space_asteroid_live.push(id.clone());
-            }
-        }
+        // The arena has no asteroids of its own any more (they got in the
+        // player's way too much): the boss asteroids are neither registered
+        // as live nor placed, so they stay hidden and collide with nothing.
 
         // Kill any in-flight spawn animations for all cleared objects so
         // tick_spawn_animations cannot make them visible again after the clear.
@@ -522,8 +518,6 @@ pub(crate) fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.gravity = sign * GRAVITY * BOSS_GRAVITY_SCALE;
         }
 
-        // Spawn boss-zone asteroids immediately on entry.
-        place_boss_asteroids(c, &boss_asteroid_ids);
         // Spawn climbable tether nodes across the arena so the player can
         // swing up to reach the upper-sky boss.
         spawn_arena_tether_nodes(c, st);
@@ -538,6 +532,8 @@ pub(crate) fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // can get their bearings before the battle starts. Tether to a node to
         // begin (see `tick_boss_stasis`).
         enter_boss_stasis(c, st);
+        // The title card, while they orbit.
+        super::intro::begin(c, st);
         return;
     }
 
@@ -564,70 +560,6 @@ pub(crate) fn tick_boss_zone_entry(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     obj.position.0 = zx2 - half - PLAYER_R;
                 }
                 if obj.momentum.0 > 0.0 { obj.momentum.0 = 0.0; }
-            }
-        }
-    }
-}
-
-pub(crate) fn place_boss_asteroids(c: &mut Canvas, asteroid_ids: &[String]) {
-    let (zx1, zx2) = arena_bounds(c);
-    let anim = hook_asteroid_anim_for_spawn();
-    let zone_w = zx2 - zx1;
-    const Y_TOP:  f32 = -3500.0;
-    const Y_BOT:  f32 =  1500.0;
-
-    // Deterministic hash RNG for stable-but-arbitrary placement.
-    fn hash01(mut x: u32) -> f32 {
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        (x as f32) / (u32::MAX as f32)
-    }
-
-    // Build a blue-noise-ish point set so spacing stays wide while looking random.
-    let mut points: Vec<(f32, f32)> = Vec::new();
-    let min_sep = 1120.0;
-    let min_sep2 = min_sep * min_sep;
-    let mut seed = 0xC0FFEE_u32;
-    for _ in 0..600 {
-        if points.len() >= asteroid_ids.len() { break; }
-        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        let rx = hash01(seed);
-        let ry = hash01(seed ^ 0x9E37_79B9);
-        let x = zx1 + rx * zone_w;
-        let y = Y_TOP + ry * (Y_BOT - Y_TOP);
-        if points.iter().all(|(px, py)| {
-            let dx = x - *px;
-            let dy = y - *py;
-            dx * dx + dy * dy >= min_sep2
-        }) {
-            points.push((x, y));
-        }
-    }
-
-    // Fallback: if rejection sampling under-fills, top up with sparse jittered rows.
-    if points.len() < asteroid_ids.len() {
-        let need = asteroid_ids.len() - points.len();
-        for i in 0..need {
-            let t = (i as f32 + 0.5) / need as f32;
-            let x = zx1 + zone_w * t + ((i as f32 * 173.0) % 500.0 - 250.0);
-            let y = Y_TOP + (Y_BOT - Y_TOP) * ((i as f32 * 0.618_033_95) % 1.0)
-                + ((i as f32 * 97.0) % 280.0 - 140.0);
-            points.push((x.clamp(zx1, zx2), y.clamp(Y_TOP, Y_BOT)));
-        }
-    }
-
-    for (i, id) in asteroid_ids.iter().enumerate() {
-        let (ax, ay) = points[i.min(points.len().saturating_sub(1))];
-        let dvx = ((i as f32 * 0.7 + 0.4) % 1.0 - 0.5) * 0.6;
-        let dvy = ((i as f32 * 1.3 + 0.1) % 1.0 - 0.5) * 0.3;
-
-        if let Some(obj) = c.get_game_object_mut(id) {
-            obj.position = (ax - obj.size.0 * 0.5, ay - obj.size.1 * 0.5);
-            obj.momentum = (dvx, dvy);
-            obj.visible = true;
-            if let Some(anim_ref) = &anim {
-                obj.set_animation(anim_ref.clone());
             }
         }
     }
@@ -1056,6 +988,10 @@ pub(crate) fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     crate::profile::award_meta_currency(META_BOSS_REWARD);
     crate::profile::record_boss_defeated();
     {
+        let kind = st.lock().unwrap().boss_kind.slug();
+        crate::achievements::on_boss_defeated(kind);
+    }
+    {
         let mut s = st.lock().unwrap();
         s.coin_count = s.coin_count.saturating_add(BOSS_COIN_REWARD);
     }
@@ -1095,6 +1031,8 @@ pub(crate) fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.visible = true;
         }
     }
+    // Pick one of three perks before tethering out.
+    crate::scenes::game::perks::offer_boss_reward(c, st);
 }
 
 /// Complete the end-of-fight cleanup once the player tethers out of the victory

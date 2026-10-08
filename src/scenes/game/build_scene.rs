@@ -239,6 +239,36 @@ fn hide_pause_ui(c: &mut Canvas) {
 /// window — so they cannot capture a local created inside `build_game_scene`.
 /// There is one game scene and one run at a time, so a process singleton is the
 /// honest shape for it.
+/// Turn the engine's lighting on and add the player's light (attached to the
+/// player on each game entry). Called at app start; idempotent.
+pub fn enable_game_lighting(canvas: &mut Canvas) {
+    if canvas.has_lighting() { return; }
+    canvas.enable_lighting(LightingConfig {
+        max_lights: LIGHTING_MAX_LIGHTS,
+        ..LightingConfig::default()
+    });
+    // `enable_lighting` also switches on a BLOOM post pass, and nothing in
+    // the game wants that outside a darkness phase (night mode brings its
+    // own). It stayed on through the whole first run — only leaving a run
+    // cleared it — so the FIRST run alone had bloom: the PLAY flash and the
+    // menu shutter's flash blew out to solid white for a third of a second,
+    // only the first time. Cleared here so every run looks like the rest.
+    canvas.clear_post_override();
+    canvas.add_light(LightSource::new(
+        "__player_light",
+        (0.0, 0.0),
+        Color(210, 220, 255, 255),
+        1100.0,
+        0.8,
+    ));
+    // OFF until a darkness phase turns it on (`eclipse::begin_night_mode`).
+    // It used to start ON, and only `end_night_mode` — run when a run ends —
+    // switched it off: so for the whole FIRST run it lit everything near the
+    // player, the PLAY flash and the menu shutter blew out to white, and
+    // only the first time.
+    canvas.set_light_enabled("__player_light", false);
+}
+
 pub fn run_state() -> &'static Arc<Mutex<Option<Arc<Mutex<State>>>>> {
     static S: std::sync::OnceLock<Arc<Mutex<Option<Arc<Mutex<State>>>>>> = std::sync::OnceLock::new();
     S.get_or_init(|| Arc::new(Mutex::new(None)))
@@ -359,6 +389,8 @@ fn clear_pause_state(c: &mut Canvas) {
 /// `from_stasis` records whether the pause was opened from a soft-pause stasis
 /// so that resume returns to the stasis rather than straight to gameplay.
 fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
+    // Dead: the death screen is the menu.
+    if super::death_screen::active(c) { return; }
     c.set_var("pause_came_from_stasis", from_stasis);
     // Reset any leftover settings state so the main pause buttons are always
     // hit-testable when the menu first opens (a stale `settings_open` would
@@ -502,11 +534,10 @@ pub fn register_pause_ui_handlers(canvas: &mut Canvas) {
             canvas.register_custom_event("pause_menu_click".into(), |c| {
                 if !c.get_bool("game_paused") { return; }
                 clear_pause_state(c);
-                if let Some(cam) = c.camera_mut() {
-                    cam.snap_zoom(1.0);
-                    cam.zoom_anchor = None;
-                }
-                c.load_scene("menu");
+                // The shutter closes over the game frozen where it is (it
+                // animates while paused), then the menu opens behind it.
+                c.pause();
+                crate::transition::go_slow(c, "menu");
             });
             canvas.register_custom_event("pause_settings_click".into(), |c| {
                 if !c.get_bool("game_paused") { return; }
@@ -660,6 +691,13 @@ pub fn register_pause_ui_handlers(canvas: &mut Canvas) {
                     // Not gated on mobile: clicking a menu option works on
                     // desktop too, and the keys still do what they did.
                     if let Some(state_arc) = run_state().lock().unwrap().as_ref().cloned() {
+                        if super::perks::reward_pending(c) {
+                            if let Some(i) = super::perks::card_at(pos) {
+                                c.set_var("mouse_left_held", false);
+                                super::perks::choose(c, &state_arc, i);
+                            }
+                            return;
+                        }
                         if state_arc.lock().unwrap().upgrade_dialogue_active {
                             if let Some(opt) = upgrade_option_at(c, pos) {
                                 c.set_var("mouse_left_held", false);
@@ -823,6 +861,21 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     // renders without delay. By the time the player navigates to the game scene
     // the images are ready. The OnceLock guarantees exactly-once computation.
     std::thread::spawn(|| { BG_IMAGES.get_or_init(compute_bg_images); });
+    // Everything else the FIRST run builds on first touch, warmed now, at
+    // app start. Warmed in the game's own `on_enter` (below) it was too late:
+    // the opening level generation needs it in that same call, so the first
+    // PLAY froze ~0.6 s (debug) at the end of the menu's dive while the
+    // cannon frames and node art decoded. The shutter's art is the same story
+    // for the first trip back to the menu.
+    std::thread::spawn(|| {
+        super::helpers::prewarm_hook_artifact();
+        super::helpers::prewarm_hook_artifact_green();
+        super::helpers::prewarm_zero_g_overlay();
+        super::gravity_cannon::prewarm();
+        crate::transition::prewarm();
+        super::death_screen::prewarm();
+        super::boss::fx_kit::prewarm();
+    });
 
     // Build all game objects and pool structures.
     let (scene, pools) = bootstrap::build_scene_objects(ctx);
@@ -859,23 +912,17 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // darkness phases actually render, and lights the player during
             // darkness. Default ambient is full-bright, so normal play is
             // unchanged.
-            if !canvas.has_lighting() {
-                canvas.enable_lighting(LightingConfig {
-                max_lights: LIGHTING_MAX_LIGHTS,
-                ..LightingConfig::default()
-            });
-                canvas.add_light(LightSource::new(
-                    "__player_light",
-                    (0.0, 0.0),
-                    Color(210, 220, 255, 255),
-                    1100.0,
-                    0.8,
-                ));
-                canvas.attach_light("__player_light", "player", (0.0, 0.0));
-                // Large world objects cast shadows during darkness phases.
-                canvas.set_shadow_caster("player", true);
-                canvas.set_shadow_caster("boss", true);
-            }
+            //
+            // Normally already on: `enable_game_lighting` runs at app start.
+            // Turned on HERE, mid-load, the first run's opening frames came out
+            // blank white under the PLAY flash (and again for the first trip
+            // back to the menu) — every later run, with lighting already on,
+            // was fine. Kept as a fallback for any path that skipped startup.
+            enable_game_lighting(canvas);
+            canvas.attach_light("__player_light", "player", (0.0, 0.0));
+            // Large world objects cast shadows during darkness phases.
+            canvas.set_shadow_caster("player", true);
+            canvas.set_shadow_caster("boss", true);
 
             // ── Terrain collision plugin (dynamic outline support) ──────
             let terrain_collision_registered = matches!(
@@ -962,6 +1009,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             }
 
             // ── Background music (looped, switchable) ───────────────────
+            // A boss loop still playing (a restart from the pause menu mid-
+            // fight reloads this scene without ending the fight): the new run
+            // gets the lane's music back. Boss tracks are numbered from 100.
+            if audio_state::has_game_bgm() && canvas.get_i32("bgm_track_index") >= 100 {
+                switch_game_bgm(canvas, BGM_TRACK_LANE, ASSET_BGM_TRACK_1, 0.084);
+            }
             if !audio_state::has_game_bgm() {
                 let handle = canvas.play_sound_bytes_with(
                     ASSET_BGM_TRACK_1,
@@ -986,6 +1039,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                     // ── Roguelike upgrade dialogue: route keys to the menu ──
                     if let Some(state_arc) = persistent_state_key.lock().unwrap().as_ref().cloned() {
+                        if super::perks::reward_key(c, &state_arc, key) {
+                            return;
+                        }
                         if upgrades::upgrade_dialogue_key(c, &state_arc, key) {
                             return;
                         }
@@ -1140,6 +1196,41 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     let is_pause = *key == Key::Character("p".into());
                     let is_space = *key == Key::Named(NamedKey::Space);
 
+                    // ── E = fire the equipped ability ──
+                    if *key == Key::Character("e".into()) {
+                        if !is_game_paused(c) {
+                            let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                            if let Some(state_arc) = state_opt {
+                                super::abilities::fire_from_key(c, &state_arc);
+                            }
+                        }
+                        return;
+                    }
+
+                    // ── Debug: M = play the current boss's phase change now ──
+                    if *key == Key::Character("m".into()) {
+                        if !is_game_paused(c) {
+                            let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                            if let Some(state_arc) = state_opt {
+                                super::boss::debug_phase_cine(&state_arc);
+                            }
+                        }
+                        return;
+                    }
+
+                    // ── Debug: N = spawn a planet at a random distance ──
+                    // (N is also polled in the tick to stop the moving stars'
+                    // auto-scroll; nothing restarts it now M is the reveal.)
+                    if *key == Key::Character("n".into()) {
+                        if !is_game_paused(c) {
+                            let state_opt = persistent_state_key.lock().unwrap().as_ref().cloned();
+                            if let Some(state_arc) = state_opt {
+                                super::decor::debug_spawn_planet(c, &state_arc);
+                            }
+                        }
+                        return;
+                    }
+
                     // ── Debug: G = spawn a gravity cannon ahead of the player ──
                     if *key == Key::Character("g".into()) {
                         if !is_game_paused(c) {
@@ -1224,6 +1315,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 .unwrap_or(0xDEAD_BEEF);
             let level_nonce = canvas.get_i32("level_nonce").max(0) as u64;
             seed ^= level_nonce.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            // The interactive tutorial (a Casual run that cannot be lost), or
+            // the daily challenge: the same world for everyone today.
+            let tutorial = super::tutorial::begin_run(canvas);
+            if tutorial { canvas.set_var(crate::daily::DAILY_PENDING_VAR, false); }
+            let daily = crate::daily::begin_run(canvas);
+            if let Some(ch) = daily { seed = ch.seed; }
             // A new order of bosses every run, the final boss always last
             // (kept in State as `boss_roster`).
             let boss_roster = crate::constants::deal_roster(seed);
@@ -1238,6 +1335,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 .unwrap_or(SPAWN_X + 2000.0);
             let mut gen_head_x = first_from;
             let mut gen_head_y = gen_y;
+            crate::level_gen::reset_patterns();
             let first_batch = gen_hook_batch(&mut seed, first_from, &mut gen_head_x, &mut gen_head_y, 0.0);
             let rightmost_x = starter_hooks
                 .last()
@@ -1270,6 +1368,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
             // Permanent upgrades resolve once, here, and travel with the run.
             let perm = crate::profile::permanent_bonuses();
+            super::seed_funds::begin(canvas, perm.start_coins);
+            // So does the equipped ability (its uses and bar start fresh).
+            super::abilities::start_run(canvas);
+            super::abilities::register_input(canvas);
 
             // Test hook: start the run partway along the difficulty curve, so a
             // harness can sample what the world looks like at any minute
@@ -1290,7 +1392,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 hooked: false, hook_x: start_hook.0,
                 hook_y: start_hook.1, rope_len: start_rope_len,
                 active_hook: "hook_0".into(), distance: seeded_distance,
-                score: 0, coin_count: perm.start_coins,
+                // SEED FUNDS is paid in on the start screen (`seed_funds`).
+                score: 0, coin_count: 0,
                 gravity_dir: 1.0, score_time_awards: 0,
                 score_distance_awards: 0,
                 seed,
@@ -1437,8 +1540,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 weaver_inverted: false, weaver_flips: 0,
                 weaver_gauntlet: 0, weaver_gauntlet_ticks: 0, weaver_gauntlet_done: 0,
                 weaver_gauntlet_parts: [0, 0], weaver_gauntlet_y: 0.0, weaver_gauntlet_fired: false,
+                phase_cine: PhaseCine::default(), phase_cine_done: 0,
                 titan_clock: 0, titan_clock_ticks: 0, titan_orbit: 0.0, titan_flares: 0,
-                decor: Vec::new(), decor_cam_prev: None, decor_travel: 0.0,
+                decor: Vec::new(), decor_cam_prev: None, decor_player_prev_x: None, decor_travel: 0.0,
                 decor_next_at: 0.0, decor_last_kind: None, decor_ticks: 0,
                 titan_charged: false, titan_burn_timer: 0, titan_guide_node: String::new(),
                 titan_reshelter: false, grab_lockout_ticks: 0,
@@ -1549,7 +1653,30 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 flares_fired: 0,
                 flare_hearts_lost: 0,
                 flare_ticks_sheltered: 0,
+                perk_release_mult: 1.0,
+                perk_gravity_mult: 1.0,
+                perk_buff_mult: 1.0,
+                perk_coin_bonus: 0,
+                perks_taken: 0,
+                reward_offer: [0, 1, 2],
+                node_offer: [2, 3, 4],
             };
+
+            // The daily challenge's modifier changes the run's rules.
+            let mut fresh_state = fresh_state;
+            if let Some(ch) = daily {
+                use crate::daily::Modifier::*;
+                let s = &mut fresh_state;
+                match ch.modifier {
+                    LongRope => s.perm_reach_mult *= 1.3,
+                    ShortRope => s.perm_reach_mult *= 0.85,
+                    GlassCat => { s.hearts = 1; s.max_hearts = 1; s.free_respawns_left = 0; }
+                    SpeedDemon => s.perm_momentum_mult *= 1.25,
+                    MagnetPaws => s.perm_magnet_mult *= 2.0,
+                    ThickSkin => { s.hearts += 2; s.max_hearts += 2; }
+                }
+                log::info!("daily challenge: {} to {} px", ch.modifier.name(), ch.goal);
+            }
 
             // Reuse persistent Arc across respawns.
             {
@@ -1709,9 +1836,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     obj.visible = false;
                 }
 
-                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_TITLE_NAME) {
+                if let Some(obj) = canvas.get_game_object_mut(TOAST_TITLE_NAME) {
                     obj.set_drawable(Box::new(ui_text_left_spec(
-                        GOLD_MASTER_TITLE,
+                        " ",
                         &font,
                         46.0 * s,
                         Color(250, 225, 120, 255),
@@ -1730,9 +1857,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     )));
                     obj.visible = false;
                 }
-                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_DESC_NAME) {
+                if let Some(obj) = canvas.get_game_object_mut(TOAST_DESC_NAME) {
                     obj.set_drawable(Box::new(ui_text_left_spec(
-                        GOLD_MASTER_DESCRIPTION,
+                        " ",
                         &font,
                         28.0 * s,
                         Color(210, 220, 235, 230),
@@ -1740,7 +1867,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     )));
                     obj.visible = false;
                 }
-                if let Some(obj) = canvas.get_game_object_mut(GOLD_MASTER_TOAST_CHECK_NAME) {
+                if let Some(obj) = canvas.get_game_object_mut(TOAST_CHECK_NAME) {
                     obj.set_drawable(Box::new(ui_text_spec(
                         "✓",
                         &font,
@@ -1756,7 +1883,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 obj.visible = false;
             }
 
-            clear_gold_master_toast(canvas);
+            clear_toast(canvas);
+            crate::achievements::on_run_start();
+            super::juice::reset();
+            super::hangar::reset();
+            canvas.set_var(super::perks::REWARD_PENDING_VAR, false);
+            super::perks::hide_reward(canvas);
+            boss::intro::reset(canvas);
+            boss::intro::prewarm();
 
             // Set background image AND apply the proper overscan/raise size so
             // the background fills the screen correctly from the first frame.
@@ -1919,8 +2053,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
 
                 let mut star_shift: f32 = 0.0;
                 let mut star_auto_scroll = true;
-                let mut m_was_down = false;
                 let mut n_was_down = false;
+                let mut nebula_tick = super::nebula::NebulaTick::default();
+                let mut aurora_tick = super::aurora::AuroraTick::default();
                 let mut scroll_init = false;
                 let mut prev_scroll_in_space: Option<bool> = None;
                 let mut prev_player_center: Option<(f32, f32)> = None;
@@ -1991,12 +2126,23 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 canvas.on_update(move |c| {
                     if !c.is_scene("game") { return; }
                     // ── Dead check ───────────────────────────────────────
+                    // Dead, the run goes on without the player: the fight
+                    // (a boss keeps moving and attacking) and its hit bursts,
+                    // under the death screen. Nothing else of the run ticks.
                     {
-                        let s = st.lock().unwrap();
-                        if s.dead {
+                        let dead = st.lock().unwrap().dead;
+                        if dead {
+                            boss::tick_boss(c, &st);
+                            boss::common::tick_impacts(c, &st);
+                            super::death_screen::tick(c);
                             return;
                         }
                     }
+                    // The boss reward cards rise in; the boss title card plays.
+                    super::perks::tick_reward(c, &st);
+                    boss::intro::tick(c);
+                    super::tutorial::tick(c, &st);
+                    if !c.get_bool("game_paused") { super::juice::tick(c, &st); }
 
                     // ── Achievements: pop toasts mid-run (like gold-master) ──
                     // Gold-master fires on coin pickup; the lifetime achievements
@@ -2011,6 +2157,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         c.set_var("achievement_check_ticks", ticks);
                         if ticks % 30 == 0 {
                             crate::achievements::check_achievements(c, run_coins, run_dist);
+                        }
+                        crate::daily::tick(c, run_dist);
+                        let (boss_up, alive) = { let s = st.lock().unwrap(); (s.boss_active && s.boss_spawned, !s.dead) };
+                        if alive {
+                            let aurora_up = c.get_bool("aurora_up");
+                            crate::achievements::tick(c, boss_up, aurora_up);
                         }
                     }
 
@@ -2129,6 +2281,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             }
                         }
 
+                        // ── SEED FUNDS paid in on the start screen ─────────────
+                        super::seed_funds::tick(c, &st);
+
                         // ── Hold space/mouse to begin ──────────────────────────
                         // The run begins only after HOLDING space/mouse for
                         // START_HOLD_TICKS, so a stray or retry click doesn't
@@ -2243,6 +2398,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         {
                             obj.position.0 = cam_x - 400.0;
                         }
+                        // The sky stays alive behind the start prompt and pause.
+                        super::aurora::tick_aurora(c, &st, &mut aurora_tick);
                         return;
                     }
 
@@ -2396,6 +2553,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             obj.visible = show;
                         }
                     }
+                    // ── The equipped ability: its bar and button ──────────
+                    super::abilities::tick(c, &st);
                     // ── Boss fight ────────────────────────────────────────
                     boss::tick_boss(c, &st);
                     // Hit bursts, after the fight so a hit registered this
@@ -2617,6 +2776,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         prev_palette_zone = usize::MAX;
                         prev_nearest_hook.clear();
                         scroll_init = false; // re-apply star panel images after respawn
+                        nebula_tick.refresh(); // and the sky's (a re-entered scene has blank objects)
                         c.set_var("bg_force_refresh", false);
                     }
                     {
@@ -2638,11 +2798,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // to prevent offset jumps; the result is then scaled to bg_w.
                     {
                         let in_space = { st.lock().unwrap().in_space_mode };
-                        let m_now = c.key("m");
                         let n_now = c.key("n");
-                        if m_now && !m_was_down { star_auto_scroll = true; }
                         if n_now && !n_was_down { star_auto_scroll = false; }
-                        m_was_down = m_now;
                         n_was_down = n_now;
 
                         if star_auto_scroll {
@@ -2677,8 +2834,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             if let Some(obj) = c.get_game_object_mut("bg_space") {
                                 obj.set_image(img.clone());
                             }
-                            if let Some(obj) = c.get_game_object_mut("bg_stars_b") {
-                                obj.set_image(img);
+                            for id in ["bg_stars_b", "bg_stars_up_a", "bg_stars_up_b"] {
+                                if let Some(obj) = c.get_game_object_mut(id) {
+                                    obj.set_image(img.clone());
+                                }
                             }
                             scroll_init = true;
                         }
@@ -2700,10 +2859,26 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             obj.position = (px + bg_w, py);
                             obj.visible = true;
                         }
+                        // The second row, on the sky's far side: the zoom-out
+                        // reveals sky there, and one row stops short of it.
+                        let flipped = { st.lock().unwrap().gravity_dir < 0.0 };
+                        let py2 = if flipped { py + bg_h } else { py - bg_h };
+                        for (id, x) in [("bg_stars_up_a", px), ("bg_stars_up_b", px + bg_w)] {
+                            if let Some(obj) = c.get_game_object_mut(id) {
+                                obj.size = (bg_w, bg_h);
+                                obj.position = (x, py2);
+                                obj.visible = true;
+                            }
+                        }
                     }
+
+                    // ── Nebula backdrop (F cycles the set) ──────────────
+                    super::nebula::tick_nebula(c, &st, &mut nebula_tick);
+                    super::aurora::tick_aurora(c, &st, &mut aurora_tick);
 
                     // ── Distant decor (planets, wrecks, the odd whale) ──
                     super::decor::tick_decor(c, &st);
+                    super::hangar::tick(c, &st);
 
                     // ── Death check ──────────────────────────────────────
                     let mut s = st.lock().unwrap();
@@ -2739,6 +2914,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         c.set_var("last_distance", s.distance);
                         c.set_var("last_score", s.score as i32);
                         c.set_var("last_coins", s.coin_count as i32);
+                        // The run summary's numbers (see `death_screen`).
+                        c.set_var("sum_secs", (s.ticks / 60) as i32);
+                        c.set_var("sum_perks", s.perks_taken as i32);
+                        c.set_var("sum_bosses", s.boss_index as i32);
+                        c.set_var("sum_chain", super::juice::best_chain() as i32);
+                        {
+                            let best = crate::profile::profile().lock().unwrap().best_distance as f32;
+                            c.set_var("sum_new_best", s.distance > best && s.distance > 1000.0);
+                        }
                         // Award permanent meta currency at the end of a run,
                         // based on distance travelled (normal-zone only — space
                         // X distance does NOT count) plus flat bonuses for
@@ -2767,67 +2951,67 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         crate::profile::record_death();
                         let mode_idx = crate::mode::current_mode(c).index();
                         crate::profile::record_run(mode_idx, run_distance, run_coins, run_seconds);
+                        crate::daily::end_run(c, run_distance);
                         // Run is already recorded, so no extra run coins/distance.
                         crate::achievements::check_achievements(c, 0, 0.0);
-                        // Force-clean the solar eclipse: `tick_eclipse` is not
-                        // reached once dead, so its lights/post-override would
-                        // leak into the next run (boss-rush restart → acting as
-                        // if still in an eclipse, with lag at the blackhole).
-                        super::eclipse::end_eclipse(c, &st);
-                        // Boss darkness must not carry into the game-over menu.
-                        if c.has_lighting() {
-                            c.set_ambient(Color(255, 255, 255, 255), 1.0);
-                        }
-                        if let Some(cam) = c.camera_mut() {
-                            cam.snap_zoom(1.0);
-                        }
+                        // The eclipse and the boss darkness are cleaned up
+                        // when the death screen is left (the game scene's
+                        // exit), not here: the fight stays on screen under
+                        // it, and full daylight over the arena's lights
+                        // washed the whole frame out white.
                         c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
                         c.remove_emitter(PLAYER_TRAIL_MID_NAME);
                         if let Some(obj) =
                             c.get_game_object_mut("player")
                         {
                             obj.visible = false;
+                            // Parked: the run carries on around it.
+                            obj.momentum = (0.0, 0.0);
+                            obj.gravity = 0.0;
+                        }
+                        // A buff in hand would let the body land hits.
+                        {
+                            let mut s = st.lock().unwrap();
+                            s.retire_buff();
+                            s.hooked = false;
                         }
                         if let Some(obj) =
                             c.get_game_object_mut("rope")
                         {
                             obj.visible = false;
                         }
-                        // Hand the lane its music back BEFORE leaving.
+                        // The boss's music plays on under the death screen;
+                        // the game scene's exit hands the lane its music back.
                         //
-                        // A boss loop is switched in by `switch_game_bgm`, which
-                        // is guarded on `bgm_track_index` — so once the
-                        // Conductor's track is playing, nothing on the death
-                        // path turns it off and the next run starts with boss
-                        // music over the lane. `hide_conductor` does this when
-                        // the fight ENDS, but dying is not the fight ending in
-                        // the way that function means.
-                        crate::scenes::game::boss::hide_conductor(c);
-                        if died_to_sun {
-                            c.set_var("died_to_sun", false);
-                            c.set_var("died_to_oxygen", false);
-                            crate::achievements::record_death_cause(c, "sun");
-                            play_death_sound(c);
-                            c.load_scene("gameover_sun");
+                        // The run stays on screen, Terraria-style: the death
+                        // screen fades in over it (see `death_screen`).
+                        let boss_name = {
+                            let s = st.lock().unwrap();
+                            (s.boss_active && s.boss_spawned).then(|| s.boss_kind.name())
+                        };
+                        let (cause, line) = if died_to_sun {
+                            ("sun", "You flew too close to the sun".to_string())
                         } else if died_to_oxygen {
-                            c.set_var("died_to_oxygen", false);
-                            crate::achievements::record_death_cause(c, "oxygen");
-                            play_death_sound(c);
-                            c.load_scene("gameover_oxygen");
+                            ("oxygen", "You ran out of oxygen".to_string())
+                        } else if let Some(name) = boss_name {
+                            ("fall", format!("Slain by {}", title_case(name)))
                         } else {
-                            if !died_to_oxygen {
-                                c.set_var("died_to_oxygen", false);
-                            }
-                            crate::achievements::record_death_cause(c, "fall");
-                            play_death_sound(c);
-                            c.load_scene("gameover");
-                        }
+                            ("fall", "You fell".to_string())
+                        };
+                        c.set_var("died_to_sun", false);
+                        c.set_var("died_to_oxygen", false);
+                        c.set_var("death_cause", Value::Str(cause.to_string()));
+                        let eclipse = c.get_bool("eclipse_active");
+                        crate::achievements::on_death(c, cause, boss_name.is_some(), eclipse);
+                        play_death_sound(c);
+                        super::death_screen::begin(c, &line);
                     }
                 });
                 canvas.set_var("game_tick_registered", true);
             }
         })
         .on_exit(move |canvas| {
+            super::tutorial::end(canvas);
             canvas.run(Action::DetachEmitter {
                 emitter_name: PLAYER_TRAIL_EMITTER_NAME.to_string(),
             });
@@ -2849,5 +3033,47 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // them (fall, sun, oxygen, menu) and the next one added would not
             // know it had to do this either.
             super::eclipse::end_night_mode(canvas);
+            // The ability button lives on the canvas, not in the scene.
+            super::abilities::hide(canvas);
+            // Leaving from the death screen: take it down, and hand the lane
+            // its music back from a boss loop still playing under it (a
+            // no-op otherwise).
+            if super::death_screen::active(canvas) {
+                super::death_screen::remove(canvas);
+                crate::scenes::game::boss::hide_conductor(canvas);
+            }
+            // Put out everything the run lit, however it is left — the death
+            // screen, the pause menu, mid-fight. Lighting stays on for the
+            // whole session (it is enabled at app start), so a light left on
+            // here went on costing every frame of the menu: leaving the Sun
+            // Devourer's fight left its boss light, its bolts' lights and its
+            // darkness all running behind the menu. Only a fight that ENDED
+            // used to clean these up.
+            //
+            // The eclipse first: `tick_eclipse` does not run once the scene
+            // is gone, so its lights/post-override would leak into the next
+            // run (boss-rush restart → acting as if still in an eclipse).
+            if let Some(st) = run_state().lock().unwrap().as_ref().cloned() {
+                super::eclipse::end_eclipse(canvas, &st);
+            }
+            super::eclipse::release_nodes_from_dark(canvas);
+            if canvas.has_lighting() {
+                canvas.set_ambient(Color(255, 255, 255, 255), 1.0);
+                canvas.set_light_enabled("boss_light", false);
+                for i in 0..BOSS_BOLT_POOL_SIZE {
+                    canvas.set_light_enabled(&format!("boss_bolt_light_{i}"), false);
+                }
+            }
         })
+}
+
+/// "THE COLOSSUS" -> "The Colossus".
+fn title_case(s: &str) -> String {
+    s.split(' ').map(|w| {
+        let mut ch = w.chars();
+        match ch.next() {
+            Some(f) => f.to_string() + &ch.as_str().to_lowercase(),
+            None => String::new(),
+        }
+    }).collect::<Vec<_>>().join(" ")
 }

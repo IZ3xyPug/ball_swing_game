@@ -336,7 +336,8 @@ fn serpent_rift_goal(s: &State, fallback: (f32, f32)) -> (f32, f32) {
 pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let s = st.lock().unwrap();
-        if !s.boss_active || s.dead || s.boss_stasis_active { return; }
+        // Not gated on `dead`: the fight carries on under the death screen.
+        if !s.boss_active || s.boss_stasis_active { return; }
     }
 
     // ── Appearance (once) ────────────────────────────────────────────────
@@ -791,7 +792,9 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // ── Phase gating + win ───────────────────────────────────────────────
     {
         let mut s = st.lock().unwrap();
-        for i in 0..s.boss_parts.len() {
+        let n = s.boss_parts.len();
+        let mut step = 0;
+        for i in 0..n {
             let prev_dead = i > 0 && s.boss_parts[..i].iter().all(|p| !p.alive);
             if prev_dead {
                 let part = &mut s.boss_parts[i];
@@ -800,8 +803,14 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     // A part that has just become reachable has not attacked, so
                     // it must not inherit an open post-attack window.
                     part.post_attack = false;
+                    // Its phase changes: half the body gone, and the head
+                    // uncovered (not every segment — that would be eight).
+                    if i == n - 1 { step = 2; } else if i == n / 2 && step == 0 { step = 1; }
                 }
             }
+        }
+        if step > 0 {
+            super::start_phase_cine(&mut s, CineStyle::Coil, step);
         }
         s.boss_hp = boss_total_hp(&s);
         s.boss_hp_max = s.boss_hp.max(1);
@@ -882,6 +891,8 @@ fn serpent_strike_player(
     buffed: bool,
     cut: Cut,
 ) {
+    // Dead: the strike passes through where the player fell.
+    if st.lock().unwrap().dead { return; }
     let (px, py) = { let s = st.lock().unwrap(); (s.px, s.py) };
     let dx = px - at.0;
     let dy = py - at.1;
@@ -1601,7 +1612,7 @@ fn serpent_wormhole_gambit(
     // Capture: entering a hole delivers the player in front of the head.
     let captured = {
         let s = st.lock().unwrap();
-        if s.serpent_gambit_react > 0 { false } else {
+        if s.serpent_gambit_react > 0 || s.dead { false } else {
             rifts.iter().any(|(x, y, _)| {
                 let r = SERPENT_GAMBIT_HOLE_R + PLAYER_R;
                 (player.0 - x).powi(2) + (player.1 - y).powi(2) < r * r

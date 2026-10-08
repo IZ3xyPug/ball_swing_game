@@ -9,6 +9,8 @@ mod hud;
 mod poisson;
 pub mod state;
 mod achievements;
+mod daily;
+mod graphics;
 mod difficulty;
 mod hazards;
 mod mode;
@@ -16,8 +18,11 @@ mod level_gen;
 mod gameplay;
 mod objects;
 mod menu;
+pub(crate) mod menu_look;
+pub(crate) mod transition;
 mod scenes;
 mod shop;
+mod shop_demos;
 mod cosmetics;
 mod profile;
 pub mod headless;
@@ -76,6 +81,9 @@ impl App {
             cfg!(target_os = "android")
                 || std::env::var("QUARTZ_TICK_PROFILE").is_ok_and(|v| v != "0"),
         );
+        // Lighting from the start, not first switched on mid-way through the
+        // first run's load (see `enable_game_lighting`).
+        scenes::game::build_scene::enable_game_lighting(&mut canvas);
         menu::push_menu_press_handler(&mut canvas);
         // Register the game's left-mouse handlers at app start too, so a mouse
         // hold-to-start counts even when the click that navigated into the game
@@ -87,6 +95,15 @@ impl App {
         // is why the on-screen pause button did nothing and a paused run could
         // not be resumed.
         scenes::game::register_pause_ui_handlers(&mut canvas);
+        scenes::game::death_screen::register_handlers(&mut canvas);
+        transition::register_hold_key(&mut canvas);
+        // Dev key: K gives 400 META a press.
+        canvas.on_key_press(|_c, key| {
+            if *key != Key::Character("k".into()) { return; }
+            crate::profile::award_meta_currency(400);
+            let total = crate::profile::profile().lock().unwrap().meta_currency;
+            log::info!("dev: +400 META ({total})");
+        });
         // Boot straight into a profile when asked. The profiling and headless
         // paths need to reach the menu without a mouse, and the profile scene
         // is mouse-only.

@@ -116,6 +116,14 @@ pub struct DecorSlot {
     pub kind: usize,
     pub x: f32,
     pub y: f32,
+    /// Planets and the galaxy live in the sky (see `SkyFrame`): their centre
+    /// in sky px, from which `x`/`y` are derived every tick, and `size` is
+    /// their size at normal zoom (drawn smaller as the sky zooms out).
+    pub sky_u: f32,
+    pub sky_v: f32,
+    /// Planets only: how far away, 0 (near layer) to 1 (far layer), or
+    /// negative for a rare near pass. See `decor.rs`.
+    pub depth: f32,
     pub size: f32,
     pub rot: f32,
     pub phase: f32,
@@ -469,6 +477,12 @@ pub struct State {
     pub weaver_gauntlet_y: f32,
     /// The current shooter has fired (and flipped) this shot.
     pub weaver_gauntlet_fired: bool,
+    /// A boss's phase change, played as a moment: the player held, the camera
+    /// pulled back to the boss (see `boss::phase_cine`).
+    pub phase_cine: PhaseCine,
+    /// One-shot phase changes already played this fight (bits; a phase change
+    /// that is a threshold rather than an event, like the Conductor's half HP).
+    pub phase_cine_done: u32,
     /// Flare Titan: its clock — 0 calm, 1 kindle, 2 flare, 3 vent — and the
     /// ticks left in that phase.
     pub titan_clock: u8,
@@ -480,6 +494,10 @@ pub struct State {
     /// and a tick count for bobbing.
     pub decor: Vec<DecorSlot>,
     pub decor_cam_prev: Option<(f32, f32)>,
+    /// Player x last tick. Planets and the galaxy parallax off the PLAYER'S
+    /// forward travel, not the camera's: the height zoom moves the camera
+    /// (it is anchored on the player), and that must not move them.
+    pub decor_player_prev_x: Option<f32>,
     pub decor_travel: f32,
     pub decor_next_at: f32,
     pub decor_last_kind: Option<usize>,
@@ -916,6 +934,17 @@ pub struct State {
     pub flares_fired: u32,
     pub flare_hearts_lost: u32,
     pub flare_ticks_sheltered: u32,
+    /// Run perks (see `scenes::game::perks`): release velocity, gravity and
+    /// buff-duration multipliers, coins added per coin, perks taken.
+    pub perk_release_mult: f32,
+    pub perk_gravity_mult: f32,
+    pub perk_buff_mult: f32,
+    pub perk_coin_bonus: u32,
+    pub perks_taken: u32,
+    /// The boss reward's three cards and the upgrade node's three perks, as
+    /// indices into `perks::PERKS`.
+    pub reward_offer: [u8; 3],
+    pub node_offer: [u8; 3],
 }
 
 impl State {
@@ -965,3 +994,40 @@ impl State {
 pub fn buff_is_active(player_buff: u8, buff_timer: u32) -> bool {
     player_buff > 0 && buff_timer > 0
 }
+
+/// How a boss's phase change plays. Each boss has its own, so a phase change
+/// reads as THAT boss changing, not as a shared cutscene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CineStyle {
+    /// Gravity Weaver: a slow pull back to the loom under a building rumble.
+    #[default]
+    Loom,
+    /// Colossus: a fast snap out, then stomps — heavy shake hits on a beat.
+    Quake,
+    /// Conductor: the camera steps out on the beat, four bars, a flash each.
+    Crescendo,
+    /// Flare Titan: a slow pull back while the light builds to a white-out.
+    Flare,
+    /// Magnetar: the view is dragged round the core in a magnetic orbit.
+    Magnet,
+    /// Serpent: wide, the camera sweeping side to side along the coils.
+    Coil,
+    /// Sun Devourer: the widest and longest; red pulses and a rising quake.
+    Eclipse,
+}
+
+/// A phase change being played. `ticks == 0` is "none".
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PhaseCine {
+    pub style: CineStyle,
+    /// Ticks left, and the total it started with.
+    pub ticks: u32,
+    pub total: u32,
+    /// Which phase change of the fight this is (1 = the first): later ones
+    /// hit harder.
+    pub step: u32,
+    /// Where the player is held, and the velocity handed back on release.
+    pub pos: (f32, f32),
+    pub vel: (f32, f32),
+}
+

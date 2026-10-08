@@ -1298,23 +1298,44 @@ pub fn hearts_img(full: u32, max: u32) -> image::RgbaImage {
     img
 }
 
-/// Draw a simple blocky heart placeholder (two round lobes + a tapering point).
+/// A pixel-art heart, to match the game's pixel art: drawn on a 13x12 grid
+/// (scaled up with hard edges), with a dark outline, a shaded body, a bright
+/// highlight on the upper left lobe and a darker lower right. An empty heart
+/// (`c` == `C_HEART_EMPTY`) is just the outline round a dark hollow.
 fn draw_heart(img: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, c: (u8, u8, u8)) {
-    // Crisp filled heart via the implicit heart curve:
-    //   (x^2 + y^2 - 1)^3 - x^2 y^3 <= 0
-    let cx = x as f32 + w as f32 * 0.5;
-    let cy = y as f32 + h as f32 * 0.56;
-    let sx = w as f32 / 2.6;
-    let sy = h as f32 / 2.4;
-    for py in y..y + h {
-        for px in x..x + w {
-            let nx = (px as f32 - cx) / sx;
-            let ny = (cy - py as f32) / sy; // y-down → heart up
-            let a = nx * nx + ny * ny - 1.0;
-            let v = a * a * a - nx * nx * ny * ny * ny;
-            if v <= 0.0 {
-                img.put_pixel(px, py, image::Rgba([c.0, c.1, c.2, 255]));
-            }
+    // o outline, b body, d shade, l light, w shine
+    const G: [&str; 12] = [
+        "..ooo...ooo..",
+        ".olllo.obbbo.",
+        "olwwlbobbbbbo",
+        "olwlbbbbbbbbo",
+        "olbbbbbbbbbdo",
+        "obbbbbbbbbbdo",
+        ".obbbbbbbbdo.",
+        "..obbbbbbddo.",
+        "...obbbbddo..",
+        "....obbddo...",
+        ".....oddo....",
+        "......oo.....",
+    ];
+    let empty = c == C_HEART_EMPTY;
+    let (gw, gh) = (13u32, 12u32);
+    for py in 0..h {
+        for px in 0..w {
+            let gx = (px * gw / w.max(1)).min(gw - 1) as usize;
+            let gy = (py * gh / h.max(1)).min(gh - 1) as usize;
+            let ch = G[gy].as_bytes()[gx];
+            let rgba = match (ch, empty) {
+                (b'o', false) => [70, 12, 26, 255],
+                (b'o', true) => [96, 70, 90, 235],
+                (b'.', _) => continue,
+                (_, true) => [34, 22, 36, 200],
+                (b'w', _) => [255, 236, 236, 255],
+                (b'l', _) => [255, 120, 132, 255],
+                (b'd', _) => [176, 30, 58, 255],
+                _ => [c.0, c.1, c.2, 255],
+            };
+            img.put_pixel(x + px, y + py, image::Rgba(rgba));
         }
     }
 }

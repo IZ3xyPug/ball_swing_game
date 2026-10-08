@@ -169,7 +169,7 @@ pub fn trigger_flip(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Im
     s.flip_timer = FLIP_DURATION;
     apply_flip_transform(c, &mut s, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
     let gdir = s.gravity_dir;
-    let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+    let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { s.perk_gravity_mult };
     let hooked = s.hooked;
     drop(s);
 
@@ -282,7 +282,7 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    let coin_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
+    let coin_mult = (if s.score_x2_timer > 0 { 2 } else { 1 }) + s.perk_coin_bonus;
     for name in &collected {
         s.coin_count += coin_mult;
         s.coin_live.retain(|n| n != name);
@@ -299,7 +299,6 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         let gained = (collected.len() as i32).saturating_mul(coin_mult as i32);
         let new_total = current_total.saturating_add(gained);
         c.set_var(TOTAL_COINS_COLLECTED_VAR, new_total);
-        let _ = maybe_unlock_gold_master(c, new_total);
     }
 
     for name in &collected {
@@ -310,7 +309,9 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
 
     if !collected.is_empty() {
-        c.play_sound_bytes_with(ASSET_COIN_SFX_3, SoundOptions::new().volume(sfx_vol(c, 0.2)));
+        // A quick run of coins climbs a scale (see `juice::coin_pitch`).
+        let pitch = super::juice::coin_pitch();
+        c.play_sound_bytes_with(ASSET_COIN_SFX_3, SoundOptions::new().volume(sfx_vol(c, 0.2)).pitch(pitch));
     }
 }
 
@@ -372,7 +373,7 @@ fn tick_flip_timer(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Ima
             s.gravity_dir *= -1.0;
             apply_flip_transform(c, &mut s, tech_bounce_img, tech_bounce_img_flipped, thruster_anim, thruster_anim_flipped);
             let gdir = s.gravity_dir;
-            let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+            let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { s.perk_gravity_mult };
             let hooked = s.hooked;
             drop(s);
 

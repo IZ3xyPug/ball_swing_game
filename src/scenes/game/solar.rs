@@ -232,8 +232,13 @@ fn tick_flare_state(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 s.flare_active = false;
                 s.flare_damage_timer = 0;
                 s.flare_cooldown = flare_interval(c, distance);
+                let survived = !s.dead;
                 drop(s);
                 c.set_var("flare_active", false);
+                // Lived through it: counts toward "Survive 10 solar flares".
+                if survived {
+                    crate::achievements::record_flare_survived(c);
+                }
             }
         }
 
@@ -450,12 +455,27 @@ fn draw_flare_overlay(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // The flare itself sweeping across the screen during the active window:
     // a column of solar plasma (it was a soft white bar, which read as a line
     // crossing the screen). Sized wider than the column for its licks.
+    //
+    // It is its own thing in the world: it sets off from just past the left
+    // of the view when the flare begins and sweeps on at its own pace. It used
+    // to be placed relative to the player every frame, so it followed every
+    // swing up, down and sideways.
     if phase == FlarePhase::Active {
-        let t = 1.0 - (active_left as f32 / FLARE_ACTIVE_TICKS as f32);
-        let px = st.lock().unwrap().px;
-        let sweep_x = px - VW * 0.6 + VW * 1.2 * t;
-        let py = st.lock().unwrap().py;
-        let (w, h) = (VW * 0.30, VH * 2.4);
+        let elapsed = FLARE_ACTIVE_TICKS.saturating_sub(active_left);
+        let (cam_cy, zoom) = c.camera()
+            .map(|cam| { let z = cam.zoom.max(0.05); (cam.position.1 + VH * 0.5 / z, z) })
+            .unwrap_or((VH * 0.5, 1.0));
+        // Taller than the view at any zoom, centred on the view: it reads the
+        // same all the way up, so riding with the view never shows, and its
+        // ends never come on screen however high or low the player goes.
+        let (w, h) = (VW * 0.30, VH * FLARE_WALL_SCREENS / zoom);
+        if elapsed <= 1 || c.get_var("flare_wall_x0").is_none() {
+            let cam_x = c.camera().map(|cam| cam.position.0).unwrap_or(0.0);
+            c.set_var("flare_wall_x0", cam_x - w * 0.5);
+        }
+        let x0 = c.get_f32("flare_wall_x0");
+        let sweep_x = x0 + FLARE_WALL_SPEED * elapsed as f32;
+        let py = cam_cy;
         c.push_effect(
             // Its own clock (seconds into the flare), never the global one.
             Effect::SolarFront { intensity: 1.0, aspect: h / w, time: (FLARE_ACTIVE_TICKS - active_left) as f32 / 60.0 },
@@ -468,12 +488,19 @@ fn draw_flare_overlay(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 fn set_overlay(c: &mut Canvas, alpha: f32, tint: (u8, u8, u8)) {
     let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+    if a == 0 { c.remove_var("flare_wall_x0"); }
     if let Some(obj) = c.get_game_object_mut("flare_overlay") {
         if a == 0 {
             obj.visible = false;
         } else {
             obj.visible = true;
-            obj.set_image(crate::images::flare_overlay_img(tint.0, tint.1, tint.2, a));
+            // Over-drawn: a window that is not 16:9 shows past the virtual
+            // screen, and a screen-sized wash left those bands untinted.
+            obj.size = (VW * 2.0, VH * 2.0);
+            obj.position = (-VW * 0.5, -VH * 0.5);
+            let mut img = crate::images::flare_overlay_img(tint.0, tint.1, tint.2, a);
+            img.shape = ShapeType::Rectangle(0.0, (VW * 2.0, VH * 2.0), 0.0);
+            obj.set_image(img);
         }
     }
 }

@@ -657,7 +657,9 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
         // Hard rule: no gap between grab nodes. Instead of discarding a hook
         // that lands too close in Y to the previous, push its Y far enough away.
-        if (hy - s.last_hook_y).abs() < HOOK_CLOSE_Y_THRESHOLD {
+        // Only for nodes close together sideways: a level run of well-spaced
+        // nodes (a "glide" pattern) is a shape, not a stack.
+        if (hy - s.last_hook_y).abs() < HOOK_CLOSE_Y_THRESHOLD && (!has_prev || (hx - prev_x).abs() < HOOK_MIN_REACH) {
             let above = s.last_hook_y - HOOK_CLOSE_Y_THRESHOLD;
             let below = s.last_hook_y + HOOK_CLOSE_Y_THRESHOLD;
             let pushed = if above >= HOOK_Y_MIN { above } else { below.min(HOOK_Y_MAX) };

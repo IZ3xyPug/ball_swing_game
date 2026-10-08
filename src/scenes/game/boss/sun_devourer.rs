@@ -71,9 +71,10 @@ pub(crate) fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     if !s.boss_active || !s.boss_spawned || s.boss_hp <= 0 { return; }
 
+    // The dark is the whole fight now: it falls as the fight starts and is
+    // only lifted by the fight ending (arena cleanup), never by a timer.
     if s.boss_dark_active {
-        s.boss_dark_ticks = s.boss_dark_ticks.saturating_sub(1);
-        let ending = s.boss_dark_ticks == 0;
+        let ending = false;
         if ending {
             s.boss_dark_active = false;
             s.boss_dark_cooldown = BOSS_DARK_INTERVAL;
@@ -92,8 +93,7 @@ pub(crate) fn tick_boss_darkness(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             crate::scenes::game::eclipse::show_nodes_in_dark(c, 1.0);
         }
     } else {
-        s.boss_dark_cooldown = s.boss_dark_cooldown.saturating_sub(1);
-        let starting = s.boss_dark_cooldown == 0;
+        let starting = true;
         if starting {
             s.boss_dark_active = true;
             s.boss_dark_ticks = BOSS_DARK_DURATION;
@@ -372,6 +372,11 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
         let mut s = st.lock().unwrap();
         s.boss_barrier_up = false;
+        // The final phase begins: the eclipse (once — this runs every tick
+        // after the last generator falls).
+        if !s.boss_final_phase {
+            super::start_phase_cine(&mut s, CineStyle::Eclipse, 1);
+        }
         s.boss_final_phase = true;
     }
 }

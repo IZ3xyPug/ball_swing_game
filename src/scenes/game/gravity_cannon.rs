@@ -23,6 +23,9 @@ use super::helpers::center_warp_on_player;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Decode the gravitycannon.gif and return all raw RGBA frames (index 0..8).
+/// Decode the cannon's frames now (a background thread at app start).
+pub(crate) fn prewarm() { let _ = cannon_frames_cached(); }
+
 fn cannon_frames_cached() -> &'static Vec<std::sync::Arc<image::RgbaImage>> {
     static FRAMES: std::sync::OnceLock<Vec<std::sync::Arc<image::RgbaImage>>> =
         std::sync::OnceLock::new();
@@ -155,8 +158,10 @@ pub fn spawn_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     while s.cannon_rightmost < s.px + GEN_AHEAD && !s.cannon_free.is_empty() {
         let gap = lcg_range(&mut s.seed, CANNON_GAP_MIN, CANNON_GAP_MAX);
         let x = s.cannon_rightmost + gap;
-        // Place in the middle band so the cannon floats visibly.
-        let base_y = lcg_range(&mut s.seed, VH * 0.25, VH * 0.65);
+        // Above the node band, off the line the swing normally takes: the
+        // player goes to a cannon on purpose (up the stepping node below it)
+        // instead of drifting into it in passing.
+        let base_y = lcg_range(&mut s.seed, HOOK_Y_MIN - CANNON_ABOVE_BAND - 80.0, HOOK_Y_MIN - CANNON_ABOVE_BAND + 80.0);
         let bob_phase = lcg_range(&mut s.seed, 0.0, std::f32::consts::TAU);
         let Some(id) = s.cannon_free.pop() else { break; };
         let flipped = s.gravity_dir < 0.0;
@@ -181,9 +186,38 @@ pub fn spawn_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             obj.visible = true;
             set_cannon_frame(c, &id, CANNON_DEFAULT_FRAME_INDEX);
         }
+        // A stepping node under the cannon, between it and the top of the
+        // band: the way up for a player who wants it. Not part of the chain
+        // (it must not advance the chain's frontier).
+        place_step_node(c, st, x - 260.0, base_y + CANNON_ABOVE_BAND * 0.62);
 
         s = st.lock().unwrap();
     }
+}
+
+/// An extra grab node at (x, y) from the shared pool.
+fn place_step_node(c: &mut Canvas, st: &Arc<Mutex<State>>, x: f32, y: f32) {
+    let Some(id) = ({ let mut s = st.lock().unwrap(); s.pool_free.pop() }) else { return };
+    let asteroid_mode = c.get_bool("asteroid_hooks_on");
+    if let Some(obj) = c.get_game_object_mut(&id) {
+        obj.visible = true;
+        obj.position = (x - HOOK_R, y - HOOK_R);
+        obj.size = (HOOK_R * 2.0, HOOK_R * 2.0);
+        obj.gravity = 0.0;
+        obj.momentum = (0.0, 0.0);
+        obj.rotation_momentum = 0.0;
+        obj.collision_mode = CollisionMode::NonPlatform;
+        obj.tags.retain(|t| t != BUFF_HOOK_TAG && t != SHIELD_HOOK_TAG && t != SPECIAL_HOOK_TAG && t != EXTENDED_HOOK_TAG);
+        if !obj.tags.iter().any(|t| t == "hook") { obj.tags.push("hook".into()); }
+        if asteroid_mode {
+            obj.set_animation(super::helpers::hook_artifact_anim());
+            obj.size = (HOOK_ARTIFACT_R * 2.0, HOOK_ARTIFACT_R * 2.0);
+        } else {
+            obj.animated_sprite = None;
+            obj.set_image(super::helpers::hook_img(C_HOOK.0, C_HOOK.1, C_HOOK.2));
+        }
+    }
+    st.lock().unwrap().live_hooks.push(id);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

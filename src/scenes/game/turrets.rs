@@ -336,7 +336,7 @@ fn tick_bullet_collision(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if s.hooked {
         let prev = s.active_hook.clone();
         let zone_idx = zone_index_for_distance(s.distance);
-        let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+        let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { s.perk_gravity_mult };
         let gdir = s.gravity_dir;
         s.hooked = false;
         s.active_hook = String::new();

@@ -154,6 +154,16 @@ pub fn checkpoint_save(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// Remove one heart (and any active buff/power-ups). Returns true if the run is
 /// over (no hearts left). Keeps the `hearts`/`heart_losses` vars current.
 pub fn lose_heart(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
+    // Dead already: the fight carries on under the death screen, and its
+    // attacks pass through where the player fell.
+    if st.lock().unwrap().dead {
+        return false;
+    }
+    // Not during a boss's phase change: the player is held still on camera,
+    // and an attack already in flight landing then would be a cheap hit.
+    if crate::scenes::game::boss::phase_cine_active(&st.lock().unwrap()) {
+        return false;
+    }
     // Register the hit ON THE PLAYER, first thing, whatever happens next.
     //
     // Every route out of this function — a free respawn, a lost heart, a
@@ -166,12 +176,13 @@ pub fn lose_heart(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
         crate::scenes::game::boss::common::spawn_impact(
             c, st, (px, py), PLAYER_R * 2.0, IMPACT_TAKEN_RGB, true);
     }
-    // SECOND WIND spends a free respawn instead of a heart. Power-ups are still
-    // lost — the upgrade buys the life, not the run state, so a rank never
-    // makes a mistake free.
+    // SECOND WIND: when the LAST heart would go, a free respawn is spent
+    // instead and the run goes on on that heart. It never touches the other
+    // hearts — losing them costs as usual. Power-ups are still lost: the
+    // upgrade buys the life, not the run state.
     {
         let mut s = st.lock().unwrap();
-        if s.free_respawns_left > 0 {
+        if s.free_respawns_left > 0 && s.hearts <= 1 {
             s.free_respawns_left -= 1;
             s.player_buff = 0;
             s.buff_timer = 0;
@@ -397,7 +408,7 @@ fn place_checkpoint_hook(c: &mut Canvas, st: &Arc<Mutex<State>>, cx: f32, cy: f3
     }
 }
 
-fn hearts_hud_update(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+pub(crate) fn hearts_hud_update(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let (hearts, max) = {
         let s = st.lock().unwrap();
         (s.hearts.max(0), s.max_hearts.max(1))

@@ -20,14 +20,15 @@ pub const NUM_SLOTS:   usize = 7;
 pub const SLOT_CENTER: usize = 3;
 
 // ── Category data ───────────────────────────────────────────────────────────
-pub const SHOP_CAT_NAMES:     &[&str]          = &["CHARACTERS", "ROPES", "BACKGROUNDS", "TRAILS", "UPGRADES"];
-pub const SHOP_CAT_SUBTITLES: &[&str]          = &["CHANGE YOUR BALL", "STYLE YOUR SWING", "CHANGE THE SCENE", "LEAVE YOUR MARK", "SPEND META \u{2022} PERMANENT"];
+pub const SHOP_CAT_NAMES:     &[&str]          = &["CHARACTERS", "ROPES", "BACKGROUNDS", "TRAILS", "UPGRADES", "ABILITIES"];
+pub const SHOP_CAT_SUBTITLES: &[&str]          = &["CHANGE YOUR BALL", "STYLE YOUR SWING", "CHANGE THE SCENE", "LEAVE YOUR MARK", "SPEND META \u{2022} PERMANENT", "ACTIVE POWERS \u{2022} TAP TO USE"];
 pub const SHOP_CAT_COLORS:    &[(u8, u8, u8)]  = &[
     ( 60,  80, 180), // 0 Characters  — indigo
     ( 20, 150, 140), // 1 Ropes       — teal
     ( 90,  40, 160), // 2 Backgrounds — purple
     (180,  80,  20), // 3 Trails      — orange
     (140,  30, 100), // 4 Purchasable — magenta
+    (200, 110,  30), // 5 Abilities   — amber
 ];
 pub const NUM_CATS: usize = SHOP_CAT_NAMES.len();
 
@@ -79,6 +80,20 @@ fn upgrade_cards() -> (&'static [(u8, u8, u8)], &'static [&'static str]) {
     )
 }
 
+/// Card colours and names for the abilities, from `profile::ABILITIES`.
+fn ability_cards() -> (&'static [(u8, u8, u8)], &'static [&'static str]) {
+    static COLORS: OnceLock<Vec<(u8, u8, u8)>> = OnceLock::new();
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    (
+        COLORS.get_or_init(|| crate::profile::ABILITIES.iter().map(|a| a.color).collect()),
+        NAMES.get_or_init(|| crate::profile::ABILITIES.iter().map(|a| a.name).collect()),
+    )
+}
+
+/// The abilities category: bought, then equipped, then upgraded.
+#[inline]
+pub fn is_ability_category(cat: i32) -> bool { cat == 5 }
+
 fn cat_items(cat: i32) -> (&'static [(u8,u8,u8)], &'static [&'static str]) {
     match cat {
         0 => (PLAYER_CHAR_COLORS, PLAYER_CHAR_NAMES),
@@ -87,6 +102,7 @@ fn cat_items(cat: i32) -> (&'static [(u8,u8,u8)], &'static [&'static str]) {
         2 => (SHOP_BG_COLORS,     SHOP_BG_NAMES),
         3 => (SHOP_TRAIL_COLORS,  SHOP_TRAIL_NAMES),
         4 => upgrade_cards(),
+        5 => ability_cards(),
         _ => (PLAYER_CHAR_COLORS, PLAYER_CHAR_NAMES),
     }
 }
@@ -95,16 +111,10 @@ fn cat_items(cat: i32) -> (&'static [(u8,u8,u8)], &'static [&'static str]) {
 #[inline]
 pub fn is_upgrade_category(cat: i32) -> bool { cat == 4 }
 
-/// Returns (x, y, w, h) for each category card button (2+3 grid layout).
+/// Returns (x, y, w, h) for each category card button (3+3 grid layout).
 fn cat_card_rect(idx: usize) -> (f32, f32, f32, f32) {
-    match idx {
-        0 => ( 360.0,  310.0, 1520.0, 540.0),
-        1 => (1960.0,  310.0, 1520.0, 540.0),
-        2 => ( 300.0,  940.0, 1040.0, 500.0),
-        3 => (1400.0,  940.0, 1040.0, 500.0),
-        4 => (2500.0,  940.0, 1040.0, 500.0),
-        _ => (   0.0,    0.0,  100.0, 100.0),
-    }
+    let (col, row) = ((idx % 3) as f32, (idx / 3) as f32);
+    (300.0 + col * 1100.0, 330.0 + row * 600.0, 1040.0, 520.0)
 }
 
 // ── Image cache (built once at startup) ────────────────────────────────────
@@ -112,6 +122,8 @@ static CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLo
 static ROPE_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
 static BG_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
 static TRAIL_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
+static ABILITY_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
+static UPGRADE_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
 
 pub fn get_card_cache() -> &'static Vec<[std::sync::Arc<image::RgbaImage>; 2]> {
     CARD_CACHE.get_or_init(|| {
@@ -197,8 +209,26 @@ fn get_item_card_cache(cat: i32) -> Option<&'static Vec<[std::sync::Arc<image::R
                 }
             }).collect()
         })),
+        // Upgrades: a plain card; the animated emblem rides on top of it
+        // (`shop_slot_icon_*`, see `tick_slot_icons`).
+        4 => Some(UPGRADE_CARD_CACHE.get_or_init(|| {
+            let blank = image::RgbaImage::new(1, 1);
+            (0..crate::profile::PERM_UPGRADES.len()).map(|_| [
+                std::sync::Arc::new(art_card_img(&blank, 1, false)),
+                std::sync::Arc::new(art_card_img(&blank, 1, true)),
+            ]).collect()
+        })),
         2 => Some(BG_CARD_CACHE.get_or_init(|| make_cache(SHOP_BG_COLORS))),
         3 => Some(TRAIL_CARD_CACHE.get_or_init(|| make_cache(SHOP_TRAIL_COLORS))),
+        // Abilities: the orb in the ability's colour, with its in-run icon on it.
+        // Abilities: a plain card; the animated emblem rides on top of it.
+        5 => Some(ABILITY_CARD_CACHE.get_or_init(|| {
+            let blank = image::RgbaImage::new(1, 1);
+            (0..crate::profile::ABILITIES.len()).map(|_| [
+                std::sync::Arc::new(art_card_img(&blank, 1, false)),
+                std::sync::Arc::new(art_card_img(&blank, 1, true)),
+            ]).collect()
+        })),
         _ => None,
     }
 }
@@ -210,13 +240,13 @@ fn get_item_card_cache(cat: i32) -> Option<&'static Vec<[std::sync::Arc<image::R
 fn art_card_img(art: &image::RgbaImage, scale: u32, selected: bool) -> image::RgbaImage {
     let mut img = shop_card_img(0, 0, 0, selected);
     // Clear the orb shop_card_img drew; this card's art replaces it.
-    let (bgr, bgg, bgb) = if selected { (45u8, 65u8, 90u8) } else { (22u8, 35u8, 55u8) };
+    let (bgr, bgg, bgb, bga) = card_fill(selected);
     let (cx, cy, cr) = ((CARD_W / 2) as i32, (CARD_H / 2) as i32 - 60, 121i32);
     for py in (cy - cr).max(0)..(cy + cr).min(CARD_H as i32) {
         for px in (cx - cr).max(0)..(cx + cr).min(CARD_W as i32) {
             let (dx, dy) = (px - cx, py - cy);
             if dx * dx + dy * dy <= cr * cr {
-                img.put_pixel(px as u32, py as u32, image::Rgba([bgr, bgg, bgb, 235]));
+                img.put_pixel(px as u32, py as u32, image::Rgba([bgr, bgg, bgb, bga]));
             }
         }
     }
@@ -233,13 +263,13 @@ fn shop_card_img(r: u8, g: u8, b: u8, selected: bool) -> image::RgbaImage {
     let h = CARD_H;
     let mut img = image::RgbaImage::new(w, h);
 
-    let (br, bg_v, bb) = if selected { (45u8, 65u8, 90u8) } else { (22u8, 35u8, 55u8) };
+    let (br, bg_v, bb, ba) = card_fill(selected);
     for py in 0..h { for px in 0..w {
-        img.put_pixel(px, py, image::Rgba([br, bg_v, bb, 235]));
+        img.put_pixel(px, py, image::Rgba([br, bg_v, bb, ba]));
     }}
 
     let bw    = if selected { 6u32 } else { 3u32 };
-    let bcolr = if selected { [255u8, 255, 255, 255] } else { [80u8, 110, 150, 180] };
+    let bcolr = if selected { [255u8, 255, 255, 255] } else { [150u8, 128, 220, 150] };
     draw_rect(&mut img, 0, 0, w, bw, bcolr);
     draw_rect(&mut img, 0, h - bw, w, bw, bcolr);
     draw_rect(&mut img, 0, 0, bw, h, bcolr);
@@ -262,9 +292,99 @@ fn shop_card_img(r: u8, g: u8, b: u8, selected: bool) -> image::RgbaImage {
     }}
 
     let div_y = ((h as f32) * 0.74) as u32;
-    draw_rect(&mut img, 12, div_y, w - 24, 2, [100, 130, 165, 140]);
+    draw_rect(&mut img, 12, div_y, w - 24, 2, [160, 140, 220, 120]);
     img
 }
+
+/// A carousel card's fill: violet glass over the sky, a touch lighter and
+/// denser when it is the one in the middle.
+fn card_fill(selected: bool) -> (u8, u8, u8, u8) {
+    if selected { (52, 40, 100, 205) } else { (22, 16, 48, 165) }
+}
+
+/// Add a wide glow round whatever was drawn since `before`, in the left
+/// `zone_w` px of the card.
+fn bloom_icon(img: &mut image::RgbaImage, before: &image::RgbaImage, rgb: (u8, u8, u8), zone_w: usize) {
+    let (w, h) = (zone_w, img.height() as usize);
+    let mut m = vec![0f32; w * h];
+    for y in 0..h { for x in 0..w {
+        let (a, b) = (img.get_pixel(x as u32, y as u32), before.get_pixel(x as u32, y as u32));
+        let d = (0..3).map(|i| (a[i] as f32 - b[i] as f32).abs()).fold(0.0f32, f32::max) / 255.0;
+        // The ring is drawn before the snapshot; include bright pixels too.
+        let lum = (a[0] as f32 + a[1] as f32 + a[2] as f32) / (3.0 * 255.0);
+        m[y * w + x] = d.max(((lum - 0.45) * 2.0).clamp(0.0, 1.0));
+    }}
+    let blur = |m: &mut Vec<f32>, r: usize| {
+        let mut t = vec![0f32; m.len()];
+        for y in 0..h { for x in 0..w {
+            let (lo, hi) = (x.saturating_sub(r), (x + r).min(w - 1));
+            t[y * w + x] = m[y * w + lo..=y * w + hi].iter().sum::<f32>() / (hi - lo + 1) as f32;
+        }}
+        for y in 0..h { for x in 0..w {
+            let (lo, hi) = (y.saturating_sub(r), (y + r).min(h - 1));
+            m[y * w + x] = (lo..=hi).map(|yy| t[yy * w + x]).sum::<f32>() / (hi - lo + 1) as f32;
+        }}
+    };
+    let mut wide = m.clone();
+    for _ in 0..3 { blur(&mut wide, 14); }
+    let mut tight = m;
+    for _ in 0..2 { blur(&mut tight, 4); }
+    for y in 0..h { for x in 0..w {
+        let g = (wide[y * w + x] * 4.0 + tight[y * w + x] * 1.3).min(1.8);
+        if g <= 0.01 { continue; }
+        let p = img.get_pixel_mut(x as u32, y as u32);
+        let add = |c: u8, base: u8| (base as f32 + c as f32 * g * 0.75 + 60.0 * g * g * 0.25).min(255.0) as u8;
+        *p = image::Rgba([add(rgb.0, p[0]), add(rgb.1, p[1]), add(rgb.2, p[2]), p[3]]);
+    }}
+}
+
+/// The shop's RGB text: each letter its own hue, the rainbow flowing along
+/// the word over time (`t` in seconds).
+pub fn rgb_text_spec(text: &str, font: &Font, size: f32, width: f32, t: f32) -> Text {
+    let spans = text.chars().enumerate().map(|(i, ch)| {
+        let hue = (t * 0.25 + i as f32 * 0.07).rem_euclid(1.0);
+        let (r, g, b) = hsv(hue, 0.55, 1.0);
+        Span::new(ch.to_string(), size, Some(size * 1.25), std::sync::Arc::new(font.clone()),
+            Color(r, g, b, 255), 0.0)
+    }).collect();
+    Text::new(spans, Some(width), Align::Center, None)
+}
+
+fn hsv(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+    let i = (h * 6.0).floor();
+    let f = h * 6.0 - i;
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - f * s), v * (1.0 - (1.0 - f) * s));
+    let (r, g, b) = match i as i32 % 6 { 0 => (v, t, p), 1 => (q, v, p), 2 => (p, v, t), 3 => (p, q, v), 4 => (t, p, v), _ => (v, p, q) };
+    ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+}
+
+/// Every few frames while the shop is up: the title and the category names
+/// cycle their RGB.
+pub fn tick_rgb_text(c: &mut Canvas) {
+    let f = c.get_i32("shop_rgb_t") + 1;
+    c.set_var("shop_rgb_t", f);
+    if f % 3 != 0 { return; }
+    let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) else { return };
+    let t = f as f32 / 60.0;
+    let s = c.virtual_scale();
+    let title = match c.get_var("shop_title_now") { Some(Value::Str(v)) => v, _ => "SHOP".to_string() };
+    if let Some(obj) = c.get_game_object_mut("shop_title_text") {
+        if obj.visible { obj.set_drawable(Box::new(rgb_text_spec(&title, &font, 110.0 * s, 1600.0 * s, t))); }
+    }
+    if c.get_i32("shop_screen") == 0 {
+        for i in 0..NUM_CATS {
+            let (_, _, cw, _) = cat_card_rect(i);
+            if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_label_{i}")) {
+                if obj.visible {
+                    obj.set_drawable(Box::new(rgb_text_spec(SHOP_CAT_NAMES[i], &font, 58.0 * s, cw * 0.44 * s, t + i as f32 * 0.4)));
+                }
+            }
+        }
+    }
+}
+
+/// How opaque the category cards are: glass, so the sky reads through them.
+const CAT_CARD_ALPHA: u8 = 175;
 
 /// Build a category card image (w×h) with a gradient, colored border,
 /// a glowing orb on the left, a unique icon per category,
@@ -276,11 +396,11 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
     // Gradient background (dark navy → slightly lighter)
     for py in 0..h {
         let t = py as f32 / h as f32;
-        let br = (12.0 + 16.0 * t) as u8;
-        let bg = (18.0 + 14.0 * t) as u8;
-        let bb = (32.0 + 20.0 * t) as u8;
+        let br = (18.0 + 14.0 * t) as u8;
+        let bg = (13.0 + 10.0 * t) as u8;
+        let bb = (40.0 + 22.0 * t) as u8;
         for px in 0..w {
-            img.put_pixel(px, py, image::Rgba([br, bg, bb, 230]));
+            img.put_pixel(px, py, image::Rgba([br, bg, bb, CAT_CARD_ALPHA]));
         }
     }
 
@@ -296,10 +416,11 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
             let t = (1.0 - dist / glow_r as f32).clamp(0.0, 1.0);
             if t > 0.0 {
                 let p = img.get_pixel(px, py);
-                let nr = (p[0] as f32 + cr as f32 * t * 0.6).min(255.0) as u8;
-                let ng = (p[1] as f32 + cg as f32 * t * 0.6).min(255.0) as u8;
-                let nb = (p[2] as f32 + cb as f32 * t * 0.6).min(255.0) as u8;
-                img.put_pixel(px, py, image::Rgba([nr, ng, nb, 230]));
+                let t = t * t * (3.0 - 2.0 * t);
+                let nr = (p[0] as f32 + cr as f32 * t * 0.85).min(255.0) as u8;
+                let ng = (p[1] as f32 + cg as f32 * t * 0.85).min(255.0) as u8;
+                let nb = (p[2] as f32 + cb as f32 * t * 0.85).min(255.0) as u8;
+                img.put_pixel(px, py, image::Rgba([nr, ng, nb, CAT_CARD_ALPHA]));
             }
         }
     }
@@ -320,7 +441,10 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
         }
     }
 
-    // Unique icon per category (bright pixel-art in the orb center)
+    // Unique icon per category (bright pixel-art in the orb center). A copy
+    // of the card from before it is drawn, so its strokes can be found again
+    // for the bloom below.
+    let before_icon = img.clone();
     let icon_s = ((glow_r as f32 * 0.30) as u32).max(6);
     let ic = [
         (cr as f32 * 1.7).min(255.0) as u8,
@@ -375,6 +499,21 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
                 }}
             }
         }
+        5 => {
+            // Abilities: a lightning bolt, a zigzag of thick strokes.
+            let k = icon_s as f32 * 1.4;
+            let pts = [(0.35, -1.0), (-0.35, 0.08), (0.3, 0.0), (-0.3, 1.0)];
+            for w in pts.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let steps = 80;
+                for i in 0..=steps {
+                    let t = i as f32 / steps as f32;
+                    let x = glow_cx as f32 + (a.0 + (b.0 - a.0) * t) * k;
+                    let y = glow_cy as f32 + (a.1 + (b.1 - a.1) * t) * k;
+                    draw_rect(&mut img, (x - 6.0).max(0.0) as u32, (y - 6.0).max(0.0) as u32, 12, 12, ic);
+                }
+            }
+        }
         4 => {
             // Coins: ring + vertical bar
             let r_out = icon_s as i32;
@@ -393,6 +532,11 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
         }
         _ => {}
     }
+
+    // Bloom: the icon's strokes (and the ring) blurred wide and added back
+    // in the category's colour, so the icon glows like a light rather than
+    // sitting flat on the card.
+    bloom_icon(&mut img, &before_icon, (cr, cg, cb), (w / 2) as usize);
 
     // Vertical separator line between icon zone and text zone.
     // Keep original per-category styling; ropes get a subtle dark underlay so
@@ -416,7 +560,7 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
             let nr = (p[0] as f32 * (1.0 - t * 0.4)) as u8;
             let ng = (p[1] as f32 * (1.0 - t * 0.4)) as u8;
             let nb = (p[2] as f32 * (1.0 - t * 0.4)) as u8;
-            img.put_pixel(px, py, image::Rgba([nr, ng, nb, 230]));
+            img.put_pixel(px, py, image::Rgba([nr, ng, nb, CAT_CARD_ALPHA]));
         }
     }
 
@@ -454,6 +598,7 @@ fn set_visible(c: &mut Canvas, name: &str, v: bool) {
 /// Switch to the category selection screen (called from init_shop and shop_back).
 pub fn show_categories(c: &mut Canvas) {
     c.set_var("shop_screen", 0i32);
+    c.set_var("shop_title_now", Value::Str("SHOP".to_string()));
 
     for i in 0..NUM_CATS {
         set_visible(c, &format!("shop_cat_btn_{i}"), true);
@@ -481,7 +626,7 @@ pub fn show_categories(c: &mut Canvas) {
         }
         if let Some(obj) = c.get_game_object_mut("shop_back_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                "\u{25C4}  MENU", &font, 32.0 * s, Color(215, 230, 255, 255), 380.0 * s,
+                "\u{2193}  MENU", &font, 32.0 * s, Color(230, 222, 255, 255), 380.0 * s,
             )));
         }
     }
@@ -521,6 +666,12 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
         1 => c.get_i32("player_rope_selected"),
         2 => c.get_i32("player_bg_selected"),
         3 => c.get_i32("player_trail_selected"),
+        // Abilities open on the equipped one.
+        5 => {
+            let g = crate::profile::profile();
+            let eq = g.lock().unwrap().equipped_ability.clone();
+            crate::profile::ABILITIES.iter().position(|a| a.id == eq).unwrap_or(0) as i32
+        }
         _ => 0,
     }.max(0);
     let (items, _names) = cat_items(cat);
@@ -543,6 +694,7 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
     if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
         let s = c.virtual_scale();
         let cat_name = SHOP_CAT_NAMES.get(cat as usize).copied().unwrap_or("SHOP");
+        c.set_var("shop_title_now", Value::Str(cat_name.to_string()));
         if let Some(obj) = c.get_game_object_mut("shop_title_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 cat_name, &font, 100.0 * s, Color(255, 255, 255, 255), 1600.0 * s,
@@ -555,7 +707,7 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
                 &font, 30.0 * s, Color(150, 180, 215, 210), 1600.0 * s,
             )));
         }
-        let action = if is_upgrade_category(cat) { "BUY" } else { "SELECT" };
+        let action = if is_upgrade_category(cat) || is_ability_category(cat) { "BUY" } else { "SELECT" };
         if let Some(obj) = c.get_game_object_mut("shop_select_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 action, &font, 32.0 * s, Color(255, 255, 255, 255), 380.0 * s,
@@ -569,7 +721,7 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
         }
         if let Some(obj) = c.get_game_object_mut("shop_back_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                "\u{25C4}  BACK", &font, 32.0 * s, Color(215, 230, 255, 255), 380.0 * s,
+                "\u{2039}  BACK", &font, 32.0 * s, Color(230, 222, 255, 255), 380.0 * s,
             )));
         }
     }
@@ -601,6 +753,46 @@ pub fn update_slot_positions(c: &mut Canvas, offset: f32) {
         if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_label_{s}")) {
             obj.position = (slot_x, label_y);
         }
+        // The emblem sits where a card's orb would be.
+        if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_icon_{s}")) {
+            obj.position = (slot_x + w * 0.5 - ICON_SIZE * 0.5, card_y + h * 0.5 - 60.0 - ICON_SIZE * 0.5);
+        }
+    }
+}
+
+/// The animated emblems' size on a card.
+const ICON_SIZE: f32 = 330.0;
+
+/// Every frame on the carousel: each slot's emblem (upgrades and abilities
+/// only), animated, in its item's colour.
+pub fn tick_slot_icons(c: &mut Canvas) {
+    let cat = c.get_i32("shop_active_category");
+    let on = c.get_i32("shop_screen") == 1 && (is_upgrade_category(cat) || is_ability_category(cat));
+    let t = c.get_i32("shop_rgb_t") as f32 / 60.0;
+    let n = if is_upgrade_category(cat) { crate::profile::PERM_UPGRADES.len() } else { crate::profile::ABILITIES.len() };
+    let sel = c.get_i32("shop_selected").max(0) as usize;
+    for s in 0..NUM_SLOTS {
+        let id = format!("shop_slot_icon_{s}");
+        if !on {
+            if c.get_game_object(&id).is_some_and(|o| o.visible) {
+                c.clear_effect(&id);
+                if let Some(o) = c.get_game_object_mut(&id) { o.visible = false; }
+            }
+            continue;
+        }
+        let idx = ((sel as i64 + s as i64 - SLOT_CENTER as i64).rem_euclid(n.max(1) as i64)) as usize;
+        let (icon, rgb) = if is_upgrade_category(cat) {
+            (idx as u32, crate::profile::PERM_UPGRADES[idx].color)
+        } else {
+            (7 + idx as u32, crate::profile::ABILITIES[idx].color)
+        };
+        let card_visible = c.get_game_object(&format!("shop_slot_{s}")).is_some_and(|o| o.visible);
+        if let Some(o) = c.get_game_object_mut(&id) { o.visible = card_visible; }
+        if !card_visible { continue; }
+        // The middle card's emblem burns brighter.
+        let intensity = if s == SLOT_CENTER { 1.0 } else { 0.7 };
+        c.attach_effect(&id, Effect::ShopIcon { icon, time: t + idx as f32 * 0.7, intensity },
+            EffectColor::srgb8(rgb.0, rgb.1, rgb.2), (ICON_SIZE, ICON_SIZE));
     }
 }
 
@@ -645,6 +837,8 @@ pub fn update_all_slot_labels(c: &mut Canvas, selected: usize, cat: i32) {
             // every one of them.
             let (label, colour) = if is_upgrade_category(cat) {
                 upgrade_slot_label(idx)
+            } else if is_ability_category(cat) {
+                ability_slot_label(idx)
             } else if cat == 0 || cat == 1 {
                 look_slot_label(c, cat, idx)
             } else {
@@ -734,6 +928,8 @@ pub fn refresh_select_text(c: &mut Canvas, cat: i32, selected: usize) {
     }
     let action = if is_upgrade_category(cat) {
         "BUY".to_string()
+    } else if is_ability_category(cat) {
+        ability_action(selected).0
     } else if cat == 0 || cat == 1 {
         let (_, price, owned, _) = look_state(c, cat, selected);
         if owned { "SELECT".to_string() } else { format!("BUY \u{2022} {}", price.label()) }
@@ -849,6 +1045,8 @@ fn place_rope_color_ring(c: &mut Canvas) {
 pub fn select_rope_color(c: &mut Canvas, i: usize) {
     let i = i.min(SHOP_ROPE_COLORS.len() - 1);
     c.set_var("player_rope_selected", i as i32);
+    // The menu's swinging cat's rope takes the colour straight away.
+    crate::menu_look::apply_menu_cat(c);
     place_rope_color_ring(c);
     let (ch, bg, tr) = (
         c.get_i32("player_char_selected").max(0) as u32,
@@ -884,6 +1082,67 @@ fn upgrade_slot_label(idx: usize) -> (String, Color) {
     }
 }
 
+/// `NAME  •  BUY 500` / `NAME  2/4  •  EQUIPPED` and so on.
+fn ability_slot_label(idx: usize) -> (String, Color) {
+    let Some(a) = crate::profile::ABILITIES.get(idx) else {
+        return (String::new(), Color(180, 210, 240, 200));
+    };
+    let (owned, meta, equipped) = {
+        let g = crate::profile::profile();
+        let p = g.lock().unwrap();
+        (p.upgrade_level(a.id), p.meta_currency, p.equipped_ability == a.id)
+    };
+    if owned == 0 {
+        let cost = crate::profile::ability_cost(a, 0).unwrap_or(0);
+        let col = if meta >= cost { Color(255, 236, 150, 240) } else { Color(160, 175, 200, 190) };
+        return (format!("{}\n{} META", a.name, cost), col);
+    }
+    let rank = format!("{}/{}", owned, a.max);
+    if equipped {
+        (format!("{}\nRANK {}  \u{2022}  EQUIPPED", a.name, rank), Color(140, 255, 190, 230))
+    } else {
+        (format!("{}\nRANK {}", a.name, rank), Color(180, 210, 240, 220))
+    }
+}
+
+/// The action button for an ability card, and what it will do:
+/// BUY (locked), EQUIP (owned, not equipped), UPGRADE (equipped), MAXED.
+pub fn ability_action(idx: usize) -> (String, u8) {
+    let Some(a) = crate::profile::ABILITIES.get(idx) else { return ("SELECT".into(), 0) };
+    let (owned, equipped) = {
+        let g = crate::profile::profile();
+        let p = g.lock().unwrap();
+        (p.upgrade_level(a.id), p.equipped_ability == a.id)
+    };
+    match (owned, equipped, crate::profile::ability_cost(a, owned)) {
+        (0, _, Some(c)) => (format!("BUY \u{2022} {c}"), 0),
+        (_, false, _) => ("EQUIP".into(), 1),
+        (_, true, Some(c)) => (format!("UPGRADE \u{2022} {c}"), 2),
+        (_, true, None) => ("MAXED".into(), 3),
+    }
+}
+
+/// SELECT on an ability card: buy it, equip it, or buy its next rank.
+pub fn select_ability(c: &mut Canvas, idx: usize) {
+    let Some(a) = crate::profile::ABILITIES.get(idx) else { return };
+    let (_, what) = ability_action(idx);
+    match what {
+        1 => {
+            crate::profile::equip_ability(a.id);
+            flash_instruction(c, &format!("{} EQUIPPED", a.name));
+        }
+        0 | 2 => match crate::profile::buy_ability_rank(a.id) {
+            Ok(1) => flash_instruction(c, &format!("UNLOCKED {}!  EQUIPPED", a.name)),
+            Ok(r) => flash_instruction(c, &format!("{} UPGRADED TO RANK {}", a.name, r)),
+            Err(e) => flash_instruction(c, &e),
+        },
+        _ => flash_instruction(c, &format!("{} IS FULLY UPGRADED", a.name)),
+    }
+    let sel = c.get_i32("shop_selected").max(0) as usize;
+    update_all_slot_labels(c, sel, 5);
+    refresh_select_text(c, 5, sel);
+}
+
 /// The line under the carousel: what the selected upgrade actually does, plus
 /// the player's balance. Cosmetic categories keep the browse hint.
 pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
@@ -894,6 +1153,17 @@ pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
             m
         };
         return format!("A / D  or  \u{2190}\u{2192}  to browse   \u{2022}   YOU HAVE {meta} META");
+    }
+    if is_ability_category(cat) {
+        let meta = {
+            let g = crate::profile::profile();
+            let m = g.lock().unwrap().meta_currency;
+            m
+        };
+        return match crate::profile::ABILITIES.get(selected) {
+            Some(a) => format!("{}   \u{2022}   UPGRADES: {}   \u{2022}   YOU HAVE {} META", a.blurb, a.per_rank, meta),
+            None => format!("YOU HAVE {meta} META"),
+        };
     }
     if !is_upgrade_category(cat) {
         return "A / D  or  \u{2190}\u{2192}  to browse".to_string();
@@ -908,24 +1178,6 @@ pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
         Some(u) => format!("{}   •   YOU HAVE {} META   •   ENTER TO BUY", u.blurb, meta),
         None => format!("YOU HAVE {meta} META"),
     }
-}
-
-fn bright_background(w: f32, h: f32) -> Image {
-    // Rasterised at a bounded width and stretched, like the menu's aurora.
-    //
-    // At the quad's own size this was a 4640 x 2160 procedural starfield — ten
-    // million pixels, and past the 4096 texture limit of most phones, so it
-    // took the engine's downscale path on upload. The star COUNT scales with
-    // the area so the density on screen is unchanged; the stars themselves come
-    // out slightly larger, which on a background of dots is not a look anyone
-    // can miss it having.
-    let scale = (crate::menu::MENU_BG_MAX_W / w).min(1.0);
-    let (tw, th) = ((w * scale) as u32, (h * scale) as u32);
-    let count = ((STARFIELD_STAR_COUNT as f32) * scale * scale).round().max(1.0) as u32;
-    let mut img = star_field(tw, th, count, 0xCAFE_BABE);
-    // Keep the quad at its full size; only the texture is smaller.
-    img.shape = ShapeType::Rectangle(0.0, (w, h), 0.0);
-    img
 }
 
 // ── Public API for menu.rs ─────────────────────────────────────────────────
@@ -973,6 +1225,11 @@ pub fn init_shop(canvas: &mut Canvas) {
 pub fn handle_shop_key(c: &mut Canvas, key: &Key) {
     // Input only handled on the carousel screen
     if c.get_i32("shop_screen") != 1 { return; }
+    // Enter does what the SELECT button does.
+    if *key == Key::Named(NamedKey::Enter) {
+        c.run(Action::Custom { name: "shop_select".into() });
+        return;
+    }
     let cat = c.get_i32("shop_active_category");
     let (colors, _) = cat_items(cat);
     let n = colors.len() as i32;
@@ -1024,6 +1281,8 @@ pub fn handle_shop_key_release(c: &mut Canvas, key: &Key) {
 /// Per-frame carousel update: hold-scroll + slide animation.
 /// Call from menu on_update when shop is visible.
 pub fn tick_shop(c: &mut Canvas) {
+    tick_rgb_text(c);
+    tick_slot_icons(c);
     // Only animate when on the carousel screen
     if c.get_i32("shop_screen") != 1 { return; }
     let cat = c.get_i32("shop_active_category");
@@ -1214,7 +1473,7 @@ pub fn tick_shop_preview(c: &mut Canvas) {
     if !matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) { return; }
     let cat = c.get_i32("shop_active_category");
     let sel = c.get_i32("shop_selected").max(0) as usize;
-    if c.get_i32("shop_screen") != 1 || cat == 4 {
+    if c.get_i32("shop_screen") != 1 || cat == 4 || cat == 5 {
         set_visible(c, "shop_preview_panel", false);
         set_visible(c, "shop_preview_ball", false);
         set_visible(c, "shop_preview_trail", false);
@@ -1407,9 +1666,11 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
     let bg_w = VW + 800.0;
     let bg_h = VH;
 
+    // No backdrop of its own: the shop is the sky above the menu, and
+    // `menu_look` draws that one sky across both. Kept as an empty object so
+    // the scene's object list is unchanged.
     let bg = GameObject::new_rect(ctx, "shop_bg".into(),
-        Some(bright_background(bg_w, bg_h)),
-        (bg_w, bg_h), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        None::<Image>, (bg_w, bg_h), (-400.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
 
     // Carousel card strip (hidden until a category is chosen)
     let strip_h = (CARD_H + 200) as u32;
@@ -1422,10 +1683,10 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         let sw = 8u32;
         let mut img = image::RgbaImage::new(sw, strip_h);
         for py in 0..strip_h { for px in 0..sw {
-            img.put_pixel(px, py, image::Rgba([10, 28, 50, 180]));
+            img.put_pixel(px, py, image::Rgba([16, 10, 40, 105]));
         }}
-        draw_rect(&mut img, 0, 0, sw, 3, [60, 100, 160, 180]);
-        draw_rect(&mut img, 0, strip_h - 3, sw, 3, [60, 100, 160, 180]);
+        draw_rect(&mut img, 0, 0, sw, 3, [170, 140, 255, 130]);
+        draw_rect(&mut img, 0, strip_h - 3, sw, 3, [170, 140, 255, 130]);
         let sw = bg_w as u32;
         let mut obj = GameObject::new_rect(ctx, "shop_card_strip".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (sw as f32, strip_h as f32), 0.0), image: img.into(), color: None }),
@@ -1458,7 +1719,7 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         let mut img = image::RgbaImage::new(bw, bh);
         for py in 0..bh { for px in 0..bw {
             let border = px < 3 || px >= bw - 3 || py < 3 || py >= bh - 3;
-            img.put_pixel(px, py, image::Rgba([40, 160, 90, if border { 255 } else { 200 }]));
+            img.put_pixel(px, py, if border { image::Rgba([215, 195, 255, 255]) } else { image::Rgba([112, 76, 210, 215]) });
         }}
         let mut obj = GameObject::new_rect(ctx, "shop_select_btn".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (bw as f32, bh as f32), 0.0), image: img.into(), color: None }),
@@ -1483,7 +1744,7 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         let (w, h) = (arrow_w as u32, arrow_h as u32);
         let mut img = image::RgbaImage::new(w, h);
         for py in 0..h { for px in 0..w {
-            img.put_pixel(px, py, image::Rgba([18, 40, 70, 150]));
+            img.put_pixel(px, py, image::Rgba([30, 20, 70, 95]));
         }}
         // A chevron, drawn as two strokes so it reads at a glance.
         let cx = w as f32 * 0.5;
@@ -1496,7 +1757,7 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
                 for sign in [-1.0f32, 1.0] {
                     let py0 = (cy + sign * dy).round();
                     if px0 >= 0.0 && px0 < w as f32 && py0 >= 0.0 && py0 < h as f32 {
-                        img.put_pixel(px0 as u32, py0 as u32, image::Rgba([190, 225, 255, 255]));
+                        img.put_pixel(px0 as u32, py0 as u32, image::Rgba([220, 205, 255, 255]));
                     }
                 }
             }
@@ -1523,7 +1784,7 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         let mut img = image::RgbaImage::new(bw, bh);
         for py in 0..bh { for px in 0..bw {
             let border = px < 3 || px >= bw - 3 || py < 3 || py >= bh - 3;
-            img.put_pixel(px, py, image::Rgba([40, 70, 120, if border { 255 } else { 190 }]));
+            img.put_pixel(px, py, if border { image::Rgba([170, 140, 255, 200]) } else { image::Rgba([36, 26, 82, 160]) });
         }}
         GameObject::new_rect(ctx, "shop_back_btn".into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (bw as f32, bh as f32), 0.0), image: img.into(), color: None }),
@@ -1554,6 +1815,10 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         .with_object("shop_select_text", select_text_obj)
         .with_object("shop_back_btn",    back_btn)
         .with_object("shop_back_text",   back_text_obj);
+    // The UPGRADES page's demo clip (see `shop_demos`).
+    for (id, o) in crate::shop_demos::demo_objects(ctx) {
+        scene = scene.with_object(&id, o);
+    }
 
     // ── Live item preview (orbit ball + trail + background preview) ─────────
     {
@@ -1561,7 +1826,7 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         let panel_w = 1300.0f32;
         let panel_h = 300.0f32;
         let mut preview_panel = GameObject::new_rect(ctx, "shop_preview_panel".into(),
-            Some(Image { shape: ShapeType::Rectangle(0.0, (panel_w, panel_h), 0.0), image: solid(16, 28, 46, 205).into(), color: None }),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (panel_w, panel_h), 0.0), image: solid(22, 16, 50, 150).into(), color: None }),
             (panel_w, panel_h), (pcx - panel_w * 0.5, pcy - panel_h * 0.5),
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
         preview_panel.visible = false;
@@ -1685,8 +1950,15 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
             .position(slot_x, label_y)
             .build(ctx);
         label.visible = false;
+        let mut icon = GameObject::new_rect(ctx, format!("shop_slot_icon_{s}").into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (ICON_SIZE, ICON_SIZE), 0.0),
+                image: std::sync::Arc::new(image::RgbaImage::new(1, 1)), color: None }),
+            (ICON_SIZE, ICON_SIZE), (slot_x + w * 0.5 - ICON_SIZE * 0.5, card_y + h * 0.5 - 60.0 - ICON_SIZE * 0.5),
+            vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        icon.visible = false;
         scene = scene
             .with_object(format!("shop_slot_{s}"),       slot)
+            .with_object(format!("shop_slot_icon_{s}"),  icon)
             .with_object(format!("shop_slot_label_{s}"), label);
     }
 

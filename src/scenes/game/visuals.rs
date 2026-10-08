@@ -233,11 +233,15 @@ fn tick_nearest_hook_highlight(c: &mut Canvas, st: &Arc<Mutex<State>>, prev_near
     let zone_idx = zone_index_for_distance(s.distance);
     let hooks = s.live_hooks.clone();
     let boss_active = s.boss_active;
+    let player_reach = crate::gameplay::player_grab_reach(&s);
     drop(s);
 
     // Extend hook reach in boss arena for asteroid interaction
+    // The player's own reach (LONG LINE ranks included), as the grab uses:
+    // a node the rope can catch is a node that lights up.
     let reach_mult = if boss_active { 1.45 } else { 1.0 };
-    let max_dist2 = (ROPE_LEN_MAX * reach_mult) * (ROPE_LEN_MAX * reach_mult);
+    let reach = player_reach * reach_mult;
+    let max_dist2 = reach * reach;
     let mut best_id: Option<String> = None;
     let mut best_dist = f32::INFINITY;
     for hid in &hooks {
@@ -444,6 +448,26 @@ fn tick_pad_thrusters(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 // ── Zoom (Dune-style: zoom out when player goes high) ───────────────────────
 
 fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    // The run's opening after PLAY: start zoomed in on the player (the menu
+    // dived into the cat) and pull out to the normal view, easing out.
+    let intro = c.get_i32("game_intro_t");
+    if intro > 0 {
+        c.set_var("game_intro_t", intro - 1);
+        let k = 1.0 - (intro - 1) as f32 / GAME_INTRO_TICKS as f32;
+        let e = 1.0 - (1.0 - k).powi(3);
+        let zoom = GAME_INTRO_ZOOM + (1.0 - GAME_INTRO_ZOOM) * e;
+        let p = c.get_game_object("player")
+            .map(|o| (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5));
+        if let (Some((px, py)), Some(cam)) = (p, c.camera_mut()) {
+            cam.zoom_anchor = None;
+            cam.snap_zoom(zoom);
+            // Centred on the player, settling to where play keeps them (35%
+            // from the top) as it pulls out.
+            let place = 0.5 + (0.35 - 0.5) * e;
+            cam.position = (px - VW * 0.5 / zoom, py - VH * place / zoom);
+        }
+        return;
+    }
     let intro_zoom_recover = c.get_i32("start_zoom_recover_ticks").max(0);
     if intro_zoom_recover > 0 {
         if let Some(cam) = c.camera_mut() {
@@ -486,10 +510,11 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // In the boss arena the Dune-style height zoom would pull way out on the
     // tall zero-g space; keep the boss readable by capping how far out it goes.
     let in_boss = s.boss_active && s.boss_spawned && s.boss_hp > 0;
-    let target_zoom = if in_boss { target_zoom.max(BOSS_CAM_MIN_ZOOM) } else { target_zoom };
+    let target_zoom = if in_boss { (target_zoom * BOSS_CAM_ZOOM_SCALE).max(BOSS_CAM_MIN_ZOOM) } else { target_zoom };
 
     let px = s.px;
     let py = s.py;
+    let boss_active = s.boss_active;
     drop(s);
 
     if pending_space_exit_reset {
@@ -508,6 +533,41 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
         c.set_var("space_exit_zoom_reset", false);
         return;
+    }
+
+    // A boss can take the camera for a moment (the Weaver's inversion count-in
+    // pulls back to the loom's view): `boss_cam_focus` 0..1 blends from the
+    // player to its focus point and zoom. Only in a live fight, so a fight
+    // that ends mid count-in cannot leave the camera parked.
+    let focus = if boss_active { c.get_f32("boss_cam_focus").clamp(0.0, 1.0) } else { 0.0 };
+    let was_focused = c.get_bool("boss_cam_focused");
+    if focus > 0.0 {
+        let (fx, fy) = (c.get_f32("boss_cam_focus_x"), c.get_f32("boss_cam_focus_y"));
+        let fz = c.get_f32("boss_cam_focus_zoom");
+        let zoom = target_zoom + (fz - target_zoom) * focus;
+        // Centre on a point eased from the player to the boss.
+        let (cx, cy) = (px + (fx - px) * focus, py + (fy - py) * focus);
+        c.set_var("boss_cam_focused", true);
+        if let Some(cam) = c.camera_mut() {
+            // The engine's follow would pull the view back to the player.
+            cam.follow(None);
+            cam.zoom_lerp_speed = ZOOM_OUT_LERP;
+            cam.zoom_anchor = Some((cx, cy));
+            cam.smooth_zoom(zoom);
+            let (vw, vh) = (VW / cam.zoom.max(0.01), VH / cam.zoom.max(0.01));
+            let target = (cx - vw * 0.5, cy - vh * 0.5);
+            cam.position.0 += (target.0 - cam.position.0) * 0.12;
+            cam.position.1 += (target.1 - cam.position.1) * 0.12;
+        }
+        return;
+    }
+    if was_focused {
+        // Handed back: follow the player again; the zoom and height below
+        // ease back to them.
+        c.set_var("boss_cam_focused", false);
+        if let Some(cam) = c.camera_mut() {
+            cam.follow(Some(Target::name("player")));
+        }
     }
 
     if let Some(cam) = c.camera_mut() {

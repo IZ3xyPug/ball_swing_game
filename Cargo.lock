@@ -7,6 +7,7 @@ name = "KnightsOfQuartz"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "fontdue",
  "image 0.25.10",
  "log",
  "pollster",

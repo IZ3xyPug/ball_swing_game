@@ -35,36 +35,19 @@ pub fn tick_background(
             obj.update_image_shape();
         }
     } else {
-        // Outside space: bg is resized to aurora gradient each tick.
-
-        // Smoothly scale background once player rises above py = 500.
-        // Starts at py = 500 (upper area of screen), reaches full effect at py = 500 - 1400 = -900.
-        let up_t = if flipped {
-            ((py - (VH - 500.0)) / 1400.0).clamp(0.0, 1.0)
-        } else {
-            ((500.0 - py) / 1400.0).clamp(0.0, 1.0)
-        };
-        let zoom_strength = match c.get_i32("space_zoom_mode") {
-            4 => 0.44, // reduced version
-            _ => 0.60, // default/current version
-        };
-        let target_scale = 1.0 + zoom_strength * up_t;
-        // Lerp toward target so the transition eases rather than snapping each frame.
-        *bg_scale_smooth = *bg_scale_smooth + (*bg_scale_smooth - target_scale).abs().min(1.0) * if target_scale > *bg_scale_smooth { 0.06 } else { 0.02 } * (target_scale - *bg_scale_smooth).signum();
-        let bg_scale = *bg_scale_smooth;
+        // Outside space: the sky zooms out with the camera (a share of it, see
+        // `sky_scale`), about the same edge the camera's height zoom holds
+        // still: the screen's bottom, or its top when gravity is flipped. More
+        // sky then shows on the far side, which `nebula.rs` extends.
+        // This frame's zoom, so the sky does not trail the world by a frame.
+        let _ = py;
+        let s = sky_scale(super::decor::frame_view_y(c).1);
+        *bg_scale_smooth = s;
 
         if let Some(obj) = c.get_game_object_mut("bg") {
-            const OVERSCAN: f32 = 200.0;
-            const BG_RAISE: f32 = 150.0;
-            let w = VW * bg_scale + OVERSCAN * 2.0;
-            let h = VH * bg_scale + BG_RAISE;
+            let (x, y, w, h) = sky_rect(s, flipped);
             obj.size = (w, h);
-            let cx = -(w - VW) / 2.0;
-            if flipped {
-                obj.position = (cx, VH - h);
-            } else {
-                obj.position = (cx, -BG_RAISE);
-            }
+            obj.position = (x, y);
             obj.update_image_shape();
         }
     }
@@ -115,4 +98,63 @@ pub fn tick_background(
         }
     }
 
+}
+
+/// Where the sky is this frame, for things that live in it (planets, the
+/// nebula): positions in the sky image's own px (VW x VH; row 0 is its top
+/// edge, negative rows are above it), mapped through `bg`'s current rect so
+/// they zoom with the sky. Read after `tick_background` has placed `bg`.
+#[derive(Clone, Copy, Debug)]
+pub struct SkyFrame {
+    x: f32, y: f32,
+    /// Screen px per sky px, now and at normal zoom.
+    sx: f32, sy: f32, sx0: f32,
+    /// The sky's scale: 1 at normal zoom, smaller zoomed out.
+    pub s: f32,
+    flipped: bool,
+}
+
+impl SkyFrame {
+    pub fn to_screen(&self, u: f32, v: f32) -> (f32, f32) {
+        // Flipped, the sky image is drawn upside down.
+        let row = if self.flipped { VH - v } else { v };
+        (self.x + u * self.sx, self.y + row * self.sy)
+    }
+    pub fn to_sky(&self, px: f32, py: f32) -> (f32, f32) {
+        let row = (py - self.y) / self.sy;
+        ((px - self.x) / self.sx, if self.flipped { VH - row } else { row })
+    }
+    /// Screen px at normal zoom to sky px (for speeds authored on screen).
+    pub fn sky_px(&self, screen_px_at_normal_zoom: f32) -> f32 {
+        screen_px_at_normal_zoom / self.sx0
+    }
+}
+
+pub fn sky_frame(c: &Canvas, flipped: bool) -> Option<SkyFrame> {
+    let o = c.get_game_object("bg")?;
+    let (w0, _) = { let r = sky_rect(1.0, flipped); (r.2, r.3) };
+    let ((x, y), (w, h)) = (o.position, o.size);
+    Some(SkyFrame { x, y, sx: w / VW, sy: h / VH, sx0: w0 / VW, s: w / w0, flipped })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_spot_in_the_sky_maps_to_the_screen_and_back() {
+        for flipped in [false, true] {
+            for s in [1.0, 0.85, sky_scale(SKY_ZOOM_FLOOR)] {
+                let (x, y, w, h) = sky_rect(s, flipped);
+                let w0 = sky_rect(1.0, flipped).2;
+                let f = SkyFrame { x, y, sx: w / VW, sy: h / VH, sx0: w0 / VW, s: w / w0, flipped };
+                assert!((f.s - s).abs() < 1e-4);
+                for (u, v) in [(0.0, 0.0), (1_000.0, -400.0), (3_000.0, 900.0)] {
+                    let (px, py) = f.to_screen(u, v);
+                    let (u2, v2) = f.to_sky(px, py);
+                    assert!((u - u2).abs() < 1e-2 && (v - v2).abs() < 1e-2, "{flipped} {s}: ({u},{v}) -> ({u2},{v2})");
+                }
+            }
+        }
+    }
 }

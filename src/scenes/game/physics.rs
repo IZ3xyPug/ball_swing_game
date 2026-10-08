@@ -251,6 +251,19 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // pattern fixed to the hook while the drawn length breathes, and a
     // rising phase runs it toward the ball.
     let style = &crate::cosmetics::ROPE_STYLES[style_idx];
+    // No overshoot for a solid tile: the classic GIF fades out at its ends
+    // and needs the padding above to reach the node and the ball, but a
+    // premium tile is solid to its ends and the padding drew it past both.
+    // It runs from the node's rim to the ball's centre (the ball draws over
+    // the rope, so that end is hidden under it).
+    let start_x = hx + unit_x * HOOK_R * 0.85;
+    let start_y = hy + unit_y * HOOK_R * 0.85;
+    let (end_x, end_y) = (vis_px, vis_py);
+    let seg_dx = end_x - start_x;
+    let seg_dy = end_y - start_y;
+    let rope_draw_len = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt().max(1.0);
+    let rope_mid_x = (start_x + end_x) * 0.5;
+    let rope_mid_y = (start_y + end_y) * 0.5;
     let t = rope_tick as f32 / 60.0;
     let frame = crate::cosmetics::rope_frame(style, t);
     let rgb = crate::cosmetics::rope_tint(style_idx, rope_sel_idx as usize, rope_rgb);
@@ -297,7 +310,7 @@ pub fn sync_engine_gravity(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // Space / ascent: effectively no global gravity — planet wells do the work.
         GRAVITY * SPACE_GRAVITY_SCALE * s.gravity_dir
     } else {
-        let g_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+        let g_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { s.perk_gravity_mult };
         GRAVITY * g_scale * s.gravity_dir
     };
     drop(s);

@@ -2,8 +2,16 @@
 // Usage: cargo run --bin headless -- --episodes 5 --frames 3600
 
 fn main() {
+    if let Ok(spec) = std::env::var("HEADLESS_LABEL") {
+        main::headless::write_label(&spec);
+        return;
+    }
     if let Ok(dir) = std::env::var("HEADLESS_SHOP") {
         main::headless::capture_shop(&dir);
+        return;
+    }
+    if let Ok(dir) = std::env::var("HEADLESS_MENU") {
+        main::headless::capture_menu(&dir);
         return;
     }
     // Off unless RUST_LOG asks for it, so normal runs stay quiet.

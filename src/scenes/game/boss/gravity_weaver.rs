@@ -78,6 +78,8 @@ fn thread_normal(start: (f32, f32), dir: (f32, f32), p: (f32, f32)) -> (f32, f32
 /// Hide every Weaver piece. Called on victory (the fight stops being ticked
 /// the moment the boss dies) and on every fight start.
 pub(crate) fn hide_weaver(c: &mut Canvas) {
+    // Hand the camera back too (a fight ending mid count-in).
+    c.set_var("boss_cam_focus", 0.0f32);
     for i in 0..=WEAVER_LOOM_IDX {
         let part = format!("weaver_part_{i}");
         c.clear_effect(&part);
@@ -146,7 +148,8 @@ fn weaver_gauntlet_arm(s: &mut State, loom_x: f32, shot: usize, player: (f32, f3
 pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let s = st.lock().unwrap();
-        if !s.boss_active || s.dead || s.boss_stasis_active { return; }
+        // Not gated on `dead`: the fight carries on under the death screen.
+        if !s.boss_active || s.boss_stasis_active { return; }
     }
     let check = std::env::var("WEAVER_CHECK").is_ok();
     // WEAVER_REACH_CHECK: a buffed stand-in flies at a player's speed to the
@@ -172,6 +175,7 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // A gauntlet interrupted by a fall does not resume; it re-arms.
             s.weaver_gauntlet = 0;
             s.weaver_gauntlet_ticks = 0;
+            s.phase_cine.ticks = 0;
             for p in s.boss_parts.iter_mut() {
                 p.state = PartState::Idle;
                 p.state_ticks = 0;
@@ -181,6 +185,11 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             s.boss_kind.name()
         };
         hide_weaver(c);
+        // The fight's own music. Index-guarded, so a restart after a fall
+        // carries on rather than starting the track over; the lane gets its
+        // music back when the fight ends or the player dies (`hide_conductor`
+        // restores the lane track whichever boss loop is playing).
+        crate::scenes::game::switch_game_bgm(c, BGM_TRACK_WEAVER, ASSET_WEAVER_BGM, WEAVER_BGM_VOL);
         let cx = arena_center_x(c);
         if let Some(obj) = c.get_game_object_mut("boss") {
             obj.position = (cx - BOSS_SIZE * 0.5, BOSS_Y_CENTER - BOSS_SIZE * 0.5);
@@ -249,6 +258,11 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if loom.alive && loom.shielded && all_spindles_dead {
             loom.shielded = false;
             if check { eprintln!("weaver-check: loom exposed"); }
+            // The reveal (see `phase_cine`): hold the player where they are
+            // and show the loom. Its flip clock starts over, so it cannot turn
+            // the world the moment the player is let go.
+            super::start_phase_cine(&mut s, CineStyle::Loom, 1);
+            s.weaver_flip_ticks = WEAVER_FLIP_INTERVAL_CORE;
         }
         // The gauntlet re-arms at each phase change: once when the second
         // pair opens, once when a single spindle is left.
@@ -284,7 +298,8 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // The loom's clock holds while a gauntlet runs: its shots flip the
         // world themselves, and a count-in on top would say two things.
         let gauntlet = s.weaver_gauntlet > 0;
-        if s.weaver_flip_ticks > 0 && !gauntlet {
+        // And during the reveal: nothing happens while the player is held.
+        if s.weaver_flip_ticks > 0 && !gauntlet && s.phase_cine.ticks == 0 {
             s.weaver_flip_ticks -= 1;
         }
         let tel = !gauntlet && s.weaver_flip_ticks < WEAVER_FLIP_TELEGRAPH;
@@ -382,6 +397,9 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             );
         }
     }
+    // The reveal itself (the hold, the camera, the rumble) is `phase_cine`'s.
+    let revealing = super::phase_cine_active(&st.lock().unwrap());
+
     // The lens over the loom: opens through the telegraph, snaps shut on the
     // flip, and shows faintly all the time so the loom always reads as the
     // thing bending space.
@@ -508,7 +526,7 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     // Not during a post-flip window either: a part that opened
                     // on the flip must STAY open for it, not start a wind-up
                     // a few frames in (which flashed "hit me" and shut again).
-                    if cooldown_ok && !telegraph && !began && gauntlet_step == 0 && !flip_open
+                    if cooldown_ok && !telegraph && !began && gauntlet_step == 0 && !flip_open && !revealing
                         && p.state_ticks >= weaver_idle_len(i)
                     {
                         p.state = PartState::Telegraph;
@@ -754,6 +772,10 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         } else {
             None
         };
+        if let Some((len, _)) = strip {
+            let kind = if f.thread_live { 1 } else if f.retract.is_some() { 2 } else { 0 };
+            super::weaver_fx::thread(f.pos, f.dir, len, kind);
+        }
         match strip {
             Some((len, w)) if f.thread_live => {
                 // HOT: the weave says "this will hurt" — the same line

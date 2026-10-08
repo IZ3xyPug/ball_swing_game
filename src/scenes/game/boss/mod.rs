@@ -17,6 +17,7 @@ use crate::state::*;
 
 pub(crate) mod common;
 pub(crate) mod arena;
+pub(crate) mod intro;
 pub(crate) mod colossus;
 pub(crate) mod serpent;
 pub(crate) mod conductor;
@@ -26,8 +27,19 @@ pub(crate) mod flare_titan;
 pub(crate) mod gravity_weaver;
 pub(crate) mod magnetar;
 pub(crate) mod sun_devourer;
+pub(crate) mod phase_cine;
+pub(crate) mod colossus_finale;
+pub(crate) mod fx_kit;
+pub(crate) mod colossus_fx;
+pub(crate) mod serpent_fx;
+pub(crate) mod titan_fx;
+pub(crate) mod magnetar_fx;
+pub(crate) mod weaver_fx;
+pub(crate) mod conductor_fx;
+pub(crate) mod devourer_fx;
 
 pub(crate) use common::*;
+pub(crate) use phase_cine::*;
 pub(crate) use arena::*;
 pub(crate) use colossus::*;
 pub(crate) use serpent::*;
@@ -55,10 +67,18 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     tick_boss_stasis(c, st);
     tick_warp_flash(c, st);
 
+    // During a phase change the fight stands still: no boss tick at all, so
+    // its movement, attacks and clocks all stop where they are (and its
+    // projectiles are held by `phase_cine`). Its own phase-change animation
+    // will hook in there.
+    let frozen = phase_cine_active(&st.lock().unwrap());
+
     // Multi-part bosses (Colossus, Serpent) run their own part-driven loop; the
     // single-body bosses dispatch by kind below.
     let is_multi = { let s = st.lock().unwrap(); !s.boss_parts.is_empty() };
-    if is_multi {
+    if frozen {
+        // Held: see above.
+    } else if is_multi {
         // The Serpent is a distinct multi-part fight (head-HP win, tetherable
         // chain); the Colossus uses the shared part loop.
         let kind = { let s = st.lock().unwrap(); s.boss_kind };
@@ -93,13 +113,29 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
 
-    // After every fight has placed its parts: the struck one shakes.
-    tick_hitstop_shake(c, st);
-    tick_colossus_meteors(c, st);
-    // Hides itself whenever the Colossus's parts are not on screen.
-    tick_colossus_plumes(c);
-    tick_core_vent(c, st);
-    tick_clap_wave(c, st);
+    // A phase change, if one is playing: after the fight's own tick, so its
+    // hold on the player and the camera wins.
+    tick_phase_cine(c, st);
+    // The Colossus's last stand: its look layered over the fight.
+    colossus_finale::tick_colossus_finale(c, st);
+    // Each boss's attacks, dressed (they hide themselves out of their fight).
+    colossus_fx::tick(c, st);
+    serpent_fx::tick(c, st);
+    titan_fx::tick(c, st);
+    magnetar_fx::tick(c, st);
+    weaver_fx::tick(c, st);
+    conductor_fx::tick(c, st);
+    devourer_fx::tick(c, st);
+
+    if !frozen {
+        // After every fight has placed its parts: the struck one shakes.
+        tick_hitstop_shake(c, st);
+        tick_colossus_meteors(c, st);
+        // Hides itself whenever the Colossus's parts are not on screen.
+        tick_colossus_plumes(c);
+        tick_core_vent(c, st);
+        tick_clap_wave(c, st);
+    }
     tick_boss_hud(c, st);
     tick_boss_indicators(c, st);
     tick_boss_lights(c, st);

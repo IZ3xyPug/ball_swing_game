@@ -317,6 +317,17 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     bg_stars_b.ignore_zoom = true;
     bg_stars_b.visible = false;
 
+    // A second row of moving-star panels on the sky's far side (above; below
+    // when flipped), so they reach the top of the screen when the sky zooms out.
+    let star_row2: Vec<(String, GameObject)> = ["bg_stars_up_a", "bg_stars_up_b"].iter().map(|id| {
+        let mut o = GameObject::new_rect(ctx, id.to_string(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: solid(0, 0, 0, 0).into(), color: None }),
+            (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        o.ignore_zoom = true;
+        o.visible = false;
+        (id.to_string(), o)
+    }).collect();
+
     // ── Energy hook reference display (top-right corner) ─────────────────
     const ASTEROID_W: f32 = 480.0;
     const ASTEROID_H: f32 = 480.0;
@@ -478,8 +489,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let score_x2_timer_hud = hud_obj(ctx, "score_x2_timer", 504.0, 118.0, VW * 0.5 - 252.0, 820.0,
         Some(rect_img(504.0, 118.0, score_x2_timer_img(SCORE_X2_DURATION, SCORE_X2_DURATION))));
 
-    let toast_w = GOLD_MASTER_TOAST_WIDTH;
-    let toast_h = GOLD_MASTER_TOAST_HEIGHT;
+    let toast_w = TOAST_WIDTH;
+    let toast_h = TOAST_HEIGHT;
     let mut achievement_toast_panel = {
         let (w, h) = (toast_w as u32, toast_h as u32);
         let mut img = image::RgbaImage::new(w, h);
@@ -487,7 +498,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
             let border = px < 4 || px >= w - 4 || py < 4 || py >= h - 4;
             img.put_pixel(px, py, image::Rgba([24, 30, 44, if border { 240 } else { 210 }]));
         }}
-        GameObject::new_rect(ctx, GOLD_MASTER_TOAST_PANEL_NAME.into(),
+        GameObject::new_rect(ctx, TOAST_PANEL_NAME.into(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (w as f32, h as f32), 0.0), image: img.into(), color: None }),
             (w as f32, h as f32), (VW * 0.5 - w as f32 * 0.5, -(h as f32) - 32.0),
             vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
@@ -496,7 +507,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     achievement_toast_panel.ignore_zoom = true;
     achievement_toast_panel.layer = 150;
 
-    let mut achievement_toast_title = GameObject::build(GOLD_MASTER_TOAST_TITLE_NAME)
+    let mut achievement_toast_title = GameObject::build(TOAST_TITLE_NAME)
         .size(1080.0, 54.0)
         .position(VW * 0.5 - 520.0, -toast_h - 10.0)
         .tag("hud")
@@ -505,7 +516,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     achievement_toast_title.ignore_zoom = true;
     achievement_toast_title.layer = 151;
 
-    let mut achievement_toast_desc = GameObject::build(GOLD_MASTER_TOAST_DESC_NAME)
+    let mut achievement_toast_desc = GameObject::build(TOAST_DESC_NAME)
         .size(1080.0, 42.0)
         .position(VW * 0.5 - 520.0, -toast_h + 46.0)
         .tag("hud")
@@ -514,7 +525,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     achievement_toast_desc.ignore_zoom = true;
     achievement_toast_desc.layer = 151;
 
-    let mut achievement_toast_check = GameObject::build(GOLD_MASTER_TOAST_CHECK_NAME)
+    let mut achievement_toast_check = GameObject::build(TOAST_CHECK_NAME)
         .size(120.0, 88.0)
         .position(VW * 0.5 + 470.0, -toast_h + 34.0)
         .tag("hud")
@@ -616,12 +627,33 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let starter_hooks = crate::level_gen::starter_hooks();
 
     let mut scene = Scene::new("game")
-        .with_object("bg",           bg)
+        .with_object("bg",           bg);
+    // Straight over the static sky, under the moving stars.
+    for (id, obj) in super::nebula::nebula_objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
+    // The northern lights, over the far sky and the atmosphere's glow.
+    {
+        let (id, obj) = super::aurora::aurora_object(ctx);
+        scene = scene.with_object(&id, obj);
+    }
+    // Far planets, behind the moving stars (see `PLANET_BEHIND_STARS_DEPTH`).
+    for (id, obj) in super::decor::decor_objects(ctx, true) {
+        scene = scene.with_object(&id, obj);
+    }
+    let mut scene = scene
         .with_object("bg_space",     bg_space)
         .with_object("bg_stars_b",   bg_stars_b);
+    for (id, obj) in star_row2 {
+        scene = scene.with_object(&id, obj);
+    }
     // Distant decor straight after the backdrop: layer 0 draws in insertion
     // order, so this puts it behind every gameplay object.
-    for (id, obj) in super::decor::decor_objects(ctx) {
+    for (id, obj) in super::decor::decor_objects(ctx, false) {
+        scene = scene.with_object(&id, obj);
+    }
+    // The station hangar, over the far scenery and under the play.
+    for (id, obj) in super::hangar::objects(ctx) {
         scene = scene.with_object(&id, obj);
     }
     let mut scene = scene
@@ -641,10 +673,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         .with_object("flip_timer", flip_timer_hud)
         .with_object("zero_g_timer", zero_g_timer_hud)
         .with_object("score_x2_timer", score_x2_timer_hud)
-        .with_object(GOLD_MASTER_TOAST_PANEL_NAME, achievement_toast_panel)
-        .with_object(GOLD_MASTER_TOAST_TITLE_NAME, achievement_toast_title)
-        .with_object(GOLD_MASTER_TOAST_DESC_NAME, achievement_toast_desc)
-        .with_object(GOLD_MASTER_TOAST_CHECK_NAME, achievement_toast_check)
+        .with_object(TOAST_PANEL_NAME, achievement_toast_panel)
+        .with_object(TOAST_TITLE_NAME, achievement_toast_title)
+        .with_object(TOAST_DESC_NAME, achievement_toast_desc)
+        .with_object(TOAST_CHECK_NAME, achievement_toast_check)
         .with_object("coin_magnet_radius", coin_magnet_radius)
         .with_object("zero_g_overlay",    zero_g_overlay)
         .with_object("flare_overlay",     flare_overlay)
@@ -2264,5 +2296,17 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         boss_bolt_free, impact_free, boss_asteroid_ids, comet_free, warn_free,
     };
 
+    // The tutorial's coaching panel (hidden unless it is the tutorial).
+    for (id, obj) in super::tutorial::objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
+    // The boss title card (hidden until an arena).
+    for (id, obj) in super::boss::intro::objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
+    // The boss reward overlay (hidden until a victory), over everything.
+    for (id, obj) in super::perks::reward_objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
     (scene, pools)
 }

@@ -121,7 +121,8 @@ pub(crate) fn hide_magnetar(c: &mut Canvas) {
 pub(crate) fn tick_magnetar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     {
         let s = st.lock().unwrap();
-        if !s.boss_active || s.dead || s.boss_stasis_active { return; }
+        // Not gated on `dead`: the fight carries on under the death screen.
+        if !s.boss_active || s.boss_stasis_active { return; }
     }
     // MAGNETAR_CHECK: park a buffed player on the first open part, so every
     // hit, art swap, gating and clock path runs in a real fight loop.
@@ -210,6 +211,7 @@ pub(crate) fn tick_magnetar(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if core.alive && core.shielded && live == 0 {
             core.shielded = false;
             if check { eprintln!("magnetar-check: core exposed"); }
+            super::start_phase_cine(&mut s, CineStyle::Magnet, 1);
         }
         (alive, live == 1)
     };

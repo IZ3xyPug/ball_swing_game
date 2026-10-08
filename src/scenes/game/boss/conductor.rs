@@ -47,11 +47,12 @@ use super::*;
 /// only be heard is a rhythm fight that cannot be played.
 pub(crate) fn tick_conductor(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // ── Gates ────────────────────────────────────────────────────────────
-    let (active, dead, stasis, spawned) = {
+    // Not gated on `dead`: the fight carries on under the death screen.
+    let (active, stasis, spawned) = {
         let s = st.lock().unwrap();
-        (s.boss_active, s.dead, s.boss_stasis_active, s.boss_spawned)
+        (s.boss_active, s.boss_stasis_active, s.boss_spawned)
     };
-    if !active || dead || stasis {
+    if !active || stasis {
         // Clean up a fight that was running, but only when there is something
         // to clean: this runs every frame for the whole run whenever the NEXT
         // boss is the Conductor, and `hide_conductor` builds thirteen object
@@ -60,7 +61,7 @@ pub(crate) fn tick_conductor(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         //
         // One object lookup is the whole check, and the core's visibility is
         // exactly "did this fight put anything on screen".
-        if !active || dead {
+        if !active {
             let showing = c
                 .get_game_object("conductor_core")
                 .map(|o| o.visible)
@@ -97,6 +98,12 @@ pub(crate) fn tick_conductor(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     if hp <= BOSS_MAX_HP / 2 {
         crate::scenes::game::switch_game_bgm(
             c, BGM_TRACK_CONDUCTOR_P2, ASSET_CONDUCTOR_BGM_P2, CONDUCTOR_BGM_VOL);
+        // Phase two's arrival, once: the crescendo.
+        let mut s = st.lock().unwrap();
+        if s.phase_cine_done & 1 == 0 && hp > 0 {
+            s.phase_cine_done |= 1;
+            super::start_phase_cine(&mut s, CineStyle::Crescendo, 1);
+        }
     }
 
     let beat_landed = tick_beat(st, hp);
@@ -169,6 +176,7 @@ fn spawn_conductor(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     s.conductor_beat_in_bar = 0;
     s.conductor_loop_bar = 0;
     s.conductor_bar_hits = 0;
+    s.phase_cine_done = 0;
     s.conductor_last_kick = -1;
     s.conductor_cue_delay = 0;
     s.conductor_wave_shape = 0;
@@ -931,7 +939,8 @@ fn tick_weakpoint(
         }
     }
 
-    if !open {
+    // Dead: the body left behind cannot land a hit.
+    if !open || st.lock().unwrap().dead {
         return;
     }
     if (player.0 - core.0).powi(2) + (player.1 - core.1).powi(2)
@@ -1534,7 +1543,8 @@ fn draw_conductor(c: &mut Canvas, st: &Arc<Mutex<State>>, core: (f32, f32)) {
 pub(crate) fn hide_conductor(c: &mut Canvas) {
     // Give the lane its music back. Index-guarded, so this is a no-op unless a
     // boss loop is actually playing — which makes it safe on the every-frame
-    // path and covers death as well as victory.
+    // path and covers death as well as victory. It restores the lane from ANY
+    // boss loop (the Weaver's too): this is where every fight end comes.
     crate::scenes::game::switch_game_bgm(c, BGM_TRACK_LANE, ASSET_BGM_TRACK_1, 0.084);
 
     let mut ids: Vec<String> = vec![

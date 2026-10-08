@@ -2,6 +2,10 @@
 // ── Virtual resolution ────────────────────────────────────────────────────────
 pub const VW: f32 = 3840.0;
 pub const VH: f32 = 2160.0;
+/// The run's opening: ticks to pull out from the player after PLAY, and the
+/// zoom it starts at (the menu dives into the cat, the run pulls out of it).
+pub const GAME_INTRO_TICKS: i32 = 66;
+pub const GAME_INTRO_ZOOM: f32 = 2.6;
 
 // ── Physics ───────────────────────────────────────────────────────────────────
 pub const GRAVITY:        f32 = 0.82;
@@ -66,9 +70,10 @@ pub const MAX_HOOKS_LIVE: usize = 40;
 pub const HOOK_POOL_SIZE: usize = 68;
 
 /// How long the player must HOLD space/mouse at the start prompt before the run
-/// begins (ticks; 90 = 1.5 s at 60 fps). Prevents a stray/retry click from
-/// instantly launching + grabbing.
-pub const START_HOLD_TICKS: i32 = 90;
+/// begins (ticks; 15 = 0.25 s at 60 fps). Prevents a stray/retry click from
+/// instantly launching + grabbing — a tap does not start it, a short press
+/// does. It was 1.5 s, which read as the game ignoring the press.
+pub const START_HOLD_TICKS: i32 = 15;
 
 // ── Touch controls (Android) ─────────────────────────────────────────────────
 //
@@ -160,11 +165,14 @@ pub const HOOK_CLOSE_Y_THRESHOLD: f32 = 220.0;
 
 /// Hard minimum Euclidean distance between consecutive grab nodes.
 /// Closer than this the two nodes read as one blob rather than a hop.
-pub const HOOK_MIN_REACH: f32 = ROPE_LEN_MAX * 0.5; // 360.0
+pub const HOOK_MIN_REACH: f32 = ROPE_LEN_MAX * 0.8; // 576.0
 
 /// Horizontal semi-axis of the hop envelope. One rope length: the player can
 /// always be at the front of their arc when they release.
-pub const HOP_REACH_X: f32 = ROPE_LEN_MAX; // 720.0
+/// Over a rope length: the next node is caught in FLIGHT after a release,
+/// not from the end of the rope, so nodes can sit further apart than the rope
+/// reaches (they read as too close at one rope length).
+pub const HOP_REACH_X: f32 = ROPE_LEN_MAX * 1.3; // 936.0
 
 /// Upward semi-axis. Deliberately under a rope length — climbing costs momentum.
 pub const HOP_REACH_UP: f32 = ROPE_LEN_MAX * 0.85; // 612.0
@@ -180,10 +188,11 @@ pub const HOOK_MAX_REACH: f32 = ROPE_LEN_MAX; // 720.0
 /// the difficulty curve. Short strides early mean quick, forgiving chains; long
 /// strides late mean committing to most of a rope length every time. Never
 /// above 1.0, so the envelope is never left.
-pub const HOOK_STRIDE_FRAC_EASY_MIN: f32 = 0.58; // ~418 px
-pub const HOOK_STRIDE_FRAC_EASY_MAX: f32 = 0.72; // ~518 px
-pub const HOOK_STRIDE_FRAC_HARD_MIN: f32 = 0.80; // ~576 px
-pub const HOOK_STRIDE_FRAC_HARD_MAX: f32 = 0.97; // ~698 px
+/// Widened: at 418-518 px the opening nodes sat too close together.
+pub const HOOK_STRIDE_FRAC_EASY_MIN: f32 = 0.76; // ~711 px
+pub const HOOK_STRIDE_FRAC_EASY_MAX: f32 = 0.86; // ~805 px
+pub const HOOK_STRIDE_FRAC_HARD_MIN: f32 = 0.84; // ~786 px
+pub const HOOK_STRIDE_FRAC_HARD_MAX: f32 = 0.95; // ~889 px
 
 /// Fraction of the available vertical budget a hop may spend, at the two ends
 /// of the curve. Early hops stay near the previous node's height; late hops use
@@ -324,12 +333,12 @@ pub const COIN_ARRAY_SPACING:f32 = 120.0;
 pub const COIN_CURVE_RISE:   f32 = 60.0;
 /// Probability (0–1) that a coin spawn is an array rather than single coin.
 pub const COIN_ARRAY_CHANCE: f32 = 0.28;
-pub const COIN_ARRAY_HOOK_DX:f32 = 600.0;
-pub const COIN_ARRAY_HOOK_DY:f32 = -1200.0; // much higher above anchor hook
-pub const COIN_ARRAY_Y_MIN:  f32 = -950.0;  // pushed high above hook zone
-pub const COIN_ARRAY_Y_MAX:  f32 = -380.0;  // coins always above highest hooks
-pub const COIN_SINGLE_Y_MIN: f32 = -750.0;
-pub const COIN_SINGLE_Y_MAX: f32 = 380.0;
+pub const COIN_ARRAY_HOOK_DX:f32 = 360.0;  // in the flight path after a release
+pub const COIN_ARRAY_HOOK_DY:f32 = -330.0;  // a little above the node: reachable from its swing
+pub const COIN_ARRAY_Y_MIN:  f32 = -520.0;  // just above the band's top
+pub const COIN_ARRAY_Y_MAX:  f32 = 520.0;   // down through the band
+pub const COIN_SINGLE_Y_MIN: f32 = -420.0;
+pub const COIN_SINGLE_Y_MAX: f32 = 600.0;
 /// 3×3 grid coin pattern.
 pub const COIN_GRID_COLS:      usize = 3;
 pub const COIN_GRID_ROWS:      usize = 3;
@@ -687,6 +696,14 @@ pub const CONDUCTOR_WAVE_HIT_VOL: f32 = 0.42;
 pub const BGM_TRACK_CONDUCTOR_P1: i32 = 100;
 pub const BGM_TRACK_CONDUCTOR_P2: i32 = 101;
 pub const BGM_TRACK_LANE: i32 = 0;
+pub const BGM_TRACK_WEAVER: i32 = 102;
+/// The Gravity Weaver's own music, for that fight only.
+pub const ASSET_WEAVER_BGM: &[u8] = include_bytes!("../assets/gravity_weaver.mp3");
+/// Its volume, relative to master. The track is mastered ~23.6 dB louder than
+/// the lane's (-8.4 vs -32.0 dBFS RMS), so 0.0075 matched the lane music's
+/// 0.084 and sat ~2.5 dB above it. Doubled (+6 dB, ~8.5 dB over the lane) on
+/// request: it was too quiet under the fight's effects.
+pub const WEAVER_BGM_VOL: f32 = 0.015;
 /// The Conductor's loop, relative to master.
 ///
 /// Raised from 0.16: on the device the player's own effects at 0.6 buried the
@@ -1961,7 +1978,9 @@ pub fn colossus_part_hit_r(i: u32) -> f32 {
 /// Lower bound on camera zoom while the boss fight is active. The Dune-style
 /// height zoom would otherwise pull the camera way out on the tall arena; this
 /// keeps the boss readable (less zoomed out).
-pub const BOSS_CAM_MIN_ZOOM:      f32   = 0.8;
+pub const BOSS_CAM_MIN_ZOOM:      f32   = 0.66;
+/// Boss fights sit this much further out than the lane's height zoom.
+pub const BOSS_CAM_ZOOM_SCALE:    f32   = 0.82;
 /// Diameter of the portal wormhole shown as the player is warped into the boss
 /// arena (matches the visible wormhole portal used elsewhere).
 pub const BOSS_WORMHOLE_D:        f32   = 1000.0;
@@ -2341,6 +2360,11 @@ pub const FLARE_WARN_TICKS: u32 = 180;
 
 /// Ticks the flare stays active (5 s).
 pub const FLARE_ACTIVE_TICKS: u32 = 300;
+/// The flare's wall of fire: how fast it sweeps the world (px a tick — a
+/// little past a typical swing, so it overtakes the player slowly, as it did
+/// when it was placed relative to them), and how many view-heights tall it is.
+pub const FLARE_WALL_SPEED: f32 = 65.0;
+pub const FLARE_WALL_SCREENS: f32 = 2.4;
 
 /// Ticks between damage applications while unsheltered inside a flare (2 s).
 pub const FLARE_DAMAGE_INTERVAL: u32 = 120;
@@ -2418,6 +2442,50 @@ pub const CONDUCTOR_METER_H: f32 = 190.0;
 
 // ── Starfield background ──────────────────────────────────────────────────────
 pub const STARFIELD_STAR_COUNT: u32 = 650;
+
+// ── Sky zoom-out ──────────────────────────────────────────────────────────────
+// The sky (static stars, horizon glow, moving stars, nebula) zooms out with the
+// camera, anchored where the camera's height zoom is (the screen's bottom edge;
+// the top when gravity is flipped), so zooming out reveals more sky above.
+/// Share of the world's zoom-out the sky takes. Below 1 it reads as farther
+/// away than the nodes; smaller also reveals less (at 2/3 and zoom 0.55 the
+/// sky shows ~30% more of itself).
+pub const SKY_ZOOM_SHARE: f32 = 2.0 / 3.0;
+/// The sky stops zooming out past this camera zoom (the camera can go to
+/// 1 / ZOOM_MAX, far beyond what normal climbing reaches).
+pub const SKY_ZOOM_FLOOR: f32 = 0.55;
+/// The sky's own scale for a camera zoom: 1 at normal zoom, ~0.7 at the floor.
+pub fn sky_scale(camera_zoom: f32) -> f32 {
+    1.0 - (1.0 - camera_zoom.clamp(SKY_ZOOM_FLOOR, 1.0)) * SKY_ZOOM_SHARE
+}
+
+/// The sky's rect on screen (x, y, w, h) at sky scale `s`. The sky image is
+/// always scaled evenly (never stretched out of shape), so at normal zoom it
+/// is drawn big enough that at the deepest sky zoom-out it still just covers
+/// the screen's width. It is placed so the horizon glow sits exactly where it
+/// always has on screen at normal zoom; the extra reaches off the top and
+/// bottom. Zooming out shrinks it about the camera's zoom anchor. Flipped, the
+/// whole thing is mirrored top to bottom.
+pub fn sky_rect(s: f32, flipped: bool) -> (f32, f32, f32, f32) {
+    const OVERSCAN: f32 = 200.0;
+    const BG_RAISE: f32 = 150.0;
+    // The old normal-zoom rect was (VW + 400) x (VH + 150) with its top at
+    // -150; `k` enlarges it evenly so it still covers at the deepest zoom-out.
+    let s_min = sky_scale(SKY_ZOOM_FLOOR);
+    let k = (VW / ((VW + OVERSCAN * 2.0) * s_min)).max(1.0) * 1.01;
+    let (w0, h0) = ((VW + OVERSCAN * 2.0) * k, (VH + BG_RAISE) * k);
+    // The horizon (the split in `composite_starfield_gradient`, 56% down the
+    // image) where the old rect put it.
+    let horizon_row = VH * 0.56;
+    let horizon_y = -BG_RAISE + horizon_row * (VH + BG_RAISE) / VH;
+    let y0 = horizon_y - horizon_row * h0 / VH;
+    let x0 = (VW - w0) / 2.0;
+    // Shrink about the camera's anchor: the screen's bottom-centre.
+    let (ax, ay) = (VW / 2.0, VH);
+    let (w, h) = (w0 * s, h0 * s);
+    let (x, y) = (ax + (x0 - ax) * s, ay + (y0 - ay) * s);
+    if flipped { (x, VH - (y + h), w, h) } else { (x, y, w, h) }
+}
 
 // ── Rocket pad (rare special pad that launches player into space) ─────────────
 pub const ROCKET_PAD_GAP_MIN:      f32   = 12000.0; // very wide gap → rare
@@ -2829,6 +2897,20 @@ pub const WEAVER_THREAD_KICK: f32 = 30.0;
 pub const WEAVER_FLIP_INTERVAL: u32 = 660;
 pub const WEAVER_FLIP_INTERVAL_CORE: u32 = 420;
 pub const WEAVER_FLIP_TELEGRAPH: u32 = 120;
+/// The loom's reveal: when the last spindle dies, the player is held where
+/// they are and the camera pulls back to the loom for this long, then hands
+/// back. The zoom it reaches (the loom, framed with room around it), and how
+/// long it takes to get there.
+pub const WEAVER_REVEAL_TICKS: u32 = 120;
+pub const WEAVER_REVEAL_ZOOM: f32 = 0.6;
+pub const WEAVER_REVEAL_EASE_TICKS: u32 = 30;
+/// The reveal's rumble: world px (~48 on screen at the reveal's zoom, more
+/// than any other shake in the game), held for the whole reveal after
+/// building up over `WEAVER_REVEAL_SHAKE_RAMP` ticks; it settles over
+/// `WEAVER_REVEAL_SHAKE_TAIL` seconds once the player is let go.
+pub const WEAVER_REVEAL_SHAKE: f32 = 80.0;
+pub const WEAVER_REVEAL_SHAKE_RAMP: u32 = 18;
+pub const WEAVER_REVEAL_SHAKE_TAIL: f32 = 0.25;
 pub const WEAVER_FLIP_OPEN_TICKS: u32 = 220;
 pub const WEAVER_PART_INVULN_TICKS: u32 = 60;
 /// The GAUNTLET: once per phase change (after the first pair dies, and again
@@ -3615,8 +3697,11 @@ pub const CANNON_GAP_MAX:                f32   = 14000.0;
 pub const CANNON_DEFAULT_ROTATION:       f32   = -90.0;  // 90° CCW
 pub const CANNON_BOB_AMP:                f32   = 35.0;   // px
 pub const CANNON_BOB_SPEED:              f32   = 0.055;  // rad/tick ≈ 1.9 rad/s at 60 fps
-pub const CANNON_TRIGGER_RADIUS:         f32   = 240.0;
-pub const CANNON_PULL_RADIUS:            f32   = 520.0;
+pub const CANNON_TRIGGER_RADIUS:         f32   = 220.0;
+/// How far above the node band's top a cannon floats (off the swing's usual
+/// line; a stepping node below it is the way up).
+pub const CANNON_ABOVE_BAND:             f32   = 620.0;
+pub const CANNON_PULL_RADIUS:            f32   = 330.0;  // only once you have come to it
 pub const CANNON_PULL_ACCEL:             f32   = 2.80;   // per-tick pull at strongest
 pub const CANNON_PULL_SPEED_CAP:         f32   = 72.0;   // cap speed while being pulled
 pub const CANNON_CAPTURE_TICKS_PER_FRAME: u32  = 5;     // pulse frames 8→7→6→7→8
@@ -3699,5 +3784,36 @@ mod generated_asset_tests {
                 assert!(opaque > 64, "{name} frame {i} is blank");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sky_tests {
+    use super::*;
+
+    #[test]
+    fn the_sky_zooms_out_evenly_and_never_shows_its_edges() {
+        let s_min = sky_scale(SKY_ZOOM_FLOOR);
+        for flipped in [false, true] {
+            for i in 0..=20 {
+                let s = 1.0 - (1.0 - s_min) * i as f32 / 20.0;
+                let (x, y, w, h) = sky_rect(s, flipped);
+                assert!(x <= 0.0 && x + w >= VW, "sides show at s={s}: x={x} w={w}");
+                if flipped {
+                    assert!(y <= 0.0, "top edge shows (flipped) at s={s}: y={y}");
+                } else {
+                    assert!(y + h >= VH, "bottom edge shows at s={s}: bottom={}", y + h);
+                }
+                // Evenly: the image's own aspect, never stretched.
+                let (w1, h1) = { let r = sky_rect(1.0, flipped); (r.2, r.3) };
+                assert!(((w / h) - (w1 / h1)).abs() < 1e-3, "aspect changed at s={s}");
+            }
+        }
+        // At normal zoom the horizon is where the old sky put it.
+        let (_, y, _, h) = sky_rect(1.0, false);
+        let old = -150.0 + VH * 0.56 * (VH + 150.0) / VH;
+        assert!((y + VH * 0.56 * h / VH - old).abs() < 0.5);
+        assert_eq!(sky_scale(1.0), 1.0);
+        assert_eq!(sky_scale(0.1), s_min);
     }
 }

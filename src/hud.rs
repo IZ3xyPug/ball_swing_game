@@ -253,3 +253,48 @@ pub fn score_x2_timer_img(remaining_ticks: u32, total_ticks: u32) -> image::Rgba
 
     img
 }
+
+/// The META counter, in the coin counter's style (the same seven-segment
+/// digits), in violet beside a glowing faceted gem: META is the currency the
+/// shop spends, and it is shown as prominently as coins are in a run.
+pub fn meta_counter_img(count: u64) -> image::RgbaImage {
+    let (w, h) = (640u32, 168u32);
+    let mut img = image::RgbaImage::new(w, h);
+    // The gem: a faceted diamond with a soft glow round it.
+    let (gx, gy, gr) = (74.0f32, h as f32 * 0.5, 50.0f32);
+    for y in 0..h { for x in 0..150u32 {
+        let (dx, dy) = (x as f32 - gx, y as f32 - gy);
+        // Diamond: |x|/r + |y|/(1.25r) <= 1, the top a little flatter.
+        let rx = dx.abs() / gr;
+        let ry = if dy < 0.0 { -dy / (gr * 0.7) } else { dy / (gr * 1.15) };
+        let d = rx + ry;
+        let glow = ((1.6 - d) / 0.6).clamp(0.0, 1.0).powi(2) * 0.55;
+        let mut c = [150.0f32, 110.0, 255.0];
+        let mut a = glow;
+        if d <= 1.0 {
+            // Facets: lighter on the upper left, darker lower right, a bright
+            // line across the girdle.
+            let shade = if dy < 0.0 { if dx < 0.0 { 1.0 } else { 0.82 } } else if dx < 0.0 { 0.68 } else { 0.52 };
+            c = [190.0 * shade + 40.0, 160.0 * shade + 30.0, 255.0 * shade.max(0.75)];
+            if dy.abs() < 3.0 { c = [235.0, 225.0, 255.0]; }
+            if d > 0.9 { c = [245.0, 235.0, 255.0]; }
+            a = 1.0;
+        }
+        if a > 0.01 {
+            img.put_pixel(x, y, image::Rgba([c[0].min(255.0) as u8, c[1].min(255.0) as u8, c[2].min(255.0) as u8, (a * 255.0) as u8]));
+        }
+    }}
+    let digits = count.min(9_999_999).to_string();
+    let scale = 6;
+    let digit_w = 9 * scale;
+    let digit_step = 68;
+    let text_h = 16 * scale;
+    let mut dx = 156;
+    let dy = ((h - text_h) / 2).max(0);
+    for ch in digits.bytes() {
+        if dx + digit_w >= w { break; }
+        draw_digit_7seg(&mut img, dx, dy, scale, ch - b'0', [205, 180, 255, 255]);
+        dx += digit_step;
+    }
+    img
+}

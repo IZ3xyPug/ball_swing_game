@@ -117,7 +117,7 @@ pub(crate) fn tick_colossus_meteors(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let due: Vec<f32> = {
         let mut s = st.lock().unwrap();
         if s.boss_meteor_queue.is_empty() { return; }
-        if s.dead || !s.boss_active {
+        if !s.boss_active {
             s.boss_meteor_queue.clear();
             return;
         }
@@ -282,8 +282,8 @@ pub(crate) fn tick_clap_wave(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 /// layered on top of this loop; this is the shared skeleton they run on.
 pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
+    // Not gated on `dead`: the fight carries on under the death screen.
     if !s.boss_active { return; }
-    if s.dead { return; }
     // Entry/victory stasis: nothing to run yet.
     if s.boss_stasis_active { return; }
 
@@ -1465,6 +1465,10 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             crate::scenes::game::boss::common::spawn_impact(
                 c, st, f.zone_pos, f.zone_r * 2.0, COLOSSUS_MARKER_WINDUP_RGB, false);
         }
+        // And the ground shatters under anything that lands (`colossus_fx`).
+        if f.struck && f.id != "head" {
+            super::colossus_fx::slam(f.zone_pos, f.zone_r);
+        }
         // Strike effects (unhook / kick / heart) — resolved once per attack.
         if f.strike_unhook {
             let mut s = st.lock().unwrap();
@@ -1561,14 +1565,23 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // torso dies. Serpent segments uncover as the one before dies.)
     {
         let mut s = st.lock().unwrap();
+        let mut opened = false;
         for i in 0..s.boss_parts.len() {
             let prev_dead = i > 0 && s.boss_parts[..i].iter().all(|p| !p.alive);
             if prev_dead {
                 let part = &mut s.boss_parts[i];
                 if part.alive && part.shielded {
                     part.shielded = false;
+                    opened = true;
                 }
             }
+        }
+        // A part opening is the Colossus changing phase: its stomps, harder
+        // with each part that has fallen.
+        if opened {
+            let dead = s.boss_parts.iter().filter(|p| !p.alive).count() as u32;
+            let style = super::cine_style_for(s.boss_kind);
+            super::start_phase_cine(&mut s, style, dead.saturating_sub(1).max(1));
         }
         s.boss_hp = boss_total_hp(&s);
         s.boss_hp_max = s.boss_hp.max(1);

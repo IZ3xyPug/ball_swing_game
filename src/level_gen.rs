@@ -100,6 +100,22 @@ pub fn starter_hooks() -> [(f32, f32); STARTER_HOOK_COUNT] {
 
 // ── Generator ────────────────────────────────────────────────────────────────
 
+const PATTERN_KINDS: usize = 7;
+
+/// The run of nodes being generated: its shape, where it is in it, how long
+/// it is, the height it started from, and its spacing.
+#[derive(Default)]
+struct Pattern { kind: usize, step: usize, len: usize, anchor: f32, dx: f32 }
+
+thread_local! {
+    static PATTERN: std::cell::RefCell<Pattern> = std::cell::RefCell::new(Pattern::default());
+}
+
+/// Start the pattern sequence afresh (a new run, or a regenerated stretch).
+pub fn reset_patterns() {
+    PATTERN.with(|p| *p.borrow_mut() = Pattern::default());
+}
+
 /// Generate the next grab node as a single hop from `(head_x, head_y)`,
 /// advancing the head to the new position.
 ///
@@ -136,18 +152,61 @@ pub fn generate_next_hook(
     let up = up_budget * vert_frac * HOP_REACH_MARGIN;
     let down = down_budget * vert_frac * HOP_REACH_MARGIN;
 
-    let mut go_down = lcg_range(seed, 0.0, 1.0) < 0.5;
-    // Anti-stacking: consecutive nodes should differ vertically by at least
-    // HOOK_CLOSE_Y_THRESHOLD where the budget can afford it. If the chosen
-    // direction cannot, take the other one rather than flattening the hop.
-    let min_dy = HOOK_CLOSE_Y_THRESHOLD.min(up.max(down));
-    if (if go_down { down } else { up }) < min_dy {
-        go_down = !go_down;
-    }
-    let budget = if go_down { down } else { up };
-    let dy_mag = lcg_range(seed, min_dy.min(budget), budget);
-    let dy = if go_down { dy_mag } else { -dy_mag };
-
+    // ── Pattern ──────────────────────────────────────────────────────────────
+    // Nodes come in runs of 4-8 that follow one shape at one steady spacing
+    // (a wave, a climb, an arch...), so the line reads as designed rather
+    // than random, then the next run picks another. The shape proposes a
+    // height; the envelope decides how much of it this hop may take.
+    let (kind, step, len, anchor, dx_run) = PATTERN.with(|p| {
+        let mut p = p.borrow_mut();
+        if p.step >= p.len {
+            // Not the same shape twice running.
+            let mut k = (lcg_range(seed, 0.0, PATTERN_KINDS as f32) as usize).min(PATTERN_KINDS - 1);
+            if k == p.kind { k = (k + 1) % PATTERN_KINDS; }
+            p.kind = k;
+            p.step = 0;
+            p.len = lcg_range(seed, 4.0, 8.99) as usize;
+            p.anchor = *head_y;
+            p.dx = dx;
+        }
+        let out = (p.kind, p.step, p.len, p.anchor, p.dx);
+        p.step += 1;
+        out
+    });
+    // One spacing for the whole run: its rhythm.
+    let dx = dx_run.clamp(lo.min(hi), hi.max(lo));
+    let (up_budget, down_budget) = hop_dy_budget(dx);
+    let up = up_budget * vert_frac * HOP_REACH_MARGIN;
+    let down = down_budget * vert_frac * HOP_REACH_MARGIN;
+    let k = step as f32 / (len.max(2) - 1) as f32;          // 0..1 along the run
+    let amp = (HOOK_Y_MAX - HOOK_Y_MIN) * 0.30 * (0.6 + 0.4 * vert_frac);
+    let mid = (HOOK_Y_MIN + HOOK_Y_MAX) * 0.5;
+    // Where the shape wants this node (world y; up is negative).
+    // Each run drifts back toward the middle of the band, so the line never
+    // parks against the top or the bottom; a climb that starts high turns
+    // into a descent (and the other way round), so it has room.
+    let anchor = anchor + (mid - anchor) * 0.45 * k;
+    let room_up = anchor - HOOK_Y_MIN;
+    let room_down = HOOK_Y_MAX - anchor;
+    let kind = match kind {
+        1 if room_up < amp * 1.2 => 2,
+        2 if room_down < amp * 1.2 => 1,
+        3 if room_up < amp => 4,
+        4 if room_down < amp => 3,
+        k => k,
+    };
+    let target = match kind {
+        0 => anchor + amp * (k * std::f32::consts::TAU).sin(),            // wave
+        1 => anchor - amp * 1.4 * k,                                       // climb
+        2 => anchor + amp * 1.4 * k,                                       // descent
+        3 => anchor - amp * (k * std::f32::consts::PI).sin() * 1.3,        // arch
+        4 => anchor + amp * (k * std::f32::consts::PI).sin() * 1.3,        // valley
+        5 => anchor + (mid - anchor) * 0.15,                               // glide (level)
+        _ => anchor + if step % 2 == 0 { -amp * 0.8 } else { amp * 0.8 },  // zigzag
+    };
+    // Keep the shape on the playable band, then inside this hop's envelope.
+    let target = target.clamp(HOOK_Y_MIN + 40.0, HOOK_Y_MAX - 40.0);
+    let dy = (target - *head_y).clamp(-up, down);
     *head_x += dx;
     // Clamping to the playable band can only pull the node back toward
     // `head_y`, which is itself always in-band — so it can shorten a hop but
@@ -155,4 +214,23 @@ pub fn generate_next_hook(
     *head_y = (*head_y + dy).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
 
     HookSpec { x: *head_x, y: *head_y }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    /// `HOOK_PLOT=1`: print a stretch of generated nodes (x y), to look at
+    /// the patterns.
+    #[test]
+    fn plot() {
+        if std::env::var("HOOK_PLOT").is_err() { return; }
+        reset_patterns();
+        let (mut seed, mut x, mut y) = (0x5EED_1234u64 ^ (std::env::var("HOOK_PLOT_SEED").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)), 0.0f32, 300.0f32);
+        let d = std::env::var("HOOK_PLOT_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        for _ in 0..60 {
+            let h = generate_next_hook(&mut seed, &mut x, &mut y, d);
+            println!("NODE {} {}", h.x, h.y);
+        }
+    }
 }

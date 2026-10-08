@@ -16,10 +16,14 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
         if s.dead || !s.hooked { return; }
 
         apply_release_impulse(&mut s);
+        // SLINGSHOT perks throw harder.
+        s.vx *= s.perk_release_mult;
+        s.vy *= s.perk_release_mult;
+        super::juice::on_release(c, (s.vx * s.vx + s.vy * s.vy).sqrt());
 
         let prev = s.active_hook.clone();
         let zone_idx = zone_index_for_distance(s.distance);
-        let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { 1.0 };
+        let gravity_scale = if s.zero_g_timer > 0 { ZERO_G_GRAVITY_SCALE } else { s.perk_gravity_mult };
 
         s.hooked = false;
         s.active_hook = String::new();
@@ -59,6 +63,10 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
     canvas.register_custom_event("do_grab".into(), move |c| {
         let mut s = st.lock().unwrap();
         if s.dead || s.hooked || s.cannon_fast_travel_grace > 0 || s.grab_lockout_ticks > 0 { return; }
+        // The boss reward is up: choose first, then tether out.
+        if super::perks::reward_pending(c) { return; }
+        // The boss title card: a grab skips it, and does not grab.
+        if super::boss::intro::active(c) { drop(s); super::boss::intro::skip(c); return; }
 
         let mouse_target = if matches!(c.get_var("grab_from_mouse"), Some(Value::Bool(true))) {
             Some((c.get_f32("mouse_grab_x"), c.get_f32("mouse_grab_y")))
@@ -130,6 +138,8 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             }
 
             s.hooked = true;
+            crate::achievements::on_grab();
+            super::juice::on_grab(c, (pvx * pvx + pvy * pvy).sqrt());
             s.hook_x = hx;
             s.hook_y = hy;
             s.rope_len = rope_len;
@@ -207,7 +217,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
                 if obj.tags.iter().any(|t| t == BUFF_HOOK_TAG) {
                     let mut s = st.lock().unwrap();
                     s.player_buff = 1;
-                    s.buff_timer = BUFF_DURATION_TICKS;
+                    s.buff_timer = (BUFF_DURATION_TICKS as f32 * s.perk_buff_mult) as u32;
                     s.buff_hit_flash = 0;
                     s.buff_absorbs = BUFF_ABSORB_MAX;
                     drop(s);
@@ -261,6 +271,12 @@ pub fn register_mouse_handlers(canvas: &mut Canvas) {
             let held = !matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true)))
                 && mobile_swing_zone_contains(pos.0, pos.1);
             c.set_var("mouse_left_held", held);
+            return;
+        }
+        // A press on the ability button fires the ability, not the swing.
+        if crate::scenes::game::abilities::active(c)
+            && crate::scenes::game::abilities::on_button(c.input_to_unzoomed(pos))
+        {
             return;
         }
         c.set_var("mouse_left_held", true);
