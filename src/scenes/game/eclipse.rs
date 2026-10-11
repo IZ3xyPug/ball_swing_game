@@ -571,7 +571,7 @@ fn drive_banner(c: &mut Canvas, rise: f32) {
     // The warning names the event early, then hands over to a countdown of sorts
     // — "the dark is deepening" is carried by the world, not by text.
     let text = if rise < ECLIPSE_WARN_FRACTION {
-        Some("\u{26A0}  SOLAR ECLIPSE EVENT DETECTED")
+        Some("!  SOLAR ECLIPSE EVENT DETECTED  !")
     } else if rise < ECLIPSE_WARN_FRACTION * 2.2 {
         Some("LIGHT FAILING \u{2014} SOMETHING IS AHEAD")
     } else {

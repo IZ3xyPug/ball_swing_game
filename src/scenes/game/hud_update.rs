@@ -236,7 +236,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 let rgb = c.get_i32("achievement_toast_rgb");
                 let tc = Color(((rgb >> 16) & 255) as u8, ((rgb >> 8) & 255) as u8, (rgb & 255) as u8, 255);
                 if let Some(obj) = c.get_game_object_mut(TOAST_TITLE_NAME) {
-                    obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&format!("ACHIEVEMENT  \u{00b7}  {title}"), &font, 44.0 * s, tc, 1080.0 * s)));
+                    obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&format!("ACHIEVEMENT  \u{2022}  {title}"), &font, 44.0 * s, tc, 1080.0 * s)));
                 }
                 if let Some(obj) = c.get_game_object_mut(TOAST_DESC_NAME) {
                     obj.set_drawable(Box::new(crate::objects::ui_text_left_spec(&desc, &font, 28.0 * s, Color(210, 220, 235, 230), 1080.0 * s)));

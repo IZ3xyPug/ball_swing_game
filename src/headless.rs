@@ -360,6 +360,11 @@ pub fn capture_menu(dir: &str) {
             canvas.set_var("menu_in_shop", true);
             crate::shop::init_shop(&mut canvas);
         }
+        // `HEADLESS_PLANET_POP=<tick>`: click the menu's planet then.
+        if std::env::var("HEADLESS_PLANET_POP").ok().and_then(|v| v.parse::<u64>().ok()) == Some(i as u64) {
+            let t = canvas.get_i32("menu_t");
+            canvas.set_var("planet_pop_t", t);
+        }
         OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
         // Lay out every tick, as a window does: sizes come from the last
         // layout, so laying out only on the frames shot left a fast-moving
@@ -502,8 +507,11 @@ fn shoot_frame(canvas: &mut Canvas, dir: &str, frame: u64) {
     // `HEADLESS_SHOT_W=<px>`: render straight at that width (16:9) instead of
     // 4K-then-halved — for filming clips, where 4K per frame is far too slow.
     let small = std::env::var("HEADLESS_SHOT_W").ok().and_then(|v| v.parse::<f32>().ok());
+    // `HEADLESS_SHOT_H=<px>` with it: another aspect (a window that is not
+    // 16:9, for checking what covers the screen's edges).
+    let tall = std::env::var("HEADLESS_SHOT_H").ok().and_then(|v| v.parse::<f32>().ok());
     let screen = match small {
-        Some(w) => (w, (w * 9.0 / 16.0).round()),
+        Some(w) => (w, tall.unwrap_or((w * 9.0 / 16.0).round())),
         None => (crate::constants::VW, crate::constants::VH),
     };
     let req = canvas.request_size();
@@ -1349,6 +1357,36 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
             }
         }
         let (hold, target) = if god_at.map_or(false, |g| frames >= g) { (false, None) } else { (hold, target) };
+        // `HEADLESS_PAUSE_AT=<frame>`: open the pause menu then (filming it).
+        if std::env::var("HEADLESS_PAUSE_AT").ok().and_then(|v| v.parse::<u64>().ok()) == Some(frames) {
+            crate::scenes::game::build_scene::open_pause_menu(&mut canvas, false);
+        }
+        // `HEADLESS_VORTEX_AT=<frame>`: from then, hold the boss portal and a
+        // black hole beside the player (filming the vortex shaders).
+        if std::env::var("HEADLESS_VORTEX_AT").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|a| frames >= a) {
+            if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+                let (px, py) = { let s = st.lock().unwrap(); (s.px, s.py) };
+                let id = "space_bh_0".to_string();
+                {
+                    let mut s = st.lock().unwrap();
+                    if !s.space_blackhole_live.contains(&id) {
+                        s.space_blackhole_live.push(id.clone());
+                        s.space_gwell_timers.push((id.clone(), u32::MAX, true));
+                    }
+                }
+                if let Some(o) = canvas.get_game_object_mut("boss_threshold_marker") {
+                    o.size = (1300.0, 1300.0);
+                    o.position = (px + 250.0, py - 650.0);
+                    o.visible = true;
+                }
+                if let Some(o) = canvas.get_game_object_mut(&id) {
+                    o.size = (700.0, 700.0);
+                    o.position = (px - 1050.0, py - 600.0);
+                    o.visible = true;
+                    o.set_animation(crate::scenes::game::space_zone::vortex_template());
+                }
+            }
+        }
         // `HEADLESS_FLARE_AT=<frame>`: a solar flare goes off then (filming it).
         if std::env::var("HEADLESS_FLARE_AT").ok().and_then(|v| v.parse::<u64>().ok()) == Some(frames) {
             canvas.set_var("debug_flare_interval", 100_000i32);
@@ -1512,6 +1550,18 @@ fn run_episode(max_frames: u64, boss_mode: bool, force_fall: bool, boss_warp: bo
 
         // Run one engine frame.
         OnEvent::on_event(&mut canvas, &mut ctx, &sized, Box::new(TickEvent) as Box<dyn Event>);
+        // A non-16:9 shot (`HEADLESS_SHOT_H`) lays out at its own size every
+        // frame, as a window of that shape would: sprite sizes come from the
+        // last layout, so laying out at it only on the shot frame drew the
+        // whole frame at the previous layout's scale.
+        if let (Some(w), Some(h)) = (
+            std::env::var("HEADLESS_SHOT_W").ok().and_then(|v| v.parse::<f32>().ok()),
+            std::env::var("HEADLESS_SHOT_H").ok().and_then(|v| v.parse::<f32>().ok()),
+        ) {
+            use prism::drawable::Drawable;
+            let req = canvas.request_size();
+            let _ = canvas.build((w, h), req);
+        }
 
         frames += 1;
 

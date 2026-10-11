@@ -547,6 +547,17 @@ pub fn ui_font() -> Option<Font> {
     ).clone().into()
 }
 
+/// The game's original font, kept for the marks the UI font (Orbitron) has
+/// no glyph for: a lone check mark drawn in it shows; in Orbitron it was an
+/// empty box.
+pub fn symbol_font() -> Option<Font> {
+    static CACHED: OnceLock<Font> = OnceLock::new();
+    CACHED.get_or_init(||
+        Font::from_bytes(include_bytes!("../../../assets/fonts/old/font_original.ttf"))
+            .expect("font_original.ttf must be valid")
+    ).clone().into()
+}
+
 // ── Shared volume slider / label helpers ─────────────────────────────────────
 // Settings panels in both the game scene and menu settings scene share identical
 // slider geometry and label formatting. These helpers live here to avoid the

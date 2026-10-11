@@ -45,7 +45,7 @@ use crate::constants::*;
 use crate::hud::*;
 use crate::images::*;
 use crate::objects::*;
-use super::space_zone::blackhole1_template;
+use super::space_zone::vortex_template;
 
 const LAYER_SOLAR_CEILING: i32 = 12;
 const LAYER_SPACE_BLACKHOLE: i32 = 18;
@@ -434,14 +434,15 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     combo_flash.ignore_zoom = true;
     combo_flash.layer = 100;
 
+    // A screen-sized dim would leave bars uncovered on any window that is
+    // not 16:9 (the safe-area padding is outside the virtual screen), so it
+    // reaches a whole screen past every edge. It is a 2x2 texture stretched.
     let mut pause_overlay = {
-        const PO_OVERSCAN: f32 = 400.0;
-        let po_w = VW + PO_OVERSCAN * 2.0;
-        let obj = GameObject::new_rect(ctx, "pause_overlay".into(),
-            Some(Image { shape: ShapeType::Rectangle(0.0, (po_w, VH), 0.0), image: pause_overlay_img().into(), color: None }),
-            (po_w, VH), (-PO_OVERSCAN, 0.0),
-            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
-        obj
+        let (w, h) = PAUSE_OVERLAY_SIZE;
+        GameObject::new_rect(ctx, "pause_overlay".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: pause_overlay_img().into(), color: None }),
+            (w, h), PAUSE_OVERLAY_POS,
+            vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
     };
     pause_overlay.visible = false;
     pause_overlay.layer = 10_000;
@@ -1060,8 +1061,16 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     space_welcome_text.layer = 200;
     scene = scene.with_object("space_welcome_text", space_welcome_text);
 
+    // The glass card the pause menu sits on (and its settings page).
+    let mut pause_panel = crate::menu_look::glass_obj(ctx, "pause_panel", PAUSE_PANEL_SIZE,
+        PAUSE_PANEL_POS, crate::menu_look::GLASS_LILAC, false, vec!["hud".into()]);
+    pause_panel.visible = false;
+    pause_panel.layer = 10_000;
+    pause_panel.ignore_zoom = true;
+
     // Pause overlay last so it renders above everything.
     scene = scene.with_object("pause_overlay", pause_overlay)
+        .with_object("pause_panel", pause_panel)
         .with_object("pause_touch_btn", pause_touch_btn);
 
     // ── Pause menu buttons (above overlay) ───────────────────────────────
@@ -1069,21 +1078,23 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let pause_btn_h: f32 = 170.0;
     let pause_btn_x: f32 = (VW - pause_btn_w) / 2.0;
     let pause_title_w: f32 = 650.0;
-    let pause_title_h: f32 = 100.0;
 
+    // The title in the main menu's glowing type, sized to its own aspect.
+    let title_img = crate::menu_look::glow_text("PAUSED", 150.0).unwrap_or_else(|| Arc::new(pause_title_img()));
+    let pause_title_h = pause_title_w * title_img.height() as f32 / title_img.width() as f32;
     let mut pause_title = GameObject::new_rect(ctx, "pause_title".into(),
-        Some(Image { shape: ShapeType::Rectangle(0.0, (pause_title_w, pause_title_h), 0.0), image: pause_title_img().into(), color: None }),
-        (pause_title_w, pause_title_h), ((VW - pause_title_w) / 2.0, VH * 0.20),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (pause_title_w, pause_title_h), 0.0), image: title_img, color: None }),
+        (pause_title_w, pause_title_h), ((VW - pause_title_w) / 2.0, PAUSE_TITLE_Y),
         vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
     pause_title.visible = false;
     pause_title.layer = 10_001;
     pause_title.ignore_zoom = true;
 
-    let make_pause_btn = |ctx: &mut Context, name: &str, r: u8, g: u8, b: u8, label: &str, y: f32| {
-        let img = pause_btn_img(pause_btn_w as u32, pause_btn_h as u32, r, g, b, label);
-        let corner_r = (pause_btn_h * 0.48 * 1.33).clamp(1.0, pause_btn_h * 0.5 - 1.0);
+    // Glass pills like the main menu's, the label in its glowing type.
+    let make_pause_btn = |ctx: &mut Context, name: &str, accent: [u8; 3], label: &str, y: f32| {
+        let img = pause_glass_btn(pause_btn_w, pause_btn_h, accent, label);
         let mut obj = GameObject::new_rect(ctx, name.to_string().into(),
-            Some(Image { shape: ShapeType::RoundedRectangle(0.0, (pause_btn_w, pause_btn_h), 0.0, corner_r), image: img.into(), color: None }),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (pause_btn_w, pause_btn_h), 0.0), image: img, color: None }),
             (pause_btn_w, pause_btn_h), (pause_btn_x, y),
             vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.visible = false;
@@ -1092,10 +1103,11 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         obj
     };
 
-    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", 50, 160, 90, "RESUME", 780.0);
-    let pause_restart_btn = make_pause_btn(ctx, "pause_restart_btn", 60, 120, 200, "RESTART", 1000.0);
-    let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", 80, 80, 100, "SETTINGS", 1220.0);
-    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", 170, 65, 65, "MENU", 1440.0);
+    use crate::menu_look::{GLASS_GOLD, GLASS_LILAC, GLASS_ROSE};
+    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", GLASS_GOLD, "RESUME", 780.0);
+    let pause_restart_btn = make_pause_btn(ctx, "pause_restart_btn", GLASS_LILAC, "RESTART", 1000.0);
+    let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", GLASS_LILAC, "SETTINGS", 1220.0);
+    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", GLASS_ROSE, "MENU", 1440.0);
 
     // No on-screen SWING or PAUSE buttons. Swinging is the whole right half of
     // the screen and pausing is a swipe — see the touch-control block in
@@ -1192,7 +1204,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let settings_label_1 = make_settings_label(ctx, "settings_label_1", 1020.0);
     let settings_label_2 = make_settings_label(ctx, "settings_label_2", 1320.0);
 
-    let settings_back_btn = make_pause_btn(ctx, "settings_back_btn", 80, 80, 100, "BACK", 1660.0);
+    let settings_back_btn = make_pause_btn(ctx, "settings_back_btn", GLASS_LILAC, "BACK", 1660.0);
 
     // ── Settings volume sliders ───────────────────────────────────────────
     // Tracks are thin solid-color rectangles; thumbs are small rounded rects.
@@ -2037,7 +2049,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         let mut mk = GameObject::new_rect(ctx, "boss_threshold_marker".into(),
             None::<Image>, (d, d), (BOSS_THRESHOLD_X - d * 0.5, BOSS_MARKER_Y - d * 0.5),
             vec!["boss_marker".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
-        mk.set_animation(blackhole1_template());
+        mk.set_animation(vortex_template());
         mk.visible = false;
         mk.gravity = 0.0;
         mk.layer = 1;
@@ -2309,4 +2321,27 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         scene = scene.with_object(&id, obj);
     }
     (scene, pools)
+}
+
+/// The pause menu's layout: the dim (a whole screen past every edge), the
+/// glass card, the title.
+pub(crate) const PAUSE_OVERLAY_SIZE: (f32, f32) = (VW * 3.0, VH * 3.0);
+pub(crate) const PAUSE_OVERLAY_POS: (f32, f32) = (-VW, -VH);
+pub(crate) const PAUSE_PANEL_SIZE: (f32, f32) = (1700.0, 1560.0);
+pub(crate) const PAUSE_PANEL_POS: (f32, f32) = ((VW - 1700.0) / 2.0, 270.0);
+pub(crate) const PAUSE_TITLE_Y: f32 = 360.0;
+
+/// A pause-menu button: a strong glass pill in `accent`, its label in the
+/// main menu's glowing type, centred.
+fn pause_glass_btn(w: f32, h: f32, accent: [u8; 3], label: &str) -> Arc<image::RgbaImage> {
+    let glass = crate::menu_look::glass(w, h, accent, true).image;
+    let mut img = image::imageops::resize(&*glass, w as u32, h as u32, image::imageops::FilterType::Triangle);
+    let foot = [0, 1, 2].map(|i| (accent[i] as u16 / 2 + 128) as u8);
+    if let Some(t) = crate::menu_look::glow_text_rgb(label, 78.0, accent, foot) {
+        let k = (h * 0.95 / t.height() as f32).min(w * 0.9 / t.width() as f32).min(1.0);
+        let t = image::imageops::resize(&*t, (t.width() as f32 * k) as u32, (t.height() as f32 * k) as u32, image::imageops::FilterType::Triangle);
+        let (ox, oy) = ((w as i64 - t.width() as i64) / 2, (h as i64 - t.height() as i64) / 2);
+        image::imageops::overlay(&mut img, &t, ox, oy);
+    }
+    Arc::new(img)
 }

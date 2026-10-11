@@ -41,12 +41,44 @@ static BLACKHOLE1_TEMPLATE: OnceLock<AnimatedSprite> = OnceLock::new();
 static WORMHOLE2_TEMPLATE:  OnceLock<AnimatedSprite> = OnceLock::new();
 static GWELLOFF_TEMPLATE:   OnceLock<AnimatedSprite> = OnceLock::new();
 
-/// A clone of the black-hole gif animation (used for the boss teleport marker too).
-pub fn blackhole1_template() -> AnimatedSprite {
+/// A clear sprite for an object whose look is the `Effect::Portal` shader
+/// (an active black hole, the boss threshold marker); `tick_vortex_fx`
+/// draws it. An animation is still set so it replaces whatever gif the
+/// object showed before (the gwell-off ring, the teleport wormhole).
+pub fn vortex_template() -> AnimatedSprite {
     BLACKHOLE1_TEMPLATE.get_or_init(|| {
-        AnimatedSprite::new(include_bytes!("../../../assets/blackhole1.gif"), (256.0, 256.0), BLACKHOLE_FPS)
-            .expect("blackhole1.gif decode")
+        AnimatedSprite::from_frames(vec![image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 0]))], (256.0, 256.0), BLACKHOLE_FPS)
     }).clone()
+}
+
+/// The shader vortices, every frame: the boss threshold marker as the boss
+/// portal, and each active black hole (gravity on, not mid-teleport) as a
+/// black hole. Anything else has its effect cleared, so a pooled black hole
+/// never carries one into its next use.
+pub fn tick_vortex_fx(c: &mut Canvas, st: &Arc<Mutex<State>>) {
+    let t = (c.get_i32("vortex_fx_t") + 1) % (3600 * 60);
+    c.set_var("vortex_fx_t", t);
+    let secs = t as f32 / 60.0;
+    let (live, timers, marked) = {
+        let s = st.lock().unwrap();
+        (s.space_blackhole_live.clone(), s.space_gwell_timers.clone(),
+         s.space_bh_teleport_fx.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>())
+    };
+    for i in 0..SPACE_BLACKHOLE_POOL_SIZE {
+        let id = format!("space_bh_{i}");
+        let active = live.contains(&id) && !marked.contains(&id)
+            && timers.iter().any(|(tid, _, on)| tid == &id && *on);
+        match c.get_game_object(&id).filter(|o| o.visible && active).map(|o| o.size) {
+            // Each its own phase, so neighbours do not turn in step.
+            Some(size) => { c.attach_effect(&id, Effect::Portal { style: 1, time: secs + i as f32 * 3.7, intensity: 1.0 }, EffectColor::WHITE, size); }
+            None => c.clear_effect(&id),
+        }
+    }
+    const MARKER: &str = "boss_threshold_marker";
+    match c.get_game_object(MARKER).filter(|o| o.visible).map(|o| o.size) {
+        Some(size) => { c.attach_effect(MARKER, Effect::Portal { style: 0, time: secs, intensity: 1.0 }, EffectColor::WHITE, size); }
+        None => c.clear_effect(MARKER),
+    }
 }
 /// A clone of the wormhole gif animation (used for boss-arena warps too).
 pub fn wormhole2_template() -> AnimatedSprite {
@@ -1524,7 +1556,7 @@ fn spawn_space_blackholes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 obj.tags.push("space_planet".to_string());
             }
             obj.visible       = true;
-            obj.set_animation(blackhole1_template());
+            obj.set_animation(vortex_template());
         }
 
         // Place nearby hooks so the player can escape the gravity pull
@@ -1587,7 +1619,7 @@ fn tick_space_gwells(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 .unwrap_or(SPACE_BLACKHOLE_RADIUS_MIN);
             if *now_active {
                 obj.planet_radius = Some(blackhole_influence_r(gravity_r));
-                obj.set_animation(blackhole1_template());
+                obj.set_animation(vortex_template());
             } else {
                 obj.planet_radius = None;
                 obj.set_animation(gwelloff_template());

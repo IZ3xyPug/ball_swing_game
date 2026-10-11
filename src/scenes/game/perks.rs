@@ -282,7 +282,7 @@ pub fn choose(c: &mut Canvas, st: &Arc<Mutex<State>>, i: usize) -> bool {
         let s = c.virtual_scale();
         if let Some(obj) = c.get_game_object_mut("start_prompt_text") {
             obj.set_drawable(Box::new(crate::objects::ui_text_spec(
-                &format!("{} TAKEN  \u{00b7}  TETHER TO A NODE TO CONTINUE", p.name().to_uppercase()),
+                &format!("{} TAKEN  \u{2022}  TETHER TO A NODE TO CONTINUE", p.name().to_uppercase()),
                 &font, 46.0 * s, Color(255, 230, 140, 255), 1700.0 * s)));
             obj.visible = true;
         }

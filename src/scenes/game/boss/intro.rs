@@ -188,9 +188,9 @@ pub fn begin(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         None => set_text(c, "bi_name", kind.name(), NAME_PX * 0.7, Color(255, 255, 255, 255), VW * 0.6, true),
     }
     let kicker = if crate::mode::is_final_boss(mode, index) {
-        "WARNING   \u{00b7}   FINAL BOSS".to_string()
+        "WARNING   \u{2022}   FINAL BOSS".to_string()
     } else {
-        format!("WARNING   \u{00b7}   BOSS {} OF {}", index + 1, total)
+        format!("WARNING   \u{2022}   BOSS {} OF {}", index + 1, total)
     };
     let [r, g, b] = l.rgb;
     set_text(c, "bi_kicker", &kicker, 44.0, Color(r, g, b, 255), VW * 0.6, true);

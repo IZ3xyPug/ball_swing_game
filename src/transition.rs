@@ -592,3 +592,14 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod look {
+    /// `TR_DUMP=<dir>`: write the door panels out (for looking at).
+    #[test]
+    fn dump_the_door() {
+        let Ok(dir) = std::env::var("TR_DUMP") else { return };
+        super::panel_img(true).save(format!("{dir}/tr_top.png")).unwrap();
+        super::panel_img(false).save(format!("{dir}/tr_bot.png")).unwrap();
+    }
+}

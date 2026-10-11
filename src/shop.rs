@@ -21,6 +21,11 @@ pub const SLOT_CENTER: usize = 3;
 
 // ── Category data ───────────────────────────────────────────────────────────
 pub const SHOP_CAT_NAMES:     &[&str]          = &["CHARACTERS", "ROPES", "BACKGROUNDS", "TRAILS", "UPGRADES", "ABILITIES"];
+/// The category cards' title and subtitle sizes: small enough that the
+/// longest ("BACKGROUNDS", "ACTIVE POWERS • TAP TO USE") stays on one line
+/// in Orbitron, which runs wide.
+const CAT_TITLE_PX: f32 = 46.0;
+const CAT_SUB_PX: f32 = 22.0;
 pub const SHOP_CAT_SUBTITLES: &[&str]          = &["CHANGE YOUR BALL", "STYLE YOUR SWING", "CHANGE THE SCENE", "LEAVE YOUR MARK", "SPEND META \u{2022} PERMANENT", "ACTIVE POWERS \u{2022} TAP TO USE"];
 pub const SHOP_CAT_COLORS:    &[(u8, u8, u8)]  = &[
     ( 60,  80, 180), // 0 Characters  — indigo
@@ -376,7 +381,7 @@ pub fn tick_rgb_text(c: &mut Canvas) {
             let (_, _, cw, _) = cat_card_rect(i);
             if let Some(obj) = c.get_game_object_mut(&format!("shop_cat_label_{i}")) {
                 if obj.visible {
-                    obj.set_drawable(Box::new(rgb_text_spec(SHOP_CAT_NAMES[i], &font, 58.0 * s, cw * 0.44 * s, t + i as f32 * 0.4)));
+                    obj.set_drawable(Box::new(rgb_text_spec(SHOP_CAT_NAMES[i], &font, CAT_TITLE_PX * s, cw * 0.44 * s, t + i as f32 * 0.4)));
                 }
             }
         }
@@ -463,40 +468,133 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
                 }
             }}
         }
-        1 => {
-            // Ropes: crosshatch (+)
-            let half = icon_s as i32;
-            draw_rect(&mut img,
-                (glow_cx - half) as u32, (glow_cy - 5) as u32,
-                (half * 2) as u32, 10, ic);
-            draw_rect(&mut img,
-                (glow_cx - 5) as u32, (glow_cy - half) as u32,
-                10, (half * 2) as u32, ic);
+        4 => {
+            // Upgrades: rank bars stepping up left to right, a bold arrow
+            // rising over them, a sparkle at its tip.
+            let k = icon_s as f32 * 1.6;
+            let (cx, cy) = (glow_cx as f32, glow_cy as f32);
+            let fill = |img: &mut image::RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, c: [u8; 4]| {
+                draw_rect(img, x0.max(0.0) as u32, y0.max(0.0) as u32, (x1 - x0).max(1.0) as u32, (y1 - y0).max(1.0) as u32, c);
+            };
+            let base = cy + 0.62 * k;
+            for (i, hgt) in [0.30f32, 0.52, 0.74].iter().enumerate() {
+                let x0 = cx + (-0.78 + i as f32 * 0.36) * k;
+                let f = 0.55 + 0.2 * i as f32;
+                let c = [(ic[0] as f32 * f) as u8, (ic[1] as f32 * f) as u8, (ic[2] as f32 * f) as u8, 255];
+                fill(&mut img, x0, base - hgt * k, x0 + 0.26 * k, base, c);
+            }
+            // The arrow: a shaft and a broad head, to the right of the bars.
+            let ax = cx + 0.52 * k;
+            fill(&mut img, ax - 0.09 * k, cy - 0.30 * k, ax + 0.09 * k, base, ic);
+            let (tip, head_b, head_w) = (cy - 0.78 * k, cy - 0.25 * k, 0.32 * k);
+            let mut y = tip;
+            while y <= head_b {
+                let hw = head_w * (y - tip) / (head_b - tip);
+                fill(&mut img, ax - hw, y, ax + hw, y + 1.0, ic);
+                y += 1.0;
+            }
+            // A sparkle above the bars.
+            let (sx, sy) = (cx - 0.35 * k, cy - 0.45 * k);
+            for d in 0..(0.16 * k) as i32 {
+                for (ux, uy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let w = (3.0 * (1.0 - d as f32 / (0.16 * k))).max(1.0);
+                    fill(&mut img, sx + (ux * d) as f32 - w, sy + (uy * d) as f32 - w, sx + (ux * d) as f32 + w, sy + (uy * d) as f32 + w, ic);
+                }
+            }
         }
         2 => {
-            // Backgrounds: landscape icon — shifted down for visual centering
-            let half = icon_s as i32;
-            let vert_off = half / 3;
-            draw_rect(&mut img,
-                (glow_cx - half * 2) as u32, (glow_cy - half + vert_off) as u32,
-                (half * 4) as u32, half as u32, ic);
-            draw_rect(&mut img,
-                (glow_cx - half * 2) as u32, (glow_cy + vert_off) as u32,
-                (half * 4) as u32, 6, ic);
-        }
-        3 => {
-            // Trails: three diagonal dots
-            for i in 0..3i32 {
-                let tx = glow_cx + (i - 1) * icon_s as i32 * 2;
-                let ty = glow_cy + (i - 1) * icon_s as i32;
-                let r  = (icon_s / 2) as i32;
-                for py in 0..h { for px in 0..w {
-                    let dx = px as i32 - tx;
-                    let dy = py as i32 - ty;
-                    if dx * dx + dy * dy <= r * r {
-                        img.put_pixel(px, py, image::Rgba(ic));
+            // Backgrounds: a little scene. A ringed planet up in the sky,
+            // two stars, hills along the horizon.
+            let k = icon_s as f32 * 1.7;
+            let (cx, cy) = (glow_cx as f32, glow_cy as f32 + icon_s as f32 * 0.1);
+            let dot = |img: &mut image::RgbaImage, x: f32, y: f32, r: f32, c: [u8; 4]| {
+                let ri = r.ceil() as i32;
+                for dy in -ri..=ri { for dx in -ri..=ri {
+                    if (dx * dx + dy * dy) as f32 <= r * r {
+                        let (px, py) = (x as i32 + dx, y as i32 + dy);
+                        if px >= 0 && py >= 0 && (px as u32) < img.width() && (py as u32) < img.height() { img.put_pixel(px as u32, py as u32, image::Rgba(c)); }
                     }
                 }}
+            };
+            // The planet, its ring a flattened ellipse round it.
+            let (pxc, pyc, pr) = (cx - 0.25 * k, cy - 0.30 * k, 0.32 * k);
+            dot(&mut img, pxc, pyc, pr, ic);
+            for i in 0..=160 {
+                let a = i as f32 / 160.0 * std::f32::consts::TAU;
+                let (ex, ey) = (pxc + a.cos() * pr * 1.75, pyc + a.sin() * pr * 0.45);
+                // Behind the planet the ring is hidden.
+                let behind = a.sin() < 0.0 && ((ex - pxc).powi(2) + (ey - pyc).powi(2)).sqrt() < pr;
+                if !behind { dot(&mut img, ex - (ey - pyc) * 0.25, ey, 4.0, ic); }
+            }
+            // Stars.
+            for (sx, sy, sr) in [(0.55, -0.55, 7.0), (0.32, -0.05, 5.0)] {
+                let (x, y) = (cx + sx * k, cy + sy * k);
+                dot(&mut img, x, y, sr * 0.5, ic);
+                for d in 1..=(sr as i32) { for (ux, uy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    dot(&mut img, x + (ux * d) as f32, y + (uy * d) as f32, 2.0, ic);
+                }}
+            }
+            // The horizon: a line of rolling hills.
+            for i in 0..=200 {
+                let t = i as f32 / 200.0;
+                let x = cx + (t * 2.0 - 1.0) * 0.95 * k;
+                let y = cy + 0.48 * k - (t * 9.0).sin().abs() * 0.18 * k * (1.0 - (t * 2.0 - 1.0).powi(2));
+                dot(&mut img, x, y, 6.0, ic);
+            }
+        }
+        3 => {
+            // Trails: a comet's sweep. A curve thickening and brightening
+            // towards a bright head, a speed line either side of it.
+            let k = icon_s as f32 * 1.5;
+            let (cx, cy) = (glow_cx as f32, glow_cy as f32);
+            let path = |t: f32| -> (f32, f32) {
+                // A gentle arc from lower left up to the upper right.
+                let x = -0.85 + 1.5 * t;
+                let y = 0.55 - 1.05 * t + 0.45 * (t * std::f32::consts::PI).sin() * 0.6;
+                (cx + x * k, cy + y * k)
+            };
+            for i in 0..=220 {
+                let t = i as f32 / 220.0;
+                let (x, y) = path(t);
+                let r = 3.5 + 7.0 * t;
+                let f = 0.55 + 0.45 * t;
+                let c = [(ic[0] as f32 * f) as u8, (ic[1] as f32 * f) as u8, (ic[2] as f32 * f) as u8, 255];
+                let ri = r.ceil() as i32;
+                for dy in -ri..=ri { for dx in -ri..=ri {
+                    if (dx * dx + dy * dy) as f32 <= r * r {
+                        let (px, py) = (x as i32 + dx, y as i32 + dy);
+                        if px >= 0 && py >= 0 && (px as u32) < img.width() && (py as u32) < img.height() {
+                            let o = img.get_pixel(px as u32, py as u32);
+                            let m = [o[0].max(c[0]), o[1].max(c[1]), o[2].max(c[2]), 255];
+                            img.put_pixel(px as u32, py as u32, image::Rgba(m));
+                        }
+                    }
+                }}
+            }
+            // The head.
+            let (hx, hy) = path(1.0);
+            let hr = icon_s as f32 * 0.42;
+            let white = [255u8, 255, 255, 255];
+            for dy in -(hr as i32)..=(hr as i32) { for dx in -(hr as i32)..=(hr as i32) {
+                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                if d <= hr {
+                    let c = if d < hr * 0.55 { white } else { ic };
+                    img.put_pixel((hx as i32 + dx) as u32, (hy as i32 + dy) as u32, image::Rgba(c));
+                }
+            }}
+            // Speed lines alongside, shorter, behind the head.
+            for (off, t0, t1) in [(-0.22, 0.45, 0.80), (0.22, 0.30, 0.65)] {
+                for i in 0..=80 {
+                    let t = t0 + (t1 - t0) * i as f32 / 80.0;
+                    let (x, y) = path(t);
+                    let (x2, y2) = path((t + 0.01).min(1.0));
+                    let (nx, ny) = (-(y2 - y), x2 - x);
+                    let n = (nx * nx + ny * ny).sqrt().max(1e-3);
+                    let (px, py) = (x + nx / n * off * k, y + ny / n * off * k);
+                    let f = 0.35 + 0.4 * (i as f32 / 80.0);
+                    let c = [(ic[0] as f32 * f) as u8, (ic[1] as f32 * f) as u8, (ic[2] as f32 * f) as u8, 255];
+                    draw_rect(&mut img, (px - 3.0).max(0.0) as u32, (py - 3.0).max(0.0) as u32, 6, 6, c);
+                }
             }
         }
         5 => {
@@ -514,21 +612,47 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
                 }
             }
         }
-        4 => {
-            // Coins: ring + vertical bar
-            let r_out = icon_s as i32;
-            let r_in  = (icon_s as i32 - 6).max(0);
-            for py in 0..h { for px in 0..w {
-                let dx = px as i32 - glow_cx;
-                let dy = py as i32 - glow_cy;
-                let d2 = dx * dx + dy * dy;
-                if d2 <= r_out * r_out && d2 >= r_in * r_in {
-                    img.put_pixel(px, py, image::Rgba(ic));
-                }
-            }}
-            draw_rect(&mut img,
-                (glow_cx - 5) as u32, (glow_cy - r_out * 3 / 4) as u32,
-                10, (r_out * 3 / 2) as u32, ic);
+        1 => {
+            // Ropes: a swing. A grapple node at the top, the rope bowing
+            // down to the ball at its end, the swing's path dotted under it.
+            let k = icon_s as f32 * 1.6;
+            let (cx, cy) = (glow_cx as f32, glow_cy as f32);
+            let dot = |img: &mut image::RgbaImage, x: f32, y: f32, r: f32, c: [u8; 4]| {
+                let ri = r.ceil() as i32;
+                for dy in -ri..=ri { for dx in -ri..=ri {
+                    if (dx * dx + dy * dy) as f32 <= r * r {
+                        let (px, py) = (x as i32 + dx, y as i32 + dy);
+                        if px >= 0 && py >= 0 && (px as u32) < img.width() && (py as u32) < img.height() { img.put_pixel(px as u32, py as u32, image::Rgba(c)); }
+                    }
+                }}
+            };
+            let (nx, ny) = (cx - 0.30 * k, cy - 0.62 * k);      // the node
+            let (bx, by) = (cx + 0.38 * k, cy + 0.42 * k);      // the ball
+            let len = ((bx - nx).powi(2) + (by - ny).powi(2)).sqrt();
+            // The swing's path: a dotted arc round the node.
+            let a_ball = (by - ny).atan2(bx - nx);
+            for i in 0..9 {
+                let a = a_ball + 0.18 + i as f32 * 0.17;
+                let f = 1.0 - i as f32 * 0.07;
+                let c = [(ic[0] as f32 * f) as u8, (ic[1] as f32 * f) as u8, (ic[2] as f32 * f) as u8, 255];
+                dot(&mut img, nx + a.cos() * len, ny + a.sin() * len, 5.5 - i as f32 * 0.35, c);
+            }
+            // The rope, bowing a little (it is swinging).
+            for i in 0..=160 {
+                let t = i as f32 / 160.0;
+                let (lx, ly) = (nx + (bx - nx) * t, ny + (by - ny) * t);
+                let sag = (t * std::f32::consts::PI).sin() * 0.10 * k;
+                dot(&mut img, lx - sag * 0.5, ly + sag, 4.0, ic);
+            }
+            // The node: a ring with a bright core.
+            for i in 0..=120 {
+                let a = i as f32 / 120.0 * std::f32::consts::TAU;
+                dot(&mut img, nx + a.cos() * 0.16 * k, ny + a.sin() * 0.16 * k, 3.5, ic);
+            }
+            dot(&mut img, nx, ny, 0.07 * k, ic);
+            // The ball, white hot in the middle.
+            dot(&mut img, bx, by, 0.24 * k, ic);
+            dot(&mut img, bx - 0.05 * k, by - 0.05 * k, 0.11 * k, [255, 255, 255, 255]);
         }
         _ => {}
     }
@@ -626,7 +750,7 @@ pub fn show_categories(c: &mut Canvas) {
         }
         if let Some(obj) = c.get_game_object_mut("shop_back_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                "\u{2193}  MENU", &font, 32.0 * s, Color(230, 222, 255, 255), 380.0 * s,
+                "MENU", &font, 32.0 * s, Color(230, 222, 255, 255), 380.0 * s,
             )));
         }
     }
@@ -721,7 +845,7 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
         }
         if let Some(obj) = c.get_game_object_mut("shop_back_text") {
             obj.set_drawable(Box::new(ui_text_spec(
-                "\u{2039}  BACK", &font, 32.0 * s, Color(230, 222, 255, 255), 380.0 * s,
+                "<  BACK", &font, 32.0 * s, Color(230, 222, 255, 255), 380.0 * s,
             )));
         }
     }
@@ -755,13 +879,25 @@ pub fn update_slot_positions(c: &mut Canvas, offset: f32) {
         }
         // The emblem sits where a card's orb would be.
         if let Some(obj) = c.get_game_object_mut(&format!("shop_slot_icon_{s}")) {
-            obj.position = (slot_x + w * 0.5 - ICON_SIZE * 0.5, card_y + h * 0.5 - 60.0 - ICON_SIZE * 0.5);
+            // Centred by its own size: the Seed Funds coin is smaller.
+            let sz = obj.size;
+            obj.position = (slot_x + w * 0.5 - sz.0 * 0.5, card_y + h * 0.5 - 60.0 - sz.1 * 0.5);
         }
     }
 }
 
 /// The animated emblems' size on a card.
 const ICON_SIZE: f32 = 330.0;
+/// SEED FUNDS is the game's own gold cat coin, face on and still, this big,
+/// with the emblem's light (halo, glint, sparkles) round it.
+const SEED_COIN_SIZE: f32 = 200.0;
+const SEED_FUNDS_ICON: u32 = 4;
+
+/// The gold cat coin's first frame: face on.
+fn cat_coin_img() -> Option<Arc<image::RgbaImage>> {
+    static T: OnceLock<Option<Arc<image::RgbaImage>>> = OnceLock::new();
+    T.get_or_init(|| image::load_from_memory(include_bytes!("../assets/catcoingold.gif")).ok().map(|i| Arc::new(i.into_rgba8()))).clone()
+}
 
 /// Every frame on the carousel: each slot's emblem (upgrades and abilities
 /// only), animated, in its item's colour.
@@ -787,7 +923,19 @@ pub fn tick_slot_icons(c: &mut Canvas) {
             (7 + idx as u32, crate::profile::ABILITIES[idx].color)
         };
         let card_visible = c.get_game_object(&format!("shop_slot_{s}")).is_some_and(|o| o.visible);
-        if let Some(o) = c.get_game_object_mut(&id) { o.visible = card_visible; }
+        let coin = icon == SEED_FUNDS_ICON;
+        if let Some(o) = c.get_game_object_mut(&id) {
+            o.visible = card_visible;
+            // The cat coin on SEED FUNDS' card, nothing under the others.
+            let want = if coin { SEED_COIN_SIZE } else { ICON_SIZE };
+            if o.size.0 != want {
+                let (cx, cy) = (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5);
+                o.size = (want, want);
+                o.position = (cx - want * 0.5, cy - want * 0.5);
+                let img = if coin { cat_coin_img() } else { None }.unwrap_or_else(|| Arc::new(image::RgbaImage::new(1, 1)));
+                o.set_image(Image { shape: ShapeType::Rectangle(0.0, (want, want), 0.0), image: img, color: None });
+            }
+        }
         if !card_visible { continue; }
         // The middle card's emblem burns brighter.
         let intensity = if s == SLOT_CENTER { 1.0 } else { 0.7 };
@@ -1152,7 +1300,7 @@ pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
             let m = g.lock().unwrap().meta_currency;
             m
         };
-        return format!("A / D  or  \u{2190}\u{2192}  to browse   \u{2022}   YOU HAVE {meta} META");
+        return format!("A / D  or  <  >  to browse   \u{2022}   YOU HAVE {meta} META");
     }
     if is_ability_category(cat) {
         let meta = {
@@ -1166,7 +1314,7 @@ pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
         };
     }
     if !is_upgrade_category(cat) {
-        return "A / D  or  \u{2190}\u{2192}  to browse".to_string();
+        return "A / D  or  <  >  to browse".to_string();
     }
     let meta = {
         let g = crate::profile::profile();
@@ -1205,13 +1353,13 @@ pub fn init_shop(canvas: &mut Canvas) {
             let label_w = cw * 0.44;  // right-half text area, ~6% margin from right edge
             if let Some(obj) = canvas.get_game_object_mut(&format!("shop_cat_label_{i}")) {
                 obj.set_drawable(Box::new(ui_text_spec(
-                    SHOP_CAT_NAMES[i], &font, 58.0 * s,
+                    SHOP_CAT_NAMES[i], &font, CAT_TITLE_PX * s,
                     Color(255, 255, 255, 255), label_w * s,
                 )));
             }
             if let Some(obj) = canvas.get_game_object_mut(&format!("shop_cat_sub_{i}")) {
                 obj.set_drawable(Box::new(ui_text_spec(
-                    SHOP_CAT_SUBTITLES[i], &font, 26.0 * s,
+                    SHOP_CAT_SUBTITLES[i], &font, CAT_SUB_PX * s,
                     Color(200, 215, 235, 180), label_w * s,
                 )));
             }
@@ -2067,7 +2215,7 @@ pub fn buy_selected_upgrade(c: &mut Canvas) {
 
     let scale = c.virtual_scale();
     let text = match outcome {
-        Ok(level) => format!("{} \u{2192} RANK {}", u.name, level),
+        Ok(level) => format!("{}  >  RANK {}", u.name, level),
         Err(reason) => format!("{}   \u{2022}   {}", u.name, reason),
     };
     if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {

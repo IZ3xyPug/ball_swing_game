@@ -196,7 +196,7 @@ fn update_settings_text(c: &mut Canvas) {
 
 fn hide_pause_ui(c: &mut Canvas) {
     c.set_var("pause_menu_open", false);
-    for name in ["pause_overlay", "pause_title",
+    for name in ["pause_overlay", "pause_panel", "pause_title",
                  "pause_resume_btn", "pause_restart_btn",
                  "pause_settings_btn", "pause_menu_btn",
                  "start_prompt_text",
@@ -388,7 +388,7 @@ fn clear_pause_state(c: &mut Canvas) {
 /// Show the pause menu overlay + buttons (off-screen for the entrance slide).
 /// `from_stasis` records whether the pause was opened from a soft-pause stasis
 /// so that resume returns to the stasis rather than straight to gameplay.
-fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
+pub(crate) fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
     // Dead: the death screen is the menu.
     if super::death_screen::active(c) { return; }
     c.set_var("pause_came_from_stasis", from_stasis);
@@ -407,8 +407,15 @@ fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
     if let Some(obj) = c.get_game_object_mut("rope") {
         obj.visible = false;
     }
+    // The dim is in place at once (it covers the screen whatever its shape);
+    // the card and its buttons slide in over it.
     if let Some(obj) = c.get_game_object_mut("pause_overlay") {
-        obj.position = (0.0, -VH);
+        obj.position = super::bootstrap::PAUSE_OVERLAY_POS;
+        obj.visible = true;
+    }
+    if let Some(obj) = c.get_game_object_mut("pause_panel") {
+        let (px, py) = super::bootstrap::PAUSE_PANEL_POS;
+        obj.position = (px, py - VH);
         obj.visible = true;
     }
     for &(name, bx, by) in PAUSE_BTN_LAYOUT.iter() {
@@ -471,7 +478,7 @@ fn launch_from_orbit(c: &mut Canvas, st: &Arc<Mutex<State>>, ticks: f32) {
 }
 
 const PAUSE_BTN_LAYOUT: [(&str, f32, f32); 5] = [
-    ("pause_title",        (VW - 650.0) / 2.0, VH * 0.20),
+    ("pause_title",        (VW - 650.0) / 2.0, super::bootstrap::PAUSE_TITLE_Y),
     ("pause_resume_btn",   (VW - 700.0) / 2.0, 780.0),
     ("pause_restart_btn",  (VW - 700.0) / 2.0, 1000.0),
     ("pause_settings_btn", (VW - 700.0) / 2.0, 1220.0),
@@ -1868,9 +1875,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     obj.visible = false;
                 }
                 if let Some(obj) = canvas.get_game_object_mut(TOAST_CHECK_NAME) {
+                    let sym = super::helpers::symbol_font().unwrap_or_else(|| font.clone());
                     obj.set_drawable(Box::new(ui_text_spec(
                         "✓",
-                        &font,
+                        &sym,
                         52.0 * s,
                         Color(130, 255, 165, 255),
                         120.0 * s,
@@ -1879,7 +1887,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
             if let Some(obj) = canvas.get_game_object_mut("pause_overlay") {
-                obj.position = (-400.0, 0.0);
+                obj.position = super::bootstrap::PAUSE_OVERLAY_POS;
                 obj.visible = false;
             }
 
@@ -2169,12 +2177,6 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Hearts / checkpoint bookkeeping ──────────────────
                     super::hearts::tick_hearts(c, &st);
 
-                    // ── Camera-anchored UI ───────────────────────────────
-                    let cam_x = c
-                        .camera()
-                        .map(|cam| cam.position.0)
-                        .unwrap_or(0.0);
-
                     // ── Pause entrance animation ─────────────────────────
                     if matches!(
                         c.get_var("pause_animating"),
@@ -2192,9 +2194,10 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             let y = -VH + VH * ease;
 
                             if let Some(obj) =
-                                c.get_game_object_mut("pause_overlay")
+                                c.get_game_object_mut("pause_panel")
                             {
-                                obj.position = (-400.0, y);
+                                let (px, py) = super::bootstrap::PAUSE_PANEL_POS;
+                                obj.position = (px, py + y);
                                 obj.visible = true;
                             }
                             // Animate buttons alongside the overlay
@@ -2207,9 +2210,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             c.set_var("pause_anim_frames", remaining);
                             if remaining == 0 {
                                 if let Some(obj) =
-                                    c.get_game_object_mut("pause_overlay")
+                                    c.get_game_object_mut("pause_panel")
                                 {
-                                    obj.position = (-400.0, 0.0);
+                                    obj.position = super::bootstrap::PAUSE_PANEL_POS;
                                 }
                                 for &(name, bx, by) in PAUSE_BTN_LAYOUT.iter() {
                                     if let Some(obj) = c.get_game_object_mut(name) {
@@ -2393,11 +2396,9 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                 }
                             }
                         }
-                        if let Some(obj) =
-                            c.get_game_object_mut("pause_overlay")
-                        {
-                            obj.position.0 = cam_x - 400.0;
-                        }
+                        // (The dim is `ignore_zoom`, pinned to the screen: it
+                        // used to be shoved along by the camera's x here,
+                        // which slid it off one side of the screen.)
                         // The sky stays alive behind the start prompt and pause.
                         super::aurora::tick_aurora(c, &st, &mut aurora_tick);
                         return;
@@ -2879,6 +2880,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Distant decor (planets, wrecks, the odd whale) ──
                     super::decor::tick_decor(c, &st);
                     super::hangar::tick(c, &st);
+                    super::space_zone::tick_vortex_fx(c, &st);
 
                     // ── Death check ──────────────────────────────────────
                     let mut s = st.lock().unwrap();

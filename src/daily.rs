@@ -190,7 +190,7 @@ pub fn tick(c: &mut Canvas, distance: f32) -> Option<u64> {
     }
     crate::profile::save_profile();
     crate::achievements::toast("Daily Challenge Complete!",
-        &format!("{}  \u{00b7}  +{} META", ch.modifier.name(), ch.reward), crate::achievements::Tier::Gold);
+        &format!("{}  \u{2022}  +{} META", ch.modifier.name(), ch.reward), crate::achievements::Tier::Gold);
     crate::achievements::check_achievements(c, 0, 0.0);
     Some(ch.reward)
 }

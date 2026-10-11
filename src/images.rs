@@ -854,26 +854,8 @@ pub fn pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
     pad_img_with_tuning(w, h, r, g, b, 0.48, 1.0)
 }
 
-fn pause_pad_img(w: u32, h: u32, r: u8, g: u8, b: u8) -> image::RgbaImage {
-    // Pause UI: keep the fuller profile you approved.
-    pad_img_with_tuning(w, h, r, g, b, 0.62 * 1.33 * 1.33 * 1.5, 1.33 * 1.33 * 1.5)
-}
-
 cached_image!(pad_image_cached, pad_img(PAD_W as u32, PAD_H as u32, C_PAD.0, C_PAD.1, C_PAD.2));
 
-pub fn pause_pad_cached(w: u32, h: u32, r: u8, g: u8, b: u8) -> Arc<image::RgbaImage> {
-    static CACHE: OnceLock<Mutex<HashMap<(u32, u32, u8, u8, u8), Arc<image::RgbaImage>>>> = OnceLock::new();
-    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = (w, h, r, g, b);
-    let mut guard = map.lock().unwrap();
-    if let Some(cached) = guard.get(&key) {
-        return cached.clone();
-    }
-    let img = pause_pad_img(w, h, r, g, b);
-    let arc: Arc<image::RgbaImage> = Arc::new(img);
-    guard.insert(key, arc.clone());
-    arc
-}
 
 pub fn spinner_img(w: u32, h: u32, base_r: u8, base_g: u8, base_b: u8) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
@@ -978,7 +960,8 @@ pub fn pause_overlay_img() -> image::RgbaImage {
     // the first thing to blow past a phone's 4096 texture limit, which is the
     // validation error that aborted the Android build at launch.
     let mut img = image::RgbaImage::new(2, 2);
-    draw_rect(&mut img, 0, 0, 2, 2, [0, 0, 0, 170]);
+    // Deep navy, as the menus are.
+    draw_rect(&mut img, 0, 0, 2, 2, [4, 8, 22, 190]);
     img
 }
 
@@ -993,17 +976,6 @@ pub fn pause_title_img() -> image::RgbaImage {
     let tx = (w - text_w) / 2;
     let ty = (h - text_h) / 2;
     draw_word(&mut img, tx, ty, scale, text, [255, 255, 255, 255]);
-    img
-}
-
-pub fn pause_btn_img(w: u32, h: u32, r: u8, g: u8, b: u8, label: &str) -> image::RgbaImage {
-    let mut img = (*pause_pad_cached(w, h, r, g, b)).clone();
-    let scale = 4u32;
-    let text_w = label.len() as u32 * 6 * scale;
-    let text_h = 5 * scale;
-    let tx = (w.saturating_sub(text_w)) / 2;
-    let ty = (h.saturating_sub(text_h)) / 2;
-    draw_word(&mut img, tx, ty, scale, label, [255, 255, 255, 255]);
     img
 }
 

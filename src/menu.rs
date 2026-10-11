@@ -105,6 +105,14 @@ pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
         }
         let world = c.screen_to_world(pos);
 
+        // Click the planet and it pops: swells, springs back (see
+        // `menu_look::tick_menu_look`). Cosmetic; the click goes nowhere else.
+        if crate::menu_look::planet_hit(c, world) {
+            let t = c.get_i32("menu_t");
+            c.set_var("planet_pop_t", t);
+            return;
+        }
+
         // The mode selector's arrows.
         //
         // Handled HERE, in the handler registered at app start, and not in the
@@ -1928,9 +1936,9 @@ fn ach_draw_card_text(c: &mut Canvas, i: usize, a: f32) {
     let secret = tier == crate::achievements::Tier::Secret && !done;
     let title = if secret { "???".to_string() } else { title.to_string() };
     let desc = if secret {
-        format!("{}  \u{00b7}  A secret. Keep playing.", tier.label())
+        format!("{}  \u{2022}  A secret. Keep playing.", tier.label())
     } else {
-        format!("{}  \u{00b7}  {desc}", tier.label())
+        format!("{}  \u{2022}  {desc}", tier.label())
     };
     if let Some(obj) = c.get_game_object_mut(&format!("ach_card_title_{i}")) {
         obj.set_drawable(Box::new(ui_text_left_spec(&title, &font, 44.0 * s, fade(tc), (ACH_CARD_W - 260.0) * s)));
@@ -1939,7 +1947,8 @@ fn ach_draw_card_text(c: &mut Canvas, i: usize, a: f32) {
         obj.set_drawable(Box::new(ui_text_left_spec(&desc, &font, 28.0 * s, fade(dc), (ACH_CARD_W - 260.0) * s)));
     }
     if let Some(obj) = c.get_game_object_mut(&format!("ach_card_check_{i}")) {
-        obj.set_drawable(Box::new(ui_text_spec("\u{2713}", &font, 56.0 * s, fade(Color(130, 255, 165, 255)), 120.0 * s)));
+        let sym = crate::scenes::game::helpers::symbol_font().unwrap_or_else(|| font.clone());
+        obj.set_drawable(Box::new(ui_text_spec("\u{2713}", &sym, 56.0 * s, fade(Color(130, 255, 165, 255)), 120.0 * s)));
     }
 }
 
@@ -2314,7 +2323,7 @@ fn daily_refresh(c: &mut Canvas) {
     let (slot, claimed) = crate::daily::reward_state();
     let streak = { let g = crate::profile::profile(); let p = g.lock().unwrap(); p.daily_streak };
     let streak_now = if claimed { streak } else if slot == 0 { 0 } else { streak };
-    daily_text(c, "daily_reward_head", &format!("DAILY REWARD   \u{00b7}   STREAK  {streak_now}"), 46.0,
+    daily_text(c, "daily_reward_head", &format!("DAILY REWARD   \u{2022}   STREAK  {streak_now}"), 46.0,
         Color(250, 228, 170, 255), DAILY_CARD_W);
     for i in 0..7 {
         let earned = i < slot || (claimed && i == slot);
@@ -2330,7 +2339,7 @@ fn daily_refresh(c: &mut Canvas) {
             else { (Color(190, 180, 225, 190), Color(215, 205, 245, 200)) };
         daily_text(c, &format!("daily_tile_day_{i}"), &format!("DAY {}", i + 1), 32.0, dc, DAILY_TILE.0);
         daily_text(c, &format!("daily_tile_amt_{i}"), &format!("+{}", crate::daily::REWARD_CALENDAR[i]), if i == 6 { 70.0 } else { 60.0 }, mc, DAILY_TILE.0);
-        daily_text(c, &format!("daily_tile_meta_{i}"), if earned { "\u{2713}  META" } else { "META" }, 28.0, dc, DAILY_TILE.0);
+        daily_text(c, &format!("daily_tile_meta_{i}"), if earned { "META  CLAIMED" } else { "META" }, 28.0, dc, DAILY_TILE.0);
     }
     if claimed {
         daily_text(c, "daily_claim_text", "CLAIMED", 44.0, Color(170, 235, 190, 255), DAILY_BTN.0);
@@ -2351,12 +2360,12 @@ fn daily_refresh(c: &mut Canvas) {
     daily_text(c, "daily_chal_name", ch.modifier.name(), 86.0, Color(255, 236, 170, 255), DAILY_CARD_W);
     daily_text(c, "daily_chal_blurb", ch.modifier.blurb(), 38.0, Color(220, 225, 240, 240), DAILY_CARD_W);
     daily_text(c, "daily_chal_goal",
-        &format!("Reach {} px   \u{00b7}   Reward {} META   \u{00b7}   Same world for everyone today", fmt_thousands(ch.goal as u64), ch.reward),
+        &format!("Reach {} px   \u{2022}   Reward {} META   \u{2022}   Same world for everyone today", fmt_thousands(ch.goal as u64), ch.reward),
         32.0, Color(200, 195, 235, 230), DAILY_CARD_W);
     let status = if done {
-        format!("\u{2713}  COMPLETE   \u{00b7}   best today {} px", fmt_thousands(best as u64))
+        format!("COMPLETE   \u{2022}   best today {} px", fmt_thousands(best as u64))
     } else if best > 0 {
-        format!("best today {} px   \u{00b7}   {}% of the way", fmt_thousands(best as u64), ((best as f32 / ch.goal) * 100.0).min(99.0) as u32)
+        format!("best today {} px   \u{2022}   {}% of the way", fmt_thousands(best as u64), ((best as f32 / ch.goal) * 100.0).min(99.0) as u32)
     } else {
         "not attempted yet".to_string()
     };

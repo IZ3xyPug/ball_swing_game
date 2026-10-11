@@ -14,3 +14,6 @@ cache.db
 # Copied from ~/.android by build_android.sh so cargo-apk can sign a
 # release build. Not a secret, but not something to track either.
 debug.keystore
+
+# Built release zips (shared by hand, not tracked).
+/dist

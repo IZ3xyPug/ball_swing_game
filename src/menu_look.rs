@@ -394,7 +394,13 @@ pub fn menu_objects(ctx: &mut Context) -> Vec<(String, GameObject)> {
     for (id, y) in far_star_rows() {
         v.push(quad(ctx, id, static_stars(), (VW, VH), (0.0, y), vec![]));
     }
-    // (The spiral galaxy that sat in this sky was removed.)
+    let galaxy = crate::scenes::game::helpers::pl_image_cached(include_bytes!("../assets/pixellab/decor/galaxy_spiral.png"), 256.0);
+    if let Some(g) = galaxy {
+        let o = GameObject::new_rect(ctx, "menu_galaxy".into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (GALAXY_SIZE, GALAXY_SIZE), 0.0), image: g, color: Some(Color(170, 150, 220, 200)) }),
+            (GALAXY_SIZE, GALAXY_SIZE), GALAXY_POS, vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+        v.push(("menu_galaxy".into(), o));
+    }
     for (id, y) in near_star_tiles() {
         v.push(quad(ctx, id, moving_stars(), (VW, VH), (0.0, y), vec![]));
     }
@@ -494,12 +500,12 @@ pub fn draw_menu_text(c: &mut Canvas) {
     let idx = (c.get_i32("game_mode_idx").max(0) as usize).min(crate::menu::GAME_MODES.len() - 1);
     let (name, desc) = crate::menu::GAME_MODES[idx];
     let mode_col = if sel == 0 { ACCENT } else { Color(150, 140, 200, 200) };
-    let mode = format!("\u{2039}   {name}   \u{203A}");
+    let mode = format!("<   {name}   >");
     for (id, t, sz, col, w, left) in [
         ("menu_mode_name_text", mode.as_str(), 40.0, mode_col, MODE_W, false),
         ("menu_mode_desc_text", desc, 22.0, Color(160, 150, 210, if sel == 0 { 220 } else { 150 }), MODE_W + 300.0, false),
         ("menu_sub_text", "S W I N G   T H R O U G H   T H E   S T A R S", 26.0, Color(170, 200, 245, 210), LOGO_W, false),
-        ("menu_hint_text", "SPACE  PLAY      \u{2191} \u{2193}  SELECT      \u{2190} \u{2192}  MODE      ENTER  OPEN", 28.0, Color(170, 195, 240, 215), 1600.0, true),
+        ("menu_hint_text", "SPACE  PLAY      UP / DOWN  SELECT      LEFT / RIGHT  MODE      ENTER  OPEN", 28.0, Color(170, 195, 240, 215), 1600.0, true),
     ] {
         if let Some(o) = c.get_game_object_mut(id) {
             let spec = if left { ui_text_left_spec(t, &font, sz * s, col, w * s) } else { ui_text_spec(t, &font, sz * s, col, w * s) };
@@ -570,8 +576,20 @@ pub fn tick_menu_look(c: &mut Canvas) {
     drift(c, "menu_stars_a", "menu_stars_b", 0.35);
     drift(c, "menu_stars_c", "menu_stars_d", 0.35);
     drift(c, "menu_stars_e", "menu_stars_f", 0.35);
+    // The planet's pop when clicked: a damped spring, about a third of a
+    // second, swelling first then settling with a little undershoot.
+    let pop = match c.get_var("planet_pop_t") {
+        Some(Value::I32(t0)) => {
+            let e = (t - t0) as f32;
+            if (0.0..40.0).contains(&e) { 1.0 + 0.14 * (-e / 7.0).exp() * (e * 0.42).sin() } else { 1.0 }
+        }
+        _ => 1.0,
+    };
     if let Some(o) = c.get_game_object_mut("menu_planet") {
-        o.position = (PLANET_POS.0 + (tf * 0.004).sin() * 30.0, y0 + PLANET_POS.1 + (tf * 0.009).sin() * 18.0 + lift(PAR_PLANET));
+        let size = PLANET_SIZE * pop;
+        let grow = (size - PLANET_SIZE) * 0.5;
+        o.size = (size, size);
+        o.position = (PLANET_POS.0 + (tf * 0.004).sin() * 30.0 - grow, y0 + PLANET_POS.1 + (tf * 0.009).sin() * 18.0 + lift(PAR_PLANET) - grow);
         o.rotation = (tf * 0.006).sin() * 3.0;
     }
 
@@ -658,7 +676,7 @@ pub const PAGE_BACK_POS: (f32, f32) = (120.0, VH - 220.0);
 pub const PAGE_BACK_SIZE: (f32, f32) = (380.0, 110.0);
 
 /// The text on every back pill (the font has no `◄`; it drew a box).
-pub const PAGE_BACK_LABEL: &str = "\u{2039}  BACK";
+pub const PAGE_BACK_LABEL: &str = "<  BACK";
 
 /// Glass accents.
 /// (Named for its first colour; the menu went blue.)
@@ -928,4 +946,14 @@ pub fn tick_launch(c: &mut Canvas) -> bool {
         return true;
     }
     false
+}
+
+/// Whether a world point is on the menu's planet (its disc, not the empty
+/// corners of its square).
+pub fn planet_hit(c: &Canvas, world: (f32, f32)) -> bool {
+    let Some(o) = c.get_game_object("menu_planet") else { return false };
+    if !o.visible { return false; }
+    let (cx, cy) = (o.position.0 + o.size.0 * 0.5, o.position.1 + o.size.1 * 0.5);
+    let r = o.size.0 * 0.42;
+    (world.0 - cx).powi(2) + (world.1 - cy).powi(2) <= r * r
 }

@@ -127,13 +127,13 @@ fn draw(c: &mut Canvas, step: usize, progress: &str, done: bool) {
         o.visible = true;
     }
     let n = STEPS.len() - 1;
-    let label = if step < n { format!("TUTORIAL   \u{00b7}   STEP {} OF {}", step + 1, n) } else { "TUTORIAL".to_string() };
+    let label = if step < n { format!("TUTORIAL   \u{2022}   STEP {} OF {}", step + 1, n) } else { "TUTORIAL".to_string() };
     text(c, "tut_step", &label, 30.0, Color(accent[0], accent[1], accent[2], 230), PANEL_Y + 22.0);
-    let title = if done { format!("\u{2713}  {}", s.title) } else { s.title.to_string() };
+    let title = if done { format!("DONE  \u{2022}  {}", s.title) } else { s.title.to_string() };
     text(c, "tut_title", &title, 56.0, if done { Color(150, 245, 180, 255) } else { Color(255, 240, 200, 255) }, PANEL_Y + 64.0);
     text(c, "tut_body", s.body, 36.0, Color(225, 230, 245, 240), PANEL_Y + 150.0);
     text(c, "tut_progress", progress, 32.0, Color(190, 215, 255, 230), PANEL_Y + 214.0);
-    text(c, "tut_skip", "ESC  \u{2192}  MENU to skip the tutorial", 26.0, Color(170, 170, 200, 170), PANEL_Y + PANEL.1 + 14.0);
+    text(c, "tut_skip", "ESC  >  MENU to skip the tutorial", 26.0, Color(170, 170, 200, 170), PANEL_Y + PANEL.1 + 14.0);
 }
 
 /// Every game frame of a tutorial run.

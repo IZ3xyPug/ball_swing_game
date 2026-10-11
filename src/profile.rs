@@ -8,15 +8,15 @@
 // behind `profile()`.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// How many profile slots are available.
 pub const SLOT_COUNT: usize = 4;
 
-/// Directory saves are read from / written to. Default "saves" (relative to the
-/// process CWD). Redirected in the headless driver so automated runs never
-/// clobber the real save slots.
+/// Directory saves are read from / written to: the platform's app-data
+/// folder (see `default_saves_dir`). Redirected in the headless driver so
+/// automated runs never clobber the real save slots.
 static SAVES_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Override the saves directory (e.g. a temp dir for headless runs). Only the
@@ -26,7 +26,52 @@ pub fn set_saves_dir(dir: &str) {
 }
 
 fn saves_dir() -> &'static PathBuf {
-    SAVES_DIR.get_or_init(|| PathBuf::from("saves"))
+    SAVES_DIR.get_or_init(default_saves_dir)
+}
+
+/// Where a player's saves live: the platform's own place for app data, not
+/// the folder the game happened to be launched from. A relative `saves/`
+/// landed in the player's home folder when the game was double-clicked on
+/// a Mac, and anywhere at all (maybe somewhere unwritable) on Windows.
+///   * macOS: ~/Library/Application Support/BallSwing/saves
+///   * Windows: %APPDATA%\BallSwing\saves
+///   * Linux: $XDG_DATA_HOME/BallSwing/saves, else ~/.local/share/BallSwing/saves
+///   * anything else (Android): `saves`, as before.
+/// Saves already in a relative `saves/` (where earlier builds wrote them)
+/// are copied over the first time, so nobody loses their slots.
+fn default_saves_dir() -> PathBuf {
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty());
+    let base: Option<PathBuf> = if cfg!(target_os = "macos") {
+        env("HOME").map(|h| h.join("Library").join("Application Support"))
+    } else if cfg!(target_os = "windows") {
+        env("APPDATA")
+    } else if cfg!(target_os = "linux") {
+        env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local").join("share")))
+    } else {
+        None
+    };
+    let Some(base) = base else { return PathBuf::from("saves") };
+    let dir = base.join("BallSwing").join("saves");
+    migrate_old_saves(Path::new("saves"), &dir);
+    dir
+}
+
+/// Copy `profile_*.txt` from `old` into `new`, once: only when `new` holds
+/// no profiles yet. Copied, not moved, so an older build still finds its own.
+fn migrate_old_saves(old: &Path, new: &Path) {
+    let has_profiles = |d: &Path| std::fs::read_dir(d).map(|rd| rd.flatten().any(|e| {
+        e.file_name().to_string_lossy().starts_with("profile_")
+    })).unwrap_or(false);
+    if has_profiles(new) || !has_profiles(old) { return; }
+    if std::fs::create_dir_all(new).is_err() { return; }
+    if let Ok(rd) = std::fs::read_dir(old) {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            if name.to_string_lossy().starts_with("profile_") {
+                let _ = std::fs::copy(e.path(), new.join(&name));
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -740,5 +785,31 @@ pub fn permanent_bonuses() -> PermBonuses {
         start_coins: p.upgrade_level("purse") * COINS_PER_RANK,
         flare_wards: p.upgrade_level("flareward"),
         free_respawns: p.upgrade_level("secondwind"),
+    }
+}
+
+#[cfg(test)]
+mod saves_dir_tests {
+    use super::*;
+
+    /// Old relative saves are copied into the new folder once, and never
+    /// over slots that are already there.
+    #[test]
+    fn old_saves_are_copied_over_once() {
+        let root = std::env::temp_dir().join(format!("bs_migrate_{}", std::process::id()));
+        let (old, new) = (root.join("old"), root.join("new"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("profile_0.txt"), "name=A").unwrap();
+        std::fs::write(old.join("notes.txt"), "x").unwrap();
+        migrate_old_saves(&old, &new);
+        assert_eq!(std::fs::read_to_string(new.join("profile_0.txt")).unwrap(), "name=A");
+        assert!(!new.join("notes.txt").exists(), "only profiles are copied");
+        assert!(old.join("profile_0.txt").exists(), "copied, not moved");
+        // A second run with newer saves in place leaves them alone.
+        std::fs::write(new.join("profile_0.txt"), "name=B").unwrap();
+        migrate_old_saves(&old, &new);
+        assert_eq!(std::fs::read_to_string(new.join("profile_0.txt")).unwrap(), "name=B");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
