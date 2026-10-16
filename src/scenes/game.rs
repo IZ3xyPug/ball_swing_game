@@ -10,16 +10,23 @@ mod visuals;
 mod hud_update;
 mod background;
 mod decor;
-mod nebula;
+pub(crate) mod nebula;
+pub(crate) mod planet;
+pub(crate) mod sky_extras;
+pub(crate) mod water;
 mod aurora;
 mod gravity_wells;
 mod turrets;
 mod gravity_cannon;
 pub(crate) mod boss;
 mod hearts;
+mod second_wind_pop;
+pub(crate) mod mystic_trail;
 mod solar;
 mod eclipse;
-pub use eclipse::eclipse_curve;
+/// The eclipse's darkness curve, for the tests.
+#[cfg(test)]
+pub(crate) use eclipse::eclipse_curve;
 mod fx;
 pub(crate) mod abilities;
 pub(crate) mod death_screen;

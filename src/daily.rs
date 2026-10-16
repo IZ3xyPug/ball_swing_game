@@ -78,43 +78,43 @@ pub fn claim_reward() -> Option<u64> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Modifier {
-    /// The rope reaches 30% further.
-    LongRope,
-    /// The rope is 15% shorter.
+    /// Gravity pulls 35% harder.
+    HeavyGravity,
+    /// The rope is 30% shorter.
     ShortRope,
     /// One heart, no second chances.
     GlassCat,
-    /// The momentum cap is 25% higher.
-    SpeedDemon,
-    /// Coins fly to you from twice as far.
-    MagnetPaws,
-    /// Two extra hearts, but a longer road.
-    ThickSkin,
+    /// The momentum cap is 25% lower.
+    SpeedLimit,
+    /// A solar flare every 25 seconds from the start; no Sunproofing.
+    SolarStorm,
+    /// One heart fewer, and a road 80% longer.
+    LongHaul,
 }
 
 impl Modifier {
     pub const ALL: [Modifier; 6] = [
-        Modifier::LongRope, Modifier::GlassCat, Modifier::SpeedDemon,
-        Modifier::ShortRope, Modifier::MagnetPaws, Modifier::ThickSkin,
+        Modifier::HeavyGravity, Modifier::GlassCat, Modifier::SpeedLimit,
+        Modifier::ShortRope, Modifier::SolarStorm, Modifier::LongHaul,
     ];
     pub fn name(self) -> &'static str {
         match self {
-            Modifier::LongRope => "Long Rope",
+            Modifier::HeavyGravity => "Heavy Gravity",
             Modifier::ShortRope => "Short Rope",
             Modifier::GlassCat => "Glass Cat",
-            Modifier::SpeedDemon => "Speed Demon",
-            Modifier::MagnetPaws => "Magnet Paws",
-            Modifier::ThickSkin => "Thick Skin",
+            Modifier::SpeedLimit => "Speed Limit",
+            Modifier::SolarStorm => "Solar Storm",
+            Modifier::LongHaul => "Long Haul",
         }
     }
     pub fn blurb(self) -> &'static str {
         match self {
-            Modifier::LongRope => "Your rope reaches 30% further.",
-            Modifier::ShortRope => "Your rope is 15% shorter.",
+            Modifier::HeavyGravity => "Gravity pulls 35% harder.",
+            Modifier::ShortRope => "Your rope is 30% shorter.",
             Modifier::GlassCat => "One heart. No second wind.",
-            Modifier::SpeedDemon => "Your top speed is 25% higher.",
-            Modifier::MagnetPaws => "Coins fly to you from twice as far.",
-            Modifier::ThickSkin => "Two extra hearts, but a longer road.",
+            Modifier::SpeedLimit => "Your top speed is 25% lower.",
+            Modifier::SolarStorm => "A solar flare every 25 seconds. No Sunproofing.",
+            Modifier::LongHaul => "One heart fewer, and a much longer road.",
         }
     }
 }
@@ -137,9 +137,9 @@ pub fn challenge_for(day: i64) -> Challenge {
     let modifier = Modifier::ALL[(day.rem_euclid(Modifier::ALL.len() as i64)) as usize];
     // 1.5 to 3 minutes of travel (~18,000 px a minute), in steps of 5,000.
     let base = 27_000.0 + ((h >> 8) % 4) as f32 * 5_000.0;
+    // Every modifier is a handicap now; the goal only grows.
     let goal = match modifier {
-        Modifier::ThickSkin => base + 15_000.0,
-        Modifier::GlassCat => base - 7_000.0,
+        Modifier::LongHaul => base * 1.8,
         _ => base,
     };
     Challenge { day, modifier, goal, reward: 250, seed: h | 1 }
@@ -222,7 +222,8 @@ mod tests {
         assert_ne!(a.modifier, c.modifier);
         for d in 0..60 {
             let ch = challenge_for(20_000 + d);
-            assert!(ch.goal >= 20_000.0 && ch.goal <= 60_000.0, "{}", ch.goal);
+            // LONG HAUL stretches the goal ×1.8.
+            assert!(ch.goal >= 20_000.0 && ch.goal <= 60_000.0 * 1.8, "{}", ch.goal);
         }
     }
 }

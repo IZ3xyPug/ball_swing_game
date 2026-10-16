@@ -2,11 +2,6 @@ use quartz::*;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
-use crate::state::*;
-use crate::images::circle_cached;
-use crate::scenes::game::bootstrap::hook_asteroid_anim_for_spawn;
-use crate::scenes::game::helpers::center_warp_on_player;
-use crate::scenes::game::space_zone::wormhole2_template;
 #[allow(unused_imports)]
 use super::*;
 
@@ -353,7 +348,7 @@ pub(crate) fn tick_generators(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     }
     let mut all_down = true;
     {
-        let mut s = st.lock().unwrap();
+        let s = st.lock().unwrap();
         for i in 0..s.boss_generator_hp.len() {
             if s.boss_generator_hp[i] <= 0 {
                 if let Some(id) = s.boss_generators.get(i).cloned() {

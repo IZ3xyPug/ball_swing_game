@@ -49,7 +49,13 @@ pub fn lcg(s: &mut u64) -> f32 {
 pub fn lcg_range(s: &mut u64, lo: f32, hi: f32) -> f32 { lo + lcg(s) * (hi - lo) }
 
 #[derive(Clone)]
-pub struct HookSpec { pub x: f32, pub y: f32 }
+pub struct HookSpec {
+    pub x: f32,
+    pub y: f32,
+    /// A payoff's launch: the long gap after a speed-building descent. The
+    /// spawner lays a coin trail along the flight to it.
+    pub launch: bool,
+}
 
 /// Tracks a single in-flight spawn-build animation.
 /// Objects drop in from above and ease-rotate to their final position.
@@ -194,6 +200,13 @@ pub struct State {
     pub coin_live:      Vec<String>,
     pub coin_free:      Vec<String>,
     pub coin_rightmost: f32,
+    /// Coin trails owed along payoff launches: (from x, y, to x, y), the two
+    /// nodes as placed.
+    pub reward_arcs: std::collections::VecDeque<(f32, f32, f32, f32)>,
+    /// This run's counts for the lifetime stats page (`profile::RunExtras`).
+    pub run_stats: crate::profile::RunExtras,
+    /// Frames since the cat last let go of (or grabbed) the rope.
+    pub run_air_ticks: u32,
     pub coin_magnet_locked: Vec<String>,
     pub magnet_debug: bool,
 
@@ -870,6 +883,10 @@ pub struct State {
     /// Index of the NEXT scheduled fight (0-based). Advances on each victory,
     /// so `mode::boss_trigger_distance` can drive a whole run of them.
     pub boss_index: u32,
+    /// Bosses beaten this run, counted at the kill (the schedule's
+    /// `boss_index` only advances once the victory stasis is left, so a run
+    /// that ended inside it under-counted).
+    pub bosses_beaten: u32,
     /// Distance the player had travelled when the current fight began, so they
     /// resume the level exactly where they left it rather than at the arena.
     pub boss_return_x: f32,

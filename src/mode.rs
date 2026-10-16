@@ -16,7 +16,7 @@
 
 #![allow(dead_code)]
 
-use crate::difficulty::{DIFFICULTY_FULL_DISTANCE, DIFFICULTY_PX_PER_MINUTE};
+use crate::difficulty::DIFFICULTY_FULL_DISTANCE;
 
 // ── Mode ─────────────────────────────────────────────────────────────────────
 

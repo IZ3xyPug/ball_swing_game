@@ -943,6 +943,8 @@ pub(crate) fn finish_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let generator_ids;
     {
         let mut s = st.lock().unwrap();
+        // Counted once per fight: only a fight that was up.
+        if s.boss_spawned || s.boss_hp > 0 { s.bosses_beaten += 1; }
         s.boss_hp = 0;
         s.boss_spawned = false;
         s.boss_stasis_active = true;

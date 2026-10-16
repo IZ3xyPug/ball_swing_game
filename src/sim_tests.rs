@@ -2571,21 +2571,15 @@ fn the_tail_sweep_is_answered_by_elevation() {
 }
 
 #[test]
-fn the_coil_leaves_gaps_a_player_can_fit_through() {
-    // The coil's counterplay IS the gaps between segments, so the body must not
-    // be a solid wall. Overlapping discs look better but make the signature
-    // attack unavoidable.
-    let gap = SERPENT_SEGMENT_SPACING - SERPENT_SEGMENT_SIZE;
-    assert!(gap > PLAYER_R * 2.0, "gap is {gap}px against a player {}px across", PLAYER_R * 2.0);
-    // But not so wide that the body stops reading as one creature.
-    assert!(
-        SERPENT_SEGMENT_SPACING < SERPENT_SEGMENT_SIZE * 2.0,
-        "segments this far apart read as a string of beads, not a serpent"
-    );
-    // And the whole body still has to fit inside the coil it forms.
+fn the_coil_leaves_an_opening_a_player_can_escape_through() {
+    // The sections touch (one connected body, no gaps), so the way out of a
+    // coil is the stretch of the ring the body does not reach.
+    assert!(SERPENT_SEGMENT_SPACING <= SERPENT_SEGMENT_SIZE, "the sections must touch");
     let body = (SERPENT_SEGMENTS + 1) as f32 * SERPENT_SEGMENT_SPACING;
     let ring = std::f32::consts::TAU * SERPENT_COIL_CLOSE;
-    assert!(body < ring, "the body ({body:.0}px) is longer than the closed ring ({ring:.0}px)");
+    let opening = ring - body;
+    assert!(opening > PLAYER_R * 2.0 * 6.0,
+        "the closed coil leaves only {opening:.0}px open against a player {}px across", PLAYER_R * 2.0);
 }
 
 

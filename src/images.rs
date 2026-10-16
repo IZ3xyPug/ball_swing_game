@@ -960,8 +960,8 @@ pub fn pause_overlay_img() -> image::RgbaImage {
     // the first thing to blow past a phone's 4096 texture limit, which is the
     // validation error that aborted the Android build at launch.
     let mut img = image::RgbaImage::new(2, 2);
-    // Deep navy, as the menus are.
-    draw_rect(&mut img, 0, 0, 2, 2, [4, 8, 22, 190]);
+    // Midnight, as the menus are.
+    draw_rect(&mut img, 0, 0, 2, 2, [8, 5, 24, 200]);
     img
 }
 
@@ -1267,6 +1267,13 @@ pub fn hearts_img(full: u32, max: u32) -> image::RgbaImage {
         let c = if i < full { C_HEART_FULL } else { C_HEART_EMPTY };
         draw_heart(&mut img, i * (w + gap), 0, w, h, c);
     }
+    img
+}
+
+/// One full pixel-art heart, `w` x `h` (the SECOND WIND pop).
+pub fn big_heart_img(w: u32, h: u32) -> image::RgbaImage {
+    let mut img = image::RgbaImage::new(w.max(1), h.max(1));
+    draw_heart(&mut img, 0, 0, w, h, crate::constants::C_HEART_FULL);
     img
 }
 
@@ -1589,6 +1596,36 @@ pub fn serpent_segment_cached(size: u32, seam_step: u32) -> Arc<image::RgbaImage
             .or_insert_with(|| Arc::new(serpent_segment(size, seam_step as f32 / SERPENT_SEAM_STEPS as f32)))
             .clone()
     })
+}
+
+/// The Serpent's joint: a ribbed metal shaft joining one plate to the next,
+/// the body's violet seam glowing along it. Very wide for its height, and
+/// even along its length: the renderer fills a box by cropping an image to
+/// it, so whatever length a joint is drawn at it crops only along the shaft.
+pub fn serpent_link() -> Arc<image::RgbaImage> {
+    static I: std::sync::OnceLock<Arc<image::RgbaImage>> = std::sync::OnceLock::new();
+    I.get_or_init(|| {
+        let (w, h) = (1024u32, 64u32);
+        Arc::new(image::RgbaImage::from_fn(w, h, |x, y| {
+            let v = (y as f32 + 0.5) / h as f32 * 2.0 - 1.0; // -1 top .. 1 bottom
+            if v.abs() > 1.0 { return image::Rgba([0, 0, 0, 0]); }
+            // A round shaft: lit from above, dark underneath.
+            let shade = (1.0 - v * v).sqrt() * (0.75 - 0.35 * v);
+            let base = 70.0 + 120.0 * shade;
+            // Collars every so often, a groove between.
+            let rib = ((x as f32 / 22.0) * std::f32::consts::TAU).cos();
+            let collar = if rib > 0.82 { 28.0 } else if rib < -0.9 { -24.0 } else { 0.0 };
+            let g = (base + collar).clamp(20.0, 230.0);
+            let mut c = [g * 0.96, g * 0.97, g * 1.04];
+            // The seam's glow along its middle.
+            let seam = (-(v / 0.14).powi(2)).exp();
+            c = [c[0] + 150.0 * seam, c[1] + 60.0 * seam, c[2] + 255.0 * seam];
+            // Dark outline, as the plates have.
+            let edge = ((v.abs() - 0.86) / 0.14).clamp(0.0, 1.0);
+            c = [c[0] * (1.0 - edge * 0.85), c[1] * (1.0 - edge * 0.85), c[2] * (1.0 - edge * 0.85)];
+            image::Rgba([c[0].min(255.0) as u8, c[1].min(255.0) as u8, c[2].min(255.0) as u8, 255])
+        }))
+    }).clone()
 }
 
 /// Quantisation of the seam glow. Eight steps is smooth enough that the pulse

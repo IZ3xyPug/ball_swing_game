@@ -153,6 +153,29 @@ pub const ROPE_STYLE_SWATCHES: &[(u8, u8, u8)] = &[
     (255, 110, 30), (150, 60, 255), (50, 255, 130), (130, 255, 225), (160, 255, 70), (110, 140, 255), (255, 105, 120),
 ];
 
+/// How much wider than its `beam` a style's rope is drawn so the part you can
+/// actually see is never thinner than the classic ENERGY rope.
+///
+/// A tile's art fills only part of its width — HELIX and PLASMA CHAIN draw
+/// a 12 px strand down the middle of a 64 px tile, so at their `beam` the
+/// rope you saw was ~26 px against ENERGY's ~60. Measured from the tile's
+/// opaque columns once per style; the pattern's length is scaled by the
+/// same factor so the art keeps its proportions.
+pub fn rope_beam_scale(style_idx: usize) -> f32 {
+    const MIN_VISIBLE: f32 = 64.0;
+    static CACHE: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    let v = CACHE.get_or_init(|| ROPE_STYLES.iter().map(|s| {
+        let Some(bytes) = s.frames.first() else { return 1.0 };
+        let Ok(img) = image::load_from_memory(bytes) else { return 1.0 };
+        let img = img.to_rgba8();
+        let (w, h) = img.dimensions();
+        let cols = (0..w).filter(|&x| (0..h).any(|y| img.get_pixel(x, y)[3] > 60)).count() as f32;
+        let visible = s.beam * cols / w.max(1) as f32;
+        if visible <= 0.0 { 1.0 } else { (MIN_VISIBLE / visible).clamp(1.0, 3.0) }
+    }).collect());
+    v.get(style_idx).copied().unwrap_or(1.0)
+}
+
 pub fn rope_key(style: usize) -> String {
     format!("rope:{}", ROPE_STYLES.get(style).map(|s| s.id).unwrap_or("energy"))
 }
@@ -249,11 +272,10 @@ fn apply_exposure(src: &image::RgbaImage, gamma: f32, scale: f32) -> image::Rgba
 
 /// The colour a style is drawn in: rope colour `color_idx` (its `rgb`), or
 /// the style's signature for colour 0, ORIGINAL.
+/// Recolouring was removed, so every style is drawn in its own signature.
 pub fn rope_tint(style: usize, color_idx: usize, rgb: (u8, u8, u8)) -> (u8, u8, u8) {
-    match ROPE_STYLES.get(style) {
-        Some(s) if color_idx == 0 => s.signature,
-        _ => rgb,
-    }
+    let _ = (color_idx, rgb);
+    ROPE_STYLES.get(style).map_or(rgb, |s| s.signature)
 }
 
 /// The source tiles' edge, in px.
@@ -358,7 +380,7 @@ pub struct CatSkin {
 /// Characters before the breeds: the calico and six colours
 /// (`PLAYER_CHAR_COLORS[..FIRST_SKIN_CHAR]`). Breeds follow, in this order,
 /// which is SAVED — only ever append.
-pub const FIRST_SKIN_CHAR: usize = 7;
+pub const FIRST_SKIN_CHAR: usize = 1;
 
 pub const CAT_SKINS: &[CatSkin] = &[
     CatSkin { id: "ginger", name: "GINGER", price: Price::Meta(150), swatch: (230, 140, 60),
@@ -499,9 +521,11 @@ mod tests {
     }
 
     #[test]
-    fn original_wears_the_signature_and_other_colours_win() {
+    fn every_rope_wears_its_own_colour() {
+        // Recolouring was removed: whatever colour slot is passed, a style
+        // is drawn in its signature.
         assert_eq!(rope_tint(6, 0, (1, 2, 3)), ROPE_STYLES[6].signature);
-        assert_eq!(rope_tint(6, 4, (1, 2, 3)), (1, 2, 3));
+        assert_eq!(rope_tint(6, 4, (1, 2, 3)), ROPE_STYLES[6].signature);
     }
 
     #[test]

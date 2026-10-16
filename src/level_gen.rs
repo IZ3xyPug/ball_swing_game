@@ -101,11 +101,32 @@ pub fn starter_hooks() -> [(f32, f32); STARTER_HOOK_COUNT] {
 // ── Generator ────────────────────────────────────────────────────────────────
 
 const PATTERN_KINDS: usize = 7;
+const K_WAVE: usize = 0;
+const K_CLIMB: usize = 1;
+const K_DESCENT: usize = 2;
+const K_ARCH: usize = 3;
+const K_VALLEY: usize = 4;
+const K_GLIDE: usize = 5;
+const K_ZIGZAG: usize = 6;
 
-/// The run of nodes being generated: its shape, where it is in it, how long
-/// it is, the height it started from, and its spacing.
+/// Pacing: what a run of nodes is FOR. Runs cycle through the roles in
+/// order, so play rises and falls instead of sitting at one pitch:
+///   Breather  wide, gentle, a level line: room to breathe and line up;
+///   Build     the curve's own difficulty, any shape;
+///   Crux      short and sharp: the longest strides and steepest changes
+///             the curve allows here, still always inside the reach;
+///   Payoff    a descent that builds speed into one long launch, a trail of
+///             coins along the flight. Nailing the crux is paid for here.
+/// The cycle tightens with the curve (shorter breathers, longer cruxes late)
+/// but keeps its shape, so a late run still has places to recover.
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+pub enum Role { #[default] Breather, Build, Crux, Payoff }
+
+/// The run of nodes being generated: its shape, its role, where it is in it,
+/// how long it is, the height it started from, and its spacing; and how many
+/// builds are left before the next crux.
 #[derive(Default)]
-struct Pattern { kind: usize, step: usize, len: usize, anchor: f32, dx: f32 }
+struct Pattern { kind: usize, role: Role, step: usize, len: usize, anchor: f32, dx: f32, builds_left: usize, started: bool }
 
 thread_local! {
     static PATTERN: std::cell::RefCell<Pattern> = std::cell::RefCell::new(Pattern::default());
@@ -116,12 +137,20 @@ pub fn reset_patterns() {
     PATTERN.with(|p| *p.borrow_mut() = Pattern::default());
 }
 
+/// The role of the run the last node came from (for tests and tuning).
+pub fn current_role() -> Role { PATTERN.with(|p| p.borrow().role) }
+
+fn pick(seed: &mut u64, from: &[usize], not: usize) -> usize {
+    let mut k = from[(lcg_range(seed, 0.0, from.len() as f32) as usize).min(from.len() - 1)];
+    if k == not && from.len() > 1 { k = from[(from.iter().position(|&x| x == k).unwrap() + 1) % from.len()]; }
+    k
+}
+
 /// Generate the next grab node as a single hop from `(head_x, head_y)`,
 /// advancing the head to the new position.
 ///
-/// `distance_px` drives the difficulty curve: stride grows from ~58% to ~97% of
-/// the horizontal reach, and the share of the vertical budget a hop may spend
-/// grows from 45% to 100%, over `difficulty::DIFFICULTY_FULL_DISTANCE`.
+/// `distance_px` drives the difficulty curve (stride ~0.76-0.95 of the reach,
+/// vertical budget 45-100%); the run's `Role` bends that up or down locally.
 pub fn generate_next_hook(
     seed: &mut u64,
     head_x: &mut f32,
@@ -130,79 +159,101 @@ pub fn generate_next_hook(
 ) -> HookSpec {
     let t = difficulty_t(distance_px);
 
-    // ── Horizontal stride ────────────────────────────────────────────────────
-    // Both ends are interpolated, so `lo <= hi` holds for every t. The previous
-    // implementation added a flat bonus to the minimum and then clamped only
-    // the maximum, so past a certain distance the minimum overtook the maximum
-    // and `lcg_range` ran with its bounds inverted.
+    // ── The curve's own stride and vertical budget ──────────────────────────
     let lo = lerp(HOOK_STRIDE_FRAC_EASY_MIN, HOOK_STRIDE_FRAC_HARD_MIN, t) * HOP_REACH_X;
     let hi = lerp(HOOK_STRIDE_FRAC_EASY_MAX, HOOK_STRIDE_FRAC_HARD_MAX, t) * HOP_REACH_X;
-    let dx = lcg_range(seed, lo.min(hi), hi.max(lo));
-
-    // ── Vertical offset ──────────────────────────────────────────────────────
-    // The budget is whatever the envelope allows at this dx, scaled by how far
-    // into the run we are. Direction is picked first so the magnitude is drawn
-    // against the budget that direction actually has — up and down differ.
+    let (lo, hi) = (lo.min(hi), hi.max(lo));
     let vert_frac = lerp(HOOK_VERT_FRAC_EASY, HOOK_VERT_FRAC_HARD, t);
-    let (up_budget, down_budget) = hop_dy_budget(dx);
-    // HOP_REACH_MARGIN keeps a proposal off the exact boundary. Without it the
-    // top of the range lands on the envelope edge, and the strict check that
-    // guards this (in tests, and in the spawner's backstop) sees a hop fail by
-    // a fraction of a pixel of float error.
-    let up = up_budget * vert_frac * HOP_REACH_MARGIN;
-    let down = down_budget * vert_frac * HOP_REACH_MARGIN;
+    // The longest stride a node may ever sit at (the crux's and the launch's).
+    let reach_max = HOOK_STRIDE_FRAC_HARD_MAX * HOP_REACH_X;
 
-    // ── Pattern ──────────────────────────────────────────────────────────────
-    // Nodes come in runs of 4-8 that follow one shape at one steady spacing
-    // (a wave, a climb, an arch...), so the line reads as designed rather
-    // than random, then the next run picks another. The shape proposes a
-    // height; the envelope decides how much of it this hop may take.
-    let (kind, step, len, anchor, dx_run) = PATTERN.with(|p| {
+    // ── The run: its role, shape, length and rhythm ─────────────────────────
+    let (kind, role, step, len, anchor, dx_run) = PATTERN.with(|p| {
         let mut p = p.borrow_mut();
-        if p.step >= p.len {
-            // Not the same shape twice running.
-            let mut k = (lcg_range(seed, 0.0, PATTERN_KINDS as f32) as usize).min(PATTERN_KINDS - 1);
-            if k == p.kind { k = (k + 1) % PATTERN_KINDS; }
-            p.kind = k;
+        if !p.started || p.step >= p.len {
+            let first = !p.started;
+            p.started = true;
+            // The next role in the cycle.
+            p.role = if first { Role::Breather } else {
+                match p.role {
+                    Role::Breather => { p.builds_left = 1 + (lcg_range(seed, 0.0, 1.99 - t) as usize); Role::Build }
+                    Role::Build if p.builds_left > 1 => { p.builds_left -= 1; Role::Build }
+                    Role::Build => Role::Crux,
+                    Role::Crux => Role::Payoff,
+                    Role::Payoff => Role::Breather,
+                }
+            };
+            let prev = p.kind;
+            let (kind, len, dx) = match p.role {
+                // Breathers shorten as the run goes on (5-6 nodes early, 3-4
+                // late) but never vanish.
+                Role::Breather => (pick(seed, &[K_GLIDE, K_ARCH, K_VALLEY], prev),
+                    lcg_range(seed, lerp(5.0, 3.0, t), lerp(6.99, 4.99, t)) as usize,
+                    lerp(lo, hi, 0.1)),
+                Role::Build => (pick(seed, &[K_WAVE, K_CLIMB, K_DESCENT, K_ARCH, K_VALLEY, K_ZIGZAG], prev),
+                    lcg_range(seed, 4.0, 6.99) as usize,
+                    lcg_range(seed, lo, hi)),
+                // Cruxes lengthen late (3 nodes early, up to 5).
+                Role::Crux => (pick(seed, &[K_ZIGZAG, K_CLIMB, K_WAVE], prev),
+                    lcg_range(seed, 3.0, lerp(3.99, 5.99, t)) as usize,
+                    lerp(hi, reach_max, 0.55)),
+                Role::Payoff => (K_DESCENT, 4, lerp(lo, hi, 0.5)),
+            };
+            p.kind = kind;
+            p.len = len.max(2);
             p.step = 0;
-            p.len = lcg_range(seed, 4.0, 8.99) as usize;
             p.anchor = *head_y;
             p.dx = dx;
         }
-        let out = (p.kind, p.step, p.len, p.anchor, p.dx);
+        let out = (p.kind, p.role, p.step, p.len, p.anchor, p.dx);
         p.step += 1;
         out
     });
-    // One spacing for the whole run: its rhythm.
-    let dx = dx_run.clamp(lo.min(hi), hi.max(lo));
+
+    // The payoff's last node is its launch: the longest stride, level with
+    // the bottom of the descent (a long gap has no vertical budget left).
+    let launch = role == Role::Payoff && step + 1 == len;
+    let dx = if launch { reach_max } else { dx_run.clamp(lo.min(reach_max), reach_max) };
+    // How much of the vertical budget this run spends: calmer in a breather,
+    // all of it in a crux.
+    let vf = match role {
+        Role::Breather => vert_frac * 0.5,
+        Role::Crux => (vert_frac + 0.3).min(1.0),
+        _ => vert_frac,
+    };
     let (up_budget, down_budget) = hop_dy_budget(dx);
-    let up = up_budget * vert_frac * HOP_REACH_MARGIN;
-    let down = down_budget * vert_frac * HOP_REACH_MARGIN;
+    let up = up_budget * vf * HOP_REACH_MARGIN;
+    let down = down_budget * vf * HOP_REACH_MARGIN;
     let k = step as f32 / (len.max(2) - 1) as f32;          // 0..1 along the run
-    let amp = (HOOK_Y_MAX - HOOK_Y_MIN) * 0.30 * (0.6 + 0.4 * vert_frac);
+    let amp = (HOOK_Y_MAX - HOOK_Y_MIN) * 0.30 * (0.6 + 0.4 * vf);
     let mid = (HOOK_Y_MIN + HOOK_Y_MAX) * 0.5;
-    // Where the shape wants this node (world y; up is negative).
-    // Each run drifts back toward the middle of the band, so the line never
-    // parks against the top or the bottom; a climb that starts high turns
-    // into a descent (and the other way round), so it has room.
+    // Where the shape wants this node (world y; up is negative). Each run
+    // drifts back toward the middle of the band, so the line never parks
+    // against the top or the bottom; a climb that starts high turns into a
+    // descent (and the other way round), so it has room.
     let anchor = anchor + (mid - anchor) * 0.45 * k;
     let room_up = anchor - HOOK_Y_MIN;
     let room_down = HOOK_Y_MAX - anchor;
     let kind = match kind {
-        1 if room_up < amp * 1.2 => 2,
-        2 if room_down < amp * 1.2 => 1,
-        3 if room_up < amp => 4,
-        4 if room_down < amp => 3,
+        K_CLIMB if room_up < amp * 1.2 => K_DESCENT,
+        // A payoff always gets its drop: from high up if it has to.
+        K_DESCENT if room_down < amp * 1.2 && role != Role::Payoff => K_CLIMB,
+        K_ARCH if room_up < amp => K_VALLEY,
+        K_VALLEY if room_down < amp => K_ARCH,
         k => k,
     };
-    let target = match kind {
-        0 => anchor + amp * (k * std::f32::consts::TAU).sin(),            // wave
-        1 => anchor - amp * 1.4 * k,                                       // climb
-        2 => anchor + amp * 1.4 * k,                                       // descent
-        3 => anchor - amp * (k * std::f32::consts::PI).sin() * 1.3,        // arch
-        4 => anchor + amp * (k * std::f32::consts::PI).sin() * 1.3,        // valley
-        5 => anchor + (mid - anchor) * 0.15,                               // glide (level)
-        _ => anchor + if step % 2 == 0 { -amp * 0.8 } else { amp * 0.8 },  // zigzag
+    let target = if launch {
+        *head_y
+    } else {
+        match kind {
+            K_WAVE => anchor + amp * (k * std::f32::consts::TAU).sin(),
+            K_CLIMB => anchor - amp * 1.4 * k,
+            K_DESCENT => anchor + amp * 1.4 * k,
+            K_ARCH => anchor - amp * (k * std::f32::consts::PI).sin() * 1.3,
+            K_VALLEY => anchor + amp * (k * std::f32::consts::PI).sin() * 1.3,
+            K_GLIDE => anchor + (mid - anchor) * 0.15,
+            _ => anchor + if step % 2 == 0 { -amp * 0.8 } else { amp * 0.8 },
+        }
     };
     // Keep the shape on the playable band, then inside this hop's envelope.
     let target = target.clamp(HOOK_Y_MIN + 40.0, HOOK_Y_MAX - 40.0);
@@ -213,7 +264,7 @@ pub fn generate_next_hook(
     // never lengthen one past the envelope.
     *head_y = (*head_y + dy).clamp(HOOK_Y_MIN, HOOK_Y_MAX);
 
-    HookSpec { x: *head_x, y: *head_y }
+    HookSpec { x: *head_x, y: *head_y, launch }
 }
 
 #[cfg(test)]
@@ -230,7 +281,41 @@ mod pattern_tests {
         let d = std::env::var("HOOK_PLOT_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
         for _ in 0..60 {
             let h = generate_next_hook(&mut seed, &mut x, &mut y, d);
-            println!("NODE {} {}", h.x, h.y);
+            println!("NODE {} {} {:?}{}", h.x, h.y, current_role(), if h.launch { " LAUNCH" } else { "" });
+        }
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::*;
+    use crate::difficulty::DIFFICULTY_FULL_DISTANCE;
+
+    /// Every role turns up, in the cycle's order, early and late in a run;
+    /// every hop stays reachable; and each payoff ends in exactly one launch.
+    #[test]
+    fn the_runs_cycle_through_their_roles_and_stay_reachable() {
+        for d in [0.0, DIFFICULTY_FULL_DISTANCE * 0.5, DIFFICULTY_FULL_DISTANCE] {
+            reset_patterns();
+            let (mut seed, mut x, mut y) = (0xC0FFEEu64, 0.0f32, (HOOK_Y_MIN + HOOK_Y_MAX) * 0.5);
+            let mut seen = Vec::new();
+            let mut launches = 0;
+            for _ in 0..400 {
+                let (px, py) = (x, y);
+                let h = generate_next_hook(&mut seed, &mut x, &mut y, d);
+                assert!(hop_is_reachable(h.x - px, h.y - py), "unreachable hop at d={d}: ({px},{py}) -> ({},{})", h.x, h.y);
+                let r = current_role();
+                if seen.last() != Some(&r) { seen.push(r); }
+                if h.launch { launches += 1; assert_eq!(r, Role::Payoff); }
+            }
+            for r in [Role::Breather, Role::Build, Role::Crux, Role::Payoff] { assert!(seen.contains(&r), "{r:?} never came at d={d}"); }
+            let payoffs = seen.iter().filter(|r| **r == Role::Payoff).count();
+            assert!(launches >= payoffs.saturating_sub(1) && launches <= payoffs, "{launches} launches for {payoffs} payoffs");
+            // Order: a crux is always followed by a payoff, a payoff by a breather.
+            for w in seen.windows(2) {
+                if w[0] == Role::Crux { assert_eq!(w[1], Role::Payoff); }
+                if w[0] == Role::Payoff { assert_eq!(w[1], Role::Breather); }
+            }
         }
     }
 }

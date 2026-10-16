@@ -23,8 +23,9 @@ const ID: &str = "aurora";
 /// earth photo (row ~1,600) up about 0.7 screen heights. The shader floats
 /// the arc's lower edge a little above its bottom (the limb), with clear
 /// atmosphere between, as in the reference backdrop.
-pub const AURORA_TOP_ROW: f32 = 1090.0;
-pub const AURORA_BOTTOM_ROW: f32 = 1660.0;
+/// (Moved down 60 rows: it sat a touch high over the limb.)
+pub const AURORA_TOP_ROW: f32 = 1150.0;
+pub const AURORA_BOTTOM_ROW: f32 = 1720.0;
 /// Width, as a multiple of the sky image's (centred, room for its faded ends).
 pub const AURORA_WIDTH: f32 = 2.0;
 /// Sideways drift, in sky-image px per px of forward travel: nearer than
@@ -127,7 +128,15 @@ pub fn tick_aurora(c: &mut Canvas, st: &Arc<Mutex<State>>, t: &mut AuroraTick) {
     let key_down = c.key(AURORA_KEY);
     let pressed = key_down && !t.key_was_down;
     t.key_was_down = key_down;
-    let strength = if std::env::var("AURORA_ON").is_ok() { 1.0 } else { t.advance(pressed) };
+    // The displays are the ICE WORLD's: only over it does the clock run
+    // (twice as fast, so they come every couple of minutes). The key still
+    // calls one up anywhere, for looking at it.
+    let ice = crate::sky::PLANETS[crate::sky::planet_of(c)].aurora;
+    let idle = !t.showing && t.fade <= 0.0;
+    if ice && idle { t.next_in -= 1.0 / 60.0; }
+    let strength = if std::env::var("AURORA_ON").is_ok() { 1.0 }
+        else if !ice && idle && !pressed { 0.0 }
+        else { t.advance(pressed) };
     let show = !no_sky && !boss && strength > 0.0 && crate::graphics::aurora_enabled();
     c.set_var("aurora_up", show && strength > 0.5);
     let Some(((x, y), (w, h))) = c.get_game_object("bg").map(|o| (o.position, o.size)) else { return };
@@ -137,10 +146,15 @@ pub fn tick_aurora(c: &mut Canvas, st: &Arc<Mutex<State>>, t: &mut AuroraTick) {
         return;
     }
     t.time = (t.time + 1.0 / 60.0) % CLOCK_WRAP;
-    // Forward travel only; a jump of 2,000 px or more is a warp or respawn.
-    let dx = t.prev_px.map_or(0.0, |p| px - p);
-    t.prev_px = Some(px);
-    let forward = if dx.abs() > 2_000.0 { 0.0 } else { dx.max(0.0) };
+    // Drift with the CAMERA, not the player: the sky it lies on follows the
+    // camera, which smooths the swing, so following the player's own motion
+    // made it shudder against the sky with every lurch of the swing. Both
+    // ways, as parallax does; a jump of 2,000 px or more is a warp or respawn.
+    let _ = px;
+    let cam_x = c.camera().map_or(0.0, |cam| cam.position.0);
+    let dx = t.prev_px.map_or(0.0, |p| cam_x - p);
+    t.prev_px = Some(cam_x);
+    let forward = if dx.abs() > 2_000.0 { 0.0 } else { dx };
     let layer_w = VW * AURORA_WIDTH;
     t.scroll += forward * AURORA_PARALLAX;
 
@@ -151,8 +165,11 @@ pub fn tick_aurora(c: &mut Canvas, st: &Arc<Mutex<State>>, t: &mut AuroraTick) {
     let (qw, qh) = (layer_w * sx, (bottom - top) * sy);
     let qx = x + (VW - layer_w) / 2.0 * sx;
     if let Some(obj) = c.get_game_object_mut(ID) {
-        obj.position = (qx.round(), ry.round());
-        obj.size = (qw.round(), qh.round());
+        // Exact, not rounded: the sky under it moves by fractions of a
+        // pixel, and rounding the quad's place and size separately made it
+        // shuffle a pixel against the sky and rescale the effect each frame.
+        obj.position = (qx, ry);
+        obj.size = (qw, qh);
         obj.rotation = if flipped { 180.0 } else { 0.0 };
         obj.visible = true;
     }

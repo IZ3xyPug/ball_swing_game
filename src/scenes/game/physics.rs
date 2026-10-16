@@ -268,8 +268,11 @@ pub fn tick_rope_constraint(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let frame = crate::cosmetics::rope_frame(style, t);
     let rgb = crate::cosmetics::rope_tint(style_idx, rope_sel_idx as usize, rope_rgb);
     let Some(tile) = crate::cosmetics::rope_tile(style_idx, frame, rgb) else { return };
-    let beam = style.beam;
-    let reps = rope_draw_len / style.cell_len().max(1.0);
+    // Widened (with the pattern's length) so no style reads thinner than
+    // the classic rope (`cosmetics::rope_beam_scale`).
+    let k = crate::cosmetics::rope_beam_scale(style_idx);
+    let beam = style.beam * k;
+    let reps = rope_draw_len / (style.cell_len() * k).max(1.0);
     let phase = t * style.flow - reps;
     if let Some(rope_obj) = c.get_game_object_mut("rope") {
         rope_obj.size = (beam, rope_draw_len);
@@ -344,6 +347,13 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 Some(Value::I32(v)) => v.max(0),
                 _ => 0,
             };
+            // Ability OVERDRIVE: the cap lifted after a boost, easing back.
+            let od = c.get_i32("ab_overdrive_ticks");
+            let od_lift = if od > 0 {
+                c.set_var("ab_overdrive_ticks", od - 1);
+                let m = c.get_f32("ab_overdrive_mult").max(1.0);
+                1.0 + (m - 1.0) * od as f32 / crate::scenes::game::abilities::OVERDRIVE_TICKS as f32
+            } else { 1.0 };
             if post_bounce {
                 c.set_var("post_bounce", false);
             } else if special_hook_ticks > 0 {
@@ -351,7 +361,7 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     SPACE_MOMENTUM_CAP
                 } else {
                     SPECIAL_HOOK_MOMENTUM_CAP
-                };
+                } * od_lift;
                 let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
                 if speed > cap {
                     s.vx = s.vx / speed * cap;
@@ -359,7 +369,7 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
                 c.set_var("special_hook_boost_ticks", special_hook_ticks - 1);
             } else {
-                let cap = crate::gameplay::player_max_momentum(&s);
+                let cap = crate::gameplay::player_max_momentum(&s) * od_lift;
                 let speed = (s.vx*s.vx + s.vy*s.vy).sqrt();
                 if speed > cap {
                     s.vx = s.vx / speed * cap;
@@ -368,6 +378,20 @@ pub fn cap_momentum_and_write_back(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
     }
+
+    // Lifetime stats: top speed (not the rocket pad's launch, which is off
+    // any scale a player can reach) and the longest stretch off the rope.
+    if !s.dead && !s.space_launch_active && !s.in_space_mode {
+        let speed = (s.vx * s.vx + s.vy * s.vy).sqrt();
+        s.run_stats.top_speed = s.run_stats.top_speed.max(speed);
+        if s.hooked {
+            s.run_air_ticks = 0;
+        } else {
+            s.run_air_ticks += 1;
+            s.run_stats.best_air_ticks = s.run_stats.best_air_ticks.max(s.run_air_ticks);
+        }
+    }
+    if s.in_space_mode { s.run_stats.went_to_space = true; }
 
     let (px, py, vx, vy) = (s.px, s.py, s.vx, s.vy);
     drop(s);

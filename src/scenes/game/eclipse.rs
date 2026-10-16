@@ -421,7 +421,7 @@ fn drive_darkness(c: &mut Canvas, dark: f32) {
 
 // ── Lights ───────────────────────────────────────────────────────────────────
 
-fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, px: f32, py: f32, dark: f32) {
+fn drive_lights(c: &mut Canvas, st: &Arc<Mutex<State>>, _px: f32, _py: f32, dark: f32) {
     if !ECLIPSE_USE_POINT_LIGHTS {
         return;
     }

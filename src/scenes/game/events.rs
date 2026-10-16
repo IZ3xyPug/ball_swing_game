@@ -138,6 +138,7 @@ pub fn register_events(canvas: &mut Canvas, state: &Arc<Mutex<State>>) {
             }
 
             s.hooked = true;
+            s.run_stats.grabs += 1;
             crate::achievements::on_grab();
             super::juice::on_grab(c, (pvx * pvx + pvy * pvy).sqrt());
             s.hook_x = hx;
@@ -273,13 +274,16 @@ pub fn register_mouse_handlers(canvas: &mut Canvas) {
             c.set_var("mouse_left_held", held);
             return;
         }
-        // A press on the ability button fires the ability, not the swing.
-        if crate::scenes::game::abilities::active(c)
-            && crate::scenes::game::abilities::on_button(c.input_to_unzoomed(pos))
-        {
-            return;
+        // On a computer the mouse does not swing: SPACE swings, and a click
+        // anywhere fires the equipped ability (`abilities::register_input`).
+        // The one exception is the start screen, where HOLDING the mouse
+        // starts the run as SPACE does. Without it a window that never got
+        // keyboard focus (a double-clicked build on macOS) could not be
+        // started at all. The launch clears the flag, so it never swings.
+        let _ = pos;
+        if c.get_bool("start_prompt_active") {
+            c.set_var("mouse_left_held", true);
         }
-        c.set_var("mouse_left_held", true);
     });
     canvas.on_mouse_release(move |c, btn, _pos| {
         if btn != MouseButton::Left { return; }

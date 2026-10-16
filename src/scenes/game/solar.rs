@@ -319,7 +319,7 @@ fn draw_shield_domes(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         return;
     }
 
-    let (phase, hooks, px, py, sheltered, ticks, previously_shielded, buffed, titan) = {
+    let (phase, hooks, px, _py, sheltered, ticks, previously_shielded, buffed, titan) = {
         let s = st.lock().unwrap();
         (
             flare_phase(&s),

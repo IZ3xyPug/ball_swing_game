@@ -426,7 +426,7 @@ pub fn tick_cannons(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 phase.state = CannonState::Capturing { seq_idx: new_seq, frame_timer: new_timer };
             }
 
-            CannonState::WaitingChoice { mut ticks } => {
+            CannonState::WaitingChoice { ticks } => {
                 let obj_pos = c.get_game_object(&phase.id).map(|o| o.position);
                 if let Some(pos) = obj_pos {
                     let mouth = barrel_mouth_world(pos, phase.rotation);

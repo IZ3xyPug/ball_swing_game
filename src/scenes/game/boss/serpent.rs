@@ -3,9 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::state::*;
-use crate::images::circle_cached;
-use crate::scenes::game::bootstrap::hook_asteroid_anim_for_spawn;
-use crate::scenes::game::helpers::center_warp_on_player;
 use crate::scenes::game::space_zone::wormhole2_template;
 #[allow(unused_imports)]
 use super::*;
@@ -552,7 +549,7 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // hit radii; `draw` is how big it is on screen this frame, which shrinks to
     // nothing as it funnels into a rift. Keeping them apart is what stops the
     // funnel from rasterising a fresh sprite at every intermediate pixel size.
-    struct Piece { idx: usize, id: &'static str, pos: (f32, f32), rot: f32,
+    struct Piece { idx: usize, id: &'static str, chain: usize, pos: (f32, f32), rot: f32,
                    size: f32, draw: f32, shielded: bool, seam: f32, open: bool }
     let pieces: Vec<Piece> = {
         let s = st.lock().unwrap();
@@ -612,7 +609,7 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // is a second, independent gate on top of that.
             let banded = p.id == "seg" && serpent_shielded_now(chain, band, span);
             out.push(Piece {
-                idx: i, id, pos, rot, size, draw,
+                idx: i, id, chain, pos, rot, size, draw,
                 shielded: p.shielded || banded,
                 seam: if p.shielded { 0.0 } else { serpent_seam(chain, band, span) },
                 // Hittable only once the plating has actually opened. The glow
@@ -700,6 +697,38 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             let name = format!("serpent_part_{i}");
             c.clear_effect(&name);
             if let Some(obj) = c.get_game_object_mut(&name) { obj.visible = false; }
+        }
+    }
+
+    // The joints: one between each piece and the next along the chain (not
+    // during a lash, where the spine is the link).
+    {
+        let mut order: Vec<&Piece> = pieces.iter().filter(|p| p.draw > 1.0).collect();
+        order.sort_by_key(|p| p.chain);
+        let mut used = 0;
+        if lash.is_none() {
+            for pair in order.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                if b.chain != a.chain + 1 { continue; }
+                // A launched tail has left the body: nothing joins it.
+                if act == SerpentAct::TailLaunch && (a.id == "tail" || b.id == "tail") { continue; }
+                let (dx, dy) = (b.pos.0 - a.pos.0, b.pos.1 - a.pos.1);
+                let len = (dx * dx + dy * dy).sqrt();
+                if len < 1.0 { continue; }
+                // As thick as the smaller piece allows; its ends tuck under both.
+                let thick = a.draw.min(b.draw) * SERPENT_LINK_THICKNESS;
+                let mid = ((a.pos.0 + b.pos.0) * 0.5, (a.pos.1 + b.pos.1) * 0.5);
+                if let Some(obj) = c.get_game_object_mut(&format!("serpent_link_{used}")) {
+                    obj.size = (len, thick);
+                    obj.position = (mid.0 - len * 0.5, mid.1 - thick * 0.5);
+                    obj.rotation = dy.atan2(dx).to_degrees();
+                    obj.visible = true;
+                }
+                used += 1;
+            }
+        }
+        for i in used..(SERPENT_SEGMENTS + 1) {
+            if let Some(obj) = c.get_game_object_mut(&format!("serpent_link_{i}")) { obj.visible = false; }
         }
     }
 
@@ -824,6 +853,7 @@ pub(crate) fn tick_serpent(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             }
         }
         serpent_clear_rifts(c, st);
+        hide_serpent_links(c);
         finish_boss(c, st);
     }
 }
@@ -944,6 +974,13 @@ pub(crate) fn serpent_clear_rifts(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         }
     }
     if let Some(obj) = c.get_game_object_mut("serpent_spine") { obj.visible = false; }
+}
+
+/// Hide the joints (the fight is over).
+fn hide_serpent_links(c: &mut Canvas) {
+    for i in 0..(SERPENT_SEGMENTS + 1) {
+        if let Some(obj) = c.get_game_object_mut(&format!("serpent_link_{i}")) { obj.visible = false; }
+    }
 }
 
 pub(crate) fn tick_serpent_attacks(

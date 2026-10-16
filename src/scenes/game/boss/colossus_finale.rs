@@ -28,10 +28,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::constants::*;
 use crate::state::*;
 
-/// Layers: the parts sit at 21 (`LAYER_SPACE_HOOK`).
-const L_AURA: i32 = 19;
-const L_FLAMES: i32 = 20;
+/// Layers: the parts sit at 21 (`LAYER_SPACE_HOOK`), their thrust plumes at
+/// 20. The aura and its heat layer go BELOW the plumes: a sprite writes depth
+/// wherever it draws, and the plume (a shader effect, drawn last) failed the
+/// depth test under the aura's soft edge — the head's flame vanished and
+/// reappeared as the aura breathed and the camera moved.
+const L_AURA: i32 = 16;
+const L_FLAMES: i32 = 17;
 const L_EYES: i32 = 23;
+/// The gravity well's own layer (bootstrap), and the lens's, below the plumes.
+const WELL_LAYER: i32 = 28;
+const WELL_LENS_LAYER: i32 = 19;
 const L_EMBERS: i32 = 24;
 /// Behind the fight, over the sky. It used to sit over the fight (90), but
 /// a sprite writes depth wherever it draws, and the shader effects drawn
@@ -320,6 +327,8 @@ pub(crate) fn tick_colossus_finale(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         m.enrage = 0.0;
         m.embers.clear(); m.ash.clear(); m.debris.clear();
         m.well_lensed = false;
+        drop(m);
+        if let Some(o) = c.get_game_object_mut("colossus_well") { o.layer = WELL_LAYER; }
         return;
     }
     ensure(c);
@@ -422,6 +431,9 @@ pub(crate) fn tick_colossus_finale(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // lens's rings were cut off along a jagged oval edge.
             if let Some(o) = c.get_game_object_mut("colossus_well") {
                 o.set_image(Image { shape: ShapeType::Rectangle(0.0, (LENS_D, LENS_D), 0.0), image: clear_img(), color: None });
+                // Under the head's thrust plume (20): over it, the lens's rings
+                // won the depth test and the flame came and went with them.
+                o.layer = WELL_LENS_LAYER;
             }
         }
         // Drawn over the area around the head only: the well's own object
@@ -462,6 +474,7 @@ pub(crate) fn tick_colossus_finale(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             if let Some(o) = c.get_game_object_mut("colossus_well") {
                 let full = COLOSSUS_GRAVITY_RANGE * 2.0;
                 o.size = (full, full);
+                o.layer = WELL_LAYER;
             }
         }
         if let Some((ox, oy, or)) = orb {

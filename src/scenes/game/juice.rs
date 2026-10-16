@@ -74,7 +74,13 @@ fn register(c: &mut Canvas) {
         let n = c.get_i32(STOP_VAR);
         if n <= 0 { return; }
         c.set_var(STOP_VAR, n - 1);
-        if n - 1 == 0 && !c.get_bool("game_paused") && !crate::transition::busy(c) && c.is_scene("game") {
+        // Let go unless the PAUSE MENU is what holds the game. Not
+        // `game_paused`: a fall's respawn sets that for its "hold space"
+        // standby (a soft pause that still ticks the orbit), and a freeze
+        // landing then stayed on for good — the player hung frozen on the
+        // node until SPACE was pressed.
+        let menu = matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true)));
+        if n - 1 == 0 && !menu && !crate::transition::busy(c) && c.is_scene("game") {
             c.resume();
         }
     });

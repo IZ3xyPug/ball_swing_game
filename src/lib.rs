@@ -20,6 +20,9 @@ mod objects;
 mod menu;
 pub(crate) mod menu_look;
 pub(crate) mod transition;
+pub(crate) mod ui_sfx;
+pub(crate) mod leaderboard;
+pub(crate) mod sky;
 mod scenes;
 mod shop;
 mod shop_demos;
@@ -44,7 +47,7 @@ use menu::{
     build_menu_scene,
     build_menu_settings_scene,
     build_achievements_scene,
-    build_stats_scene,
+    build_stats_scene, build_leaderboard_scene, build_credits_scene,
     build_daily_reward_scene,
     build_boss_order_scene,
 };
@@ -65,6 +68,8 @@ impl App {
         canvas.add_scene(build_menu_settings_scene(ctx));
         canvas.add_scene(build_achievements_scene(ctx));
         canvas.add_scene(build_stats_scene(ctx));
+    canvas.add_scene(build_leaderboard_scene(ctx));
+    canvas.add_scene(build_credits_scene(ctx));
         canvas.add_scene(build_daily_reward_scene(ctx));
         canvas.add_scene(build_boss_order_scene(ctx));
         // Register the menu press handler at app start (not in the menu on_enter)

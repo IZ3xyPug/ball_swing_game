@@ -2,11 +2,6 @@ use quartz::*;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
-use crate::state::*;
-use crate::images::circle_cached;
-use crate::scenes::game::bootstrap::hook_asteroid_anim_for_spawn;
-use crate::scenes::game::helpers::center_warp_on_player;
-use crate::scenes::game::space_zone::wormhole2_template;
 #[allow(unused_imports)]
 use super::*;
 

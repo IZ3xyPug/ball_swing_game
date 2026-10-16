@@ -10,17 +10,24 @@ pub fn tick_background(
     st: &Arc<Mutex<State>>,
     prev_bg_theme: &mut Option<(bool, usize, bool, bool, bool)>,
     bg_scale_smooth: &mut f32,
-    bg_zone_start: &image::RgbaImage,
-    bg_zone_start_vivid: &image::RgbaImage,
-    bg_zone_start_flip: &image::RgbaImage,
-    bg_zone_start_vivid_flip: &image::RgbaImage,
+    bg_zone_start: &Arc<image::RgbaImage>,
+    bg_zone_start_vivid: &Arc<image::RgbaImage>,
+    bg_zone_start_flip: &Arc<image::RgbaImage>,
+    bg_zone_start_vivid_flip: &Arc<image::RgbaImage>,
 ) {
     let s = st.lock().unwrap();
     let dark = s.dark_mode;
     let flipped = s.gravity_dir < 0.0;
     let py = s.py;
     let in_space_mode = s.in_space_mode;
+    let boss = s.boss_active;
     drop(s);
+    // Boss fights: the planet sinks so only its glowing atmosphere shows
+    // along the bottom. Eased in and out, never a jump.
+    let drop_target = if boss { BOSS_SKY_DROP } else { 0.0 };
+    let sky_drop = c.get_f32("boss_sky_drop");
+    let sky_drop = sky_drop + (drop_target - sky_drop) * 0.04;
+    c.set_var("boss_sky_drop", sky_drop);
     let vivid = c.get_bool("bg_vivid");
 
     // Parallax panels (bg_space, bg_stars_b) are fully managed by the parallax block.
@@ -41,13 +48,26 @@ pub fn tick_background(
         // sky then shows on the far side, which `nebula.rs` extends.
         // This frame's zoom, so the sky does not trail the world by a frame.
         let _ = py;
-        let s = sky_scale(super::decor::frame_view_y(c).1);
+        let (view_y, zoom) = super::decor::frame_view_y(c);
+        let s = sky_scale(zoom);
         *bg_scale_smooth = s;
+        // Past the camera's furthest zoom-out it follows the climb, and the
+        // world falls away below; the sky used to just stop. It now sinks
+        // too, by the height climbed beyond that point, so going higher still
+        // reads as going higher (the planet drops away, the nebula comes
+        // down into view). Nothing in the sky moves before then.
+        let _ = view_y;
+        let target = if flipped { 0.0 } else { sky_climb_shift(py, zoom) };
+        // Eased, so the swing's own bob never jerks the sky about.
+        let climb = c.get_f32("sky_climb_smooth");
+        let climb = climb + (target - climb) * 0.12;
+        c.set_var("sky_climb_smooth", climb);
+        let drop = sky_drop + climb;
 
         if let Some(obj) = c.get_game_object_mut("bg") {
             let (x, y, w, h) = sky_rect(s, flipped);
             obj.size = (w, h);
-            obj.position = (x, y);
+            obj.position = (x, y + if flipped { -drop } else { drop });
             obj.update_image_shape();
         }
     }
@@ -69,7 +89,9 @@ pub fn tick_background(
         Some(Value::I32(v)) => v.max(0) as usize,
         _ => 0,
     }.min(4);
-    let key = (dark, bg_sel, vivid, flipped, in_space_mode);
+    // The planet is part of the sky picture: a new one re-applies it.
+    let planet = c.get_i32("sky_planet_shown").max(0) as usize;
+    let key = (dark, bg_sel + planet * 100, vivid, flipped, in_space_mode);
     if *prev_bg_theme == Some(key) { return; }
     *prev_bg_theme = Some(key);
 
@@ -81,10 +103,8 @@ pub fn tick_background(
         }
     } else {
         // Normal zone: aurora gradient background.
-        let image_data: image::RgbaImage = if dark {
-            let mut img = image::RgbaImage::new(4, 4);
-            for py in 0..4 { for px in 0..4 { img.put_pixel(px, py, image::Rgba([4, 4, 8, 255])); } }
-            img
+        let image_data: Arc<image::RgbaImage> = if dark {
+            Arc::new(image::RgbaImage::from_pixel(4, 4, image::Rgba([4, 4, 8, 255])))
         } else if flipped {
             if vivid { bg_zone_start_vivid_flip.clone() } else { bg_zone_start_flip.clone() }
         } else if vivid {
@@ -94,10 +114,40 @@ pub fn tick_background(
         };
         if let Some(obj) = c.get_game_object_mut("bg") {
             obj.visible = true;
-            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: image_data.into(), color: None });
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: image_data, color: None });
         }
     }
 
+}
+
+/// How far (screen px) the sky has sunk for a player at world height `py`:
+/// none below the height where the camera reaches its furthest zoom-out, then
+/// by the height climbed past it. Measured from the player, so it starts from
+/// exactly nothing at that height (measured from the camera, which follows
+/// the player all along, it jumped in the moment the zoom hit its limit).
+pub fn sky_climb_shift(py: f32, zoom: f32) -> f32 {
+    // The height zoom is (VH - margin) / height above the ground line.
+    let at_limit = (VH - ZOOM_TOP_MARGIN) * ZOOM_MAX;
+    let above = (VH - py - at_limit).max(0.0);
+    (above * zoom * SKY_CLIMB_PARALLAX).min(SKY_CLIMB_MAX)
+}
+
+/// Where the sky PICTURE actually lands on screen: the renderer fills an
+/// object's box by scaling its image to COVER it, centred, and the sky's box
+/// (`sky_rect`) is a little wider than the picture, so the picture overflows
+/// it top and bottom. Returns (left, top, scale): picture px (u, v) is at
+/// (left + u * scale, top + v * scale). Anything that must sit exactly on
+/// something baked into the picture (the planet's horizon) maps through this.
+pub fn sky_picture_rect(c: &Canvas) -> Option<(f32, f32, f32)> {
+    let o = c.get_game_object("bg")?;
+    Some(cover_rect(o.position, o.size))
+}
+
+/// Where a VW x VH picture lands when scaled to cover the box at `pos` of
+/// `size`, centred: (left, top, scale).
+pub fn cover_rect(pos: (f32, f32), size: (f32, f32)) -> (f32, f32, f32) {
+    let sc = (size.0 / VW).max(size.1 / VH);
+    (pos.0 + (size.0 - VW * sc) * 0.5, pos.1 + (size.1 - VH * sc) * 0.5, sc)
 }
 
 /// Where the sky is this frame, for things that live in it (planets, the
@@ -140,6 +190,40 @@ pub fn sky_frame(c: &Canvas, flipped: bool) -> Option<SkyFrame> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sky_picture_covers_its_box_centred() {
+        for s in [1.0, 0.85, sky_scale(SKY_ZOOM_FLOOR)] {
+            let (x, y, w, h) = sky_rect(s, false);
+            let (ox, oy, sc) = cover_rect((x, y), (w, h));
+            // Covers: no gap on any side.
+            assert!(ox <= x + 0.01 && oy <= y + 0.01);
+            assert!(ox + VW * sc >= x + w - 0.01 && oy + VH * sc >= y + h - 0.01);
+            // Centred, and fills one dimension exactly.
+            assert!(((ox + VW * sc * 0.5) - (x + w * 0.5)).abs() < 0.01);
+            assert!(((oy + VH * sc * 0.5) - (y + h * 0.5)).abs() < 0.01);
+            assert!((VW * sc - w).abs() < 0.01 || (VH * sc - h).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn the_sky_sinks_only_past_the_zoom_limit_and_starts_from_nothing() {
+        let z = 1.0 / ZOOM_MAX;
+        // The player height at which the camera reaches its furthest zoom.
+        let limit_py = VH - (VH - ZOOM_TOP_MARGIN) * ZOOM_MAX;
+        assert_eq!(sky_climb_shift(limit_py + 500.0, z), 0.0, "below the limit");
+        assert_eq!(sky_climb_shift(limit_py, z), 0.0, "at the limit");
+        // A little past it, a little sink: no jump on crossing.
+        let just = sky_climb_shift(limit_py - 10.0, z);
+        assert!(just > 0.0 && just < 5.0, "{just}");
+        // More with height, never past the cap.
+        let mut last = 0.0;
+        for k in 1..200 {
+            let v = sky_climb_shift(limit_py - k as f32 * 400.0, z);
+            assert!(v >= last && v <= SKY_CLIMB_MAX);
+            last = v;
+        }
+    }
 
     #[test]
     fn a_spot_in_the_sky_maps_to_the_screen_and_back() {

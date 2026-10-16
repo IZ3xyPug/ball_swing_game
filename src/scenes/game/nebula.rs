@@ -60,6 +60,8 @@ fn nebula_set(c: &Canvas) -> usize {
     }
 }
 const NEBULA_IDS: [&str; 2] = ["nebula", "nebula_b"];
+/// LIVING NEBULA's mirrored layer, drawn over the nebula.
+const LIVE_IDS: [&str; 2] = ["nebula_live", "nebula_live_b"];
 const STAR_OVERLAY_ID: &str = "bg_star_overlay";
 const EXT_ID: &str = "bg_sky_ext";
 const EXT_STARS_ID: &str = "bg_sky_ext_stars";
@@ -70,8 +72,8 @@ const EXT_STARS_ID: &str = "bg_sky_ext_stars";
 /// zoom-out the screen reaches up to row ~-270. Fit to that band so most of
 /// the clouds can be seen (a taller layer showed only its bottom third); the
 /// top runs a little past it. Near the image's own proportions.
-pub const NEBULA_CLOUDS_TOP_ROW: f32 = -800.0;
-pub const NEBULA_CLOUDS_BOTTOM_ROW: f32 = 300.0;
+pub const NEBULA_CLOUDS_TOP_ROW: f32 = -1050.0;
+pub const NEBULA_CLOUDS_BOTTOM_ROW: f32 = 150.0;
 /// Sideways drift, in sky-image px per px of forward player travel. The
 /// spiral galaxy, the farthest planet, moves ~0.017 screen px per px; the
 /// nebulas are farther still.
@@ -105,6 +107,13 @@ pub struct NebulaTick {
     image_aspect: f32,
     /// The strength last applied (quantised), so it is re-tinted only on change.
     alpha_q: Option<i32>,
+    /// The SKY theme the images were built in.
+    theme: Option<usize>,
+    /// LIVING NEBULA: frames since the scene began, the mirrored layer's own
+    /// scroll, and its last strength.
+    frame: u32,
+    live_scroll: f32,
+    live_q: Option<i32>,
 }
 
 /// The decoded image for one set. Only the current set is kept, so the others
@@ -121,6 +130,30 @@ fn set_image(i: usize) -> Option<Arc<image::RgbaImage>> {
     *cur = Some((i, img.clone()));
     Some(img)
 }
+
+/// The set's image in the SKY theme, and (for LIVING NEBULA) its mirror
+/// image. Only the current pair is kept; the Arcs stay the same while the
+/// choice does, so each texture uploads once.
+fn themed_images(i: usize, theme: usize) -> Option<(Arc<image::RgbaImage>, Arc<image::RgbaImage>)> {
+    static CURRENT: OnceLock<Mutex<Option<((usize, usize), Arc<image::RgbaImage>, Arc<image::RgbaImage>)>>> = OnceLock::new();
+    let mut cur = CURRENT.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    if let Some((k, a, b)) = cur.as_ref() {
+        if *k == (i, theme) { return Some((a.clone(), b.clone())); }
+    }
+    let img = crate::sky::recolour(&set_image(i)?, theme);
+    let mirror = Arc::new(image::imageops::flip_horizontal(&*img));
+    *cur = Some(((i, theme), img.clone(), mirror.clone()));
+    Some((img, mirror))
+}
+
+/// LIVING NEBULA: how fast the clouds drift on their own (sky px per frame),
+/// how fast the second, mirrored layer drifts the other way, and the breath
+/// (frames per cycle) that cross-fades the two so the clouds churn.
+const LIVE_DRIFT: f32 = 0.30;
+const LIVE_COUNTER_DRIFT: f32 = 0.22;
+const LIVE_BREATH: f32 = 720.0;
+/// How strong the mirrored layer gets at the top of its breath.
+const LIVE_LAYER_ALPHA: f32 = 0.55;
 
 /// Rows of the sky image that carry stars: the pure starfield plus the blend
 /// into the horizon gradient (see `composite_starfield_gradient`, split 0.56,
@@ -169,6 +202,7 @@ impl NebulaTick {
     pub fn refresh(&mut self) {
         self.shown = None;
         self.sky_look = None;
+        self.theme = None;
     }
 }
 
@@ -187,7 +221,7 @@ fn ext_base(dark: bool) -> Arc<image::RgbaImage> {
 /// In draw order: the extension's base, the nebula, then the sky's stars and
 /// the extension's stars over it. Screen space like the rest of the backdrop.
 pub fn nebula_objects(ctx: &mut Context) -> Vec<(String, GameObject)> {
-    [EXT_ID, NEBULA_IDS[0], NEBULA_IDS[1], STAR_OVERLAY_ID, EXT_STARS_ID].iter().map(|id| {
+    [EXT_ID, NEBULA_IDS[0], NEBULA_IDS[1], LIVE_IDS[0], LIVE_IDS[1], STAR_OVERLAY_ID, EXT_STARS_ID].iter().map(|id| {
         let mut obj = GameObject::new_rect(ctx, id.to_string(),
             Some(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: crate::images::solid(0, 0, 0, 0).into(), color: None }),
             (VW, VH), (0.0, 0.0), vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
@@ -228,12 +262,18 @@ pub fn tick_nebula(c: &mut Canvas, st: &Arc<Mutex<State>>, t: &mut NebulaTick) {
     t.f_was_down = f_now;
 
     let set = nebula_set(c);
-    if t.shown != Some(set) {
+    let theme = (c.get_i32(crate::sky::THEME_VAR).max(0) as usize).min(crate::sky::THEMES.len() - 1);
+    let living = c.get_bool(crate::sky::LIVING_VAR);
+    t.frame = t.frame.wrapping_add(1);
+    if t.shown != Some(set) || t.theme != Some(theme) {
         t.shown = Some(set);
-        if let Some(img) = set_image(set) {
+        t.theme = Some(theme);
+        if let Some((img, mirror)) = themed_images(set, theme) {
             t.image_aspect = img.height() as f32 / img.width() as f32;
             for id in NEBULA_IDS { set_look(c, id, img.clone()); }
+            for id in LIVE_IDS { set_look(c, id, mirror.clone()); }
             t.alpha_q = None;
+            t.live_q = None;
         }
     }
     if t.sky_look != Some((flipped, dark_sky)) {
@@ -284,15 +324,21 @@ pub fn tick_nebula(c: &mut Canvas, st: &Arc<Mutex<State>>, t: &mut NebulaTick) {
     let dx = t.prev_px.map_or(0.0, |p| px - p);
     t.prev_px = Some(px);
     let forward = if dx.abs() > 2_000.0 { 0.0 } else { dx.max(0.0) };
-    t.scroll = (t.scroll + forward * NEBULA_PARALLAX).rem_euclid(layer_w);
+    let own = if living { LIVE_DRIFT } else { 0.0 };
+    t.scroll = (t.scroll + forward * NEBULA_PARALLAX + own).rem_euclid(layer_w);
+    // The mirrored layer: nearer (a little more parallax), drifting the
+    // other way, so the two slide through each other.
+    t.live_scroll = (t.live_scroll + forward * NEBULA_PARALLAX * 1.35 - LIVE_COUNTER_DRIFT).rem_euclid(layer_w);
     let (ny, nh) = rows(layer_top, layer_top + layer_h);
-    let left = (VW - layer_w) / 2.0 - t.scroll;
-    for (n, id) in NEBULA_IDS.iter().enumerate() {
-        let u = left + n as f32 * layer_w;
-        place(c, id, (x + u * sx, ny, layer_w * sx, nh), show);
-        // Upside down with the sky. Half a turn also mirrors it left-right,
-        // which a nebula does not mind, and a mirrored seam still tiles.
-        if let Some(obj) = c.get_game_object_mut(id) { obj.rotation = if flipped { 180.0 } else { 0.0 }; }
+    for (ids, scroll, on) in [(NEBULA_IDS, t.scroll, show), (LIVE_IDS, t.live_scroll, show && living)] {
+        let left = (VW - layer_w) / 2.0 - scroll;
+        for (n, id) in ids.iter().enumerate() {
+            let u = left + n as f32 * layer_w;
+            place(c, id, (x + u * sx, ny, layer_w * sx, nh), on);
+            // Upside down with the sky. Half a turn also mirrors it left-right,
+            // which a nebula does not mind, and a mirrored seam still tiles.
+            if let Some(obj) = c.get_game_object_mut(id) { obj.rotation = if flipped { 180.0 } else { 0.0 }; }
+        }
     }
 
     // Stronger the higher you climb: faint low down, full strength by the
@@ -302,15 +348,22 @@ pub fn tick_nebula(c: &mut Canvas, st: &Arc<Mutex<State>>, t: &mut NebulaTick) {
         let s_min = sky_scale(SKY_ZOOM_FLOOR);
         let climbed = ((1.0 - sx / (sky_rect(1.0, flipped).2 / VW)) / (1.0 - s_min).max(1e-3)).clamp(0.0, 1.0);
         let strength = NEBULA_LOW_ALPHA + (1.0 - NEBULA_LOW_ALPHA) * climbed * climbed.sqrt();
-        let q = (strength * 40.0).round() as i32;
-        if t.alpha_q != Some(q) {
-            t.alpha_q = Some(q);
-            if let Some(img) = set_image(set) {
-                let a = (q as f32 / 40.0 * 255.0) as u8;
-                let (w, h) = (img.width() as f32, img.height() as f32);
-                for id in NEBULA_IDS {
+        // LIVING NEBULA breathes: the nebula and its mirrored layer swell in
+        // turn, so the clouds seem to shift shape.
+        let breath = (t.frame as f32 / LIVE_BREATH * std::f32::consts::TAU).sin();
+        let (main_k, live_k) = if living {
+            (0.84 + 0.16 * breath, LIVE_LAYER_ALPHA * (0.5 - 0.5 * breath))
+        } else { (1.0, 0.0) };
+        if let Some((img, mirror)) = themed_images(set, theme) {
+            let (w, h) = (img.width() as f32, img.height() as f32);
+            for (ids, k, last, tex) in [(NEBULA_IDS, main_k, &mut t.alpha_q, img), (LIVE_IDS, live_k, &mut t.live_q, mirror)] {
+                let q = (strength * k * 60.0).round() as i32;
+                if *last == Some(q) { continue; }
+                *last = Some(q);
+                let a = (q as f32 / 60.0 * 255.0).min(255.0) as u8;
+                for id in ids {
                     if let Some(obj) = c.get_game_object_mut(id) {
-                        obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: img.clone(),
+                        obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (w, h), 0.0), image: tex.clone(),
                             color: Some(Color(255, 255, 255, a)) });
                     }
                 }

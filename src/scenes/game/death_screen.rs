@@ -150,7 +150,9 @@ pub fn begin(c: &mut Canvas, cause: &str) {
     let card = crate::menu_look::glass(SUM_W, SUM_H, [200, 150, 255], false);
     objs.push((SUM_CARD, quad(SUM_CARD, (SUM_W, SUM_H), ((VW - SUM_W) * 0.5, SUM_Y), Some(card.image))));
     objs.push(("dth_sum_head", quad("dth_sum_head", (SUM_W, 60.0), ((VW - SUM_W) * 0.5, SUM_Y + 22.0), None)));
-    objs.push((SUM_BEST, quad(SUM_BEST, (SUM_W / 3.0, 50.0), ((VW - SUM_W) * 0.5, SUM_Y + 98.0), None)));
+    // On the header's row, at the card's left (just above the distance it
+    // was crowding the figure).
+    objs.push((SUM_BEST, quad(SUM_BEST, (SUM_W / 3.0, 50.0), ((VW - SUM_W) * 0.5, SUM_Y + 26.0), None)));
     for i in 0..6 {
         let (col, row) = (i % 3, i / 3);
         let x = (VW - SUM_W) * 0.5 + col as f32 * SUM_W / 3.0;
@@ -257,8 +259,16 @@ pub fn tick(c: &mut Canvas) {
                 set_text(c, SUM_VALUES[i], &values[i], 70.0, sa, (250, 245, 255));
                 set_text(c, SUM_LABELS[i], SUM_LABEL_NAMES[i], 32.0, sa * 0.85, (190, 175, 230));
             }
-            if c.get_bool("sum_new_best") {
-                set_text(c, SUM_BEST, "NEW BEST!", 34.0, sa, (255, 220, 110));
+            // A personal best, and/or a place on the leaderboard.
+            let place = c.get_i32("sum_board_place");
+            let line = match (c.get_bool("sum_new_best"), place) {
+                (true, p) if p > 0 => format!("NEW BEST!  \u{2022}  #{p}"),
+                (true, _) => "NEW BEST!".to_string(),
+                (false, p) if p > 0 => format!("#{p} ON THE LEADERBOARD"),
+                _ => String::new(),
+            };
+            if !line.is_empty() {
+                set_text(c, SUM_BEST, &line, 34.0, sa, (255, 220, 110));
             }
         }
     }

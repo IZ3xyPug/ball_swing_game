@@ -172,7 +172,10 @@ pub const HOOK_MIN_REACH: f32 = ROPE_LEN_MAX * 0.8; // 576.0
 /// Over a rope length: the next node is caught in FLIGHT after a release,
 /// not from the end of the rope, so nodes can sit further apart than the rope
 /// reaches (they read as too close at one rope length).
-pub const HOP_REACH_X: f32 = ROPE_LEN_MAX * 1.3; // 936.0
+/// Doubled (from 1.3 rope lengths): nodes sat too close together, so the
+/// swing never had room to build. Strides are fractions of this, so every
+/// stride doubles with it.
+pub const HOP_REACH_X: f32 = ROPE_LEN_MAX * 2.6; // 1872.0
 
 /// Upward semi-axis. Deliberately under a rope length — climbing costs momentum.
 pub const HOP_REACH_UP: f32 = ROPE_LEN_MAX * 0.85; // 612.0
@@ -189,10 +192,10 @@ pub const HOOK_MAX_REACH: f32 = ROPE_LEN_MAX; // 720.0
 /// strides late mean committing to most of a rope length every time. Never
 /// above 1.0, so the envelope is never left.
 /// Widened: at 418-518 px the opening nodes sat too close together.
-pub const HOOK_STRIDE_FRAC_EASY_MIN: f32 = 0.76; // ~711 px
-pub const HOOK_STRIDE_FRAC_EASY_MAX: f32 = 0.86; // ~805 px
-pub const HOOK_STRIDE_FRAC_HARD_MIN: f32 = 0.84; // ~786 px
-pub const HOOK_STRIDE_FRAC_HARD_MAX: f32 = 0.95; // ~889 px
+pub const HOOK_STRIDE_FRAC_EASY_MIN: f32 = 0.76; // ~1,423 px
+pub const HOOK_STRIDE_FRAC_EASY_MAX: f32 = 0.86; // ~1,610 px
+pub const HOOK_STRIDE_FRAC_HARD_MIN: f32 = 0.84; // ~1,572 px
+pub const HOOK_STRIDE_FRAC_HARD_MAX: f32 = 0.95; // ~1,778 px
 
 /// Fraction of the available vertical budget a hop may spend, at the two ends
 /// of the curve. Early hops stay near the previous node's height; late hops use
@@ -333,7 +336,12 @@ pub const COIN_ARRAY_SPACING:f32 = 120.0;
 pub const COIN_CURVE_RISE:   f32 = 60.0;
 /// Probability (0–1) that a coin spawn is an array rather than single coin.
 pub const COIN_ARRAY_CHANCE: f32 = 0.28;
-pub const COIN_ARRAY_HOOK_DX:f32 = 360.0;  // in the flight path after a release
+/// Patterns start this far past their node: with nodes ~1,400-1,800 px
+/// apart, the pattern sits in the middle of the flight to the next one.
+pub const COIN_ARRAY_HOOK_DX:f32 = 560.0;
+/// No coin closer than this to a grab node's centre (a node's own glow is
+/// ~100 px across; at 360 px off the node the coins read as part of it).
+pub const COIN_NODE_CLEARANCE: f32 = 300.0;
 pub const COIN_ARRAY_HOOK_DY:f32 = -330.0;  // a little above the node: reachable from its swing
 pub const COIN_ARRAY_Y_MIN:  f32 = -520.0;  // just above the band's top
 pub const COIN_ARRAY_Y_MAX:  f32 = 520.0;   // down through the band
@@ -419,7 +427,9 @@ pub const TEST_HOOK_GAP: f32 = 760.0;
 
 // ── Zoom ──────────────────────────────────────────────────────────────────────
 pub const ZOOM_TOP_MARGIN:  f32 = VH * 0.14;
-pub const ZOOM_MAX:         f32 = 3.2;
+/// How far the camera pulls back as the player climbs (1 / this at most).
+/// Past it, the camera follows the climb instead (and the sky sinks).
+pub const ZOOM_MAX:         f32 = 2.6;
 pub const ZOOM_OUT_LERP:    f32 = 0.10;
 pub const ZOOM_IN_LERP:     f32 = 0.02;
 pub const ZOOM_LOOKAHEAD_T: f32 = 12.0;
@@ -437,29 +447,25 @@ pub const C_PLAYER:   (u8,u8,u8) = (80,  220, 160);
 /// Index 0 is the animated calicoball; the colour here is just for the shop card preview.
 pub const PLAYER_CHAR_COLORS: &[(u8, u8, u8)] = &[
     (255, 195, 140), // 0 calico (animated cat ball — colour shown on shop card)
-    (200, 200, 220), // 1 silver
-    ( 60, 160, 240), // 2 blue
-    ( 80, 210, 130), // 3 green
-    (240, 150,  60), // 4 orange
-    (180, 100, 240), // 5 purple
-    (240,  90,  90), // 6 red
-    // 7.. the animated cat breeds (cosmetics::CAT_SKINS, same order; the
+    // 1.. the animated cat breeds (cosmetics::CAT_SKINS, same order; the
     // colour is only the shop card's fallback swatch). Saved by index: append.
-    (230, 140,  60), // 7 ginger
-    ( 50,  45,  60), // 8 midnight
-    (225, 205, 175), // 9 siamese
-    ( 30,  30,  35), // 10 tuxedo
-    (170, 170, 175), // 11 silver tabby
-    (140, 100,  60), // 12 maine coon
-    (240, 240, 245), // 13 persian
-    (230, 170, 160), // 14 sphynx
-    (110,  80, 200), // 15 galaxy
-    (190, 205, 215), // 16 robo-cat
-    (240, 240, 250), // 17 astro-cat
-    (240, 100,  30), // 18 magma
+    // (The plain-colour balls that were 1..6 are gone; `profile::load`
+    // moves an old save's choice across, see `CHAR_SAVE_VERSION`.)
+    (230, 140,  60), // 1 ginger
+    ( 50,  45,  60), // 2 midnight
+    (225, 205, 175), // 3 siamese
+    ( 30,  30,  35), // 4 tuxedo
+    (170, 170, 175), // 5 silver tabby
+    (140, 100,  60), // 6 maine coon
+    (240, 240, 245), // 7 persian
+    (230, 170, 160), // 8 sphynx
+    (110,  80, 200), // 9 galaxy
+    (190, 205, 215), // 10 robo-cat
+    (240, 240, 250), // 11 astro-cat
+    (240, 100,  30), // 12 magma
 ];
 pub const PLAYER_CHAR_NAMES: &[&str] = &[
-    "CALICO", "SILVER", "BLUE", "GREEN", "ORANGE", "PURPLE", "RED",
+    "CALICO",
     "GINGER", "MIDNIGHT", "SIAMESE", "TUXEDO", "SILVER TABBY", "MAINE COON", "PERSIAN", "SPHYNX",
     "GALAXY", "ROBO-CAT", "ASTRO-CAT", "MAGMA",
 ];
@@ -702,8 +708,9 @@ pub const ASSET_WEAVER_BGM: &[u8] = include_bytes!("../assets/gravity_weaver.mp3
 /// Its volume, relative to master. The track is mastered ~23.6 dB louder than
 /// the lane's (-8.4 vs -32.0 dBFS RMS), so 0.0075 matched the lane music's
 /// 0.084 and sat ~2.5 dB above it. Doubled (+6 dB, ~8.5 dB over the lane) on
-/// request: it was too quiet under the fight's effects.
-pub const WEAVER_BGM_VOL: f32 = 0.015;
+/// request: it was too quiet under the fight's effects. Raised again ~3.3x
+/// (~+10 dB) on request: still too quiet.
+pub const WEAVER_BGM_VOL: f32 = 0.05;
 /// The Conductor's loop, relative to master.
 ///
 /// Raised from 0.16: on the device the player's own effects at 0.6 buried the
@@ -1347,18 +1354,16 @@ pub const SERPENT_HEAD_HP: i32 = 5;
 pub const SERPENT_SEGMENT_SIZE: f32 = 420.0;
 pub const SERPENT_HEAD_SIZE: f32 = 620.0;
 pub const SERPENT_TAIL_SIZE: f32 = 480.0;
+/// The joints between pieces: thickness as a share of the smaller piece.
+pub const SERPENT_LINK_THICKNESS: f32 = 0.30;
 
 /// Spacing along the body, in px of head-trail arc length.
 ///
-/// WIDER than a segment, deliberately. Overlapping discs read as a continuous
-/// body, but they also make the coil a solid wall — and the coil's whole design
-/// is that the gaps between segments are the way through, with a destroyed
-/// segment leaving a permanent hole. A body with no gaps turns its signature
-/// attack into an unavoidable one.
-///
-/// The gap is `spacing - size` = 200px against a player 116px across, so it is
-/// passable but demands a line rather than being strolled through.
-pub const SERPENT_SEGMENT_SPACING: f32 = 620.0;
+/// A little LESS than a segment, so the sections touch: the body is one
+/// connected machine, no gaps. (It used to be wider, leaving gaps that were
+/// the coil's way through; the way out of a coil is now the ring's opening,
+/// since the body only reaches about two-thirds of the way round it.)
+pub const SERPENT_SEGMENT_SPACING: f32 = 400.0;
 
 /// How many past head positions to keep. The body samples the head's HISTORY
 /// rather than a sine formula, which is what makes it slither instead of wobble
@@ -1978,9 +1983,14 @@ pub fn colossus_part_hit_r(i: u32) -> f32 {
 /// Lower bound on camera zoom while the boss fight is active. The Dune-style
 /// height zoom would otherwise pull the camera way out on the tall arena; this
 /// keeps the boss readable (less zoomed out).
-pub const BOSS_CAM_MIN_ZOOM:      f32   = 0.66;
+pub const BOSS_CAM_MIN_ZOOM:      f32   = 0.58;
+/// How far the sky (planet and atmosphere) sinks in a boss fight, so only
+/// the atmosphere's glow shows along the bottom.
+pub const BOSS_SKY_DROP: f32 = 300.0;
+/// The boss arena's one fixed zoom (no height zoom in a fight).
+pub const BOSS_CAM_ZOOM:          f32   = 0.62;
 /// Boss fights sit this much further out than the lane's height zoom.
-pub const BOSS_CAM_ZOOM_SCALE:    f32   = 0.82;
+pub const BOSS_CAM_ZOOM_SCALE:    f32   = 0.74;
 /// Diameter of the portal wormhole shown as the player is warped into the boss
 /// arena (matches the visible wormhole portal used elsewhere).
 pub const BOSS_WORMHOLE_D:        f32   = 1000.0;
@@ -2350,6 +2360,8 @@ pub const C_SHIELD_HOOK: (u8, u8, u8) = (255, 215, 90);
 /// the search window, frequent enough to learn from, rare enough that routing
 /// to one is a decision rather than a formality.
 pub const SHIELD_NODE_X_GAP: f32 = 4_800.0;
+/// How far before solar flares arrive their shielded nodes start appearing.
+pub const FLARE_SHELTER_LEAD: f32 = 25_000.0;
 
 /// Ticks of telegraph before a flare erupts (3 s at 60 fps).
 ///
@@ -2454,6 +2466,11 @@ pub const SKY_ZOOM_SHARE: f32 = 2.0 / 3.0;
 /// The sky stops zooming out past this camera zoom (the camera can go to
 /// 1 / ZOOM_MAX, far beyond what normal climbing reaches).
 pub const SKY_ZOOM_FLOOR: f32 = 0.55;
+/// Once the camera is at its furthest zoom-out (`ZOOM_MAX`) and following the
+/// climb, the sky sinks by this share of the screen distance climbed past
+/// it, up to `SKY_CLIMB_MAX` (the extension's stars above run out past that).
+pub const SKY_CLIMB_PARALLAX: f32 = 0.35;
+pub const SKY_CLIMB_MAX: f32 = 1150.0;
 /// The sky's own scale for a camera zoom: 1 at normal zoom, ~0.7 at the floor.
 pub fn sky_scale(camera_zoom: f32) -> f32 {
     1.0 - (1.0 - camera_zoom.clamp(SKY_ZOOM_FLOOR, 1.0)) * SKY_ZOOM_SHARE
@@ -2864,6 +2881,12 @@ pub const WEAVER_DRAW_IN: f32 = 0.45;
 /// thread winding in is the visible timer, so a long window still reads.
 pub const WEAVER_IDLE_TICKS: u32 = 150;
 pub const WEAVER_LOOM_IDLE_TICKS: u32 = 120;
+/// The second phase (the loom alone): it throws twice as often, winds up
+/// faster, stays open a shorter while, and weaves round the arena faster.
+pub const WEAVER_LOOM_IDLE_TICKS_CORE: u32 = 60;
+pub const WEAVER_TELEGRAPH_TICKS_CORE: u32 = 48;
+pub const WEAVER_RECOVER_TICKS_CORE: u32 = 200;
+pub const WEAVER_CORE_DRIFT: f32 = 0.0105;
 pub const WEAVER_TELEGRAPH_TICKS: u32 = 66;
 /// The lane is taken down this many ticks before the thread flies.
 pub const WEAVER_TELEGRAPH_CLEAR: u32 = 10;
@@ -2895,7 +2918,7 @@ pub const WEAVER_THREAD_KICK: f32 = 30.0;
 /// The inversion: how often, the count-in, and how long every live part is
 /// open afterwards. Faster once only the loom is left.
 pub const WEAVER_FLIP_INTERVAL: u32 = 660;
-pub const WEAVER_FLIP_INTERVAL_CORE: u32 = 420;
+pub const WEAVER_FLIP_INTERVAL_CORE: u32 = 300;
 pub const WEAVER_FLIP_TELEGRAPH: u32 = 120;
 /// The loom's reveal: when the last spindle dies, the player is held where
 /// they are and the camera pulls back to the loom for this long, then hands

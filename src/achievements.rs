@@ -138,9 +138,10 @@ pub const ACHIEVEMENTS: &[Ach] = &[
     Ach { id: "seen_whale", name: "Whale Hello There", desc: "Spot the space whale.", tier: Tier::Secret, trigger: Trigger::Event },
     Ach { id: "seen_ufo", name: "We Come in Peace", desc: "Spot the UFO.", tier: Tier::Secret, trigger: Trigger::Event },
     Ach { id: "seen_astronaut", name: "Spacewalk", desc: "Spot the drifting astronaut.", tier: Tier::Secret, trigger: Trigger::Event },
+    Ach { id: "jupiter_poke", name: "Gas Giant Squeeze", desc: "Poke the planet on the menu 20 times.", tier: Tier::Secret, trigger: Trigger::Event },
     Ach { id: "seen_jelly", name: "Jelly Belly", desc: "Spot the space jellyfish.", tier: Tier::Secret, trigger: Trigger::Event },
     Ach { id: "tourist_trap", name: "Tourist Trap", desc: "Spot all five oddities, lifetime.", tier: Tier::Silver, trigger: stat!(|s| s.rare_seen >= 5) },
-    Ach { id: "aurora_chaser", name: "Aurora Chaser", desc: "Swing under the northern lights for a whole display.", tier: Tier::Bronze, trigger: Trigger::Event },
+    Ach { id: "aurora_chaser", name: "Aurora Chaser", desc: "Over the Ice World, swing under the northern lights for a whole display.", tier: Tier::Bronze, trigger: Trigger::Event },
     // ── Economy ──
     Ach { id: "fat_cat", name: "Fat Cat", desc: "Hold 3,000 META at once.", tier: Tier::Silver, trigger: stat!(|s| s.meta >= 3_000) },
     Ach { id: "fully_loaded", name: "Fully Loaded", desc: "Max every permanent upgrade.", tier: Tier::Gold, trigger: stat!(|s| s.all_upgrades_maxed) },
@@ -411,6 +412,11 @@ pub fn on_rare_seen(name: &str) {
 pub fn record_flare_survived(c: &mut Canvas) {
     crate::profile::record_flare_survived();
     check_achievements(c, 0, 0.0);
+}
+
+/// The menu's planet was clicked; `count` this session.
+pub fn on_planet_poke(count: i32) {
+    if count >= 20 { unlock("jupiter_poke"); }
 }
 
 /// The tutorial was finished.

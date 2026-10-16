@@ -629,6 +629,14 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     let mut scene = Scene::new("game")
         .with_object("bg",           bg);
+    // Earth's night side, over the sky's planet.
+    for (id, obj) in super::planet::objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
+    // The OCEAN WORLD's sea, moving, over its still picture.
+    for (id, obj) in super::water::objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
     // Straight over the static sky, under the moving stars.
     for (id, obj) in super::nebula::nebula_objects(ctx) {
         scene = scene.with_object(&id, obj);
@@ -636,6 +644,10 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // The northern lights, over the far sky and the atmosphere's glow.
     {
         let (id, obj) = super::aurora::aurora_object(ctx);
+        scene = scene.with_object(&id, obj);
+    }
+    // The SKY extras: weather on the planet, sky events, a backdrop.
+    for (id, obj) in super::sky_extras::objects(ctx) {
         scene = scene.with_object(&id, obj);
     }
     // Far planets, behind the moving stars (see `PLANET_BEHIND_STARS_DEPTH`).
@@ -1103,11 +1115,31 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         obj
     };
 
-    use crate::menu_look::{GLASS_GOLD, GLASS_LILAC, GLASS_ROSE};
-    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", GLASS_GOLD, "RESUME", 780.0);
+    // One colour, the menus' midnight lilac (it used to be gold, lilac and
+    // rose).
+    use crate::menu_look::GLASS_LILAC;
+    let pause_resume_btn = make_pause_btn(ctx, "pause_resume_btn", GLASS_LILAC, "RESUME", 780.0);
     let pause_restart_btn = make_pause_btn(ctx, "pause_restart_btn", GLASS_LILAC, "RESTART", 1000.0);
     let pause_settings_btn = make_pause_btn(ctx, "pause_settings_btn", GLASS_LILAC, "SETTINGS", 1220.0);
-    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", GLASS_ROSE, "MENU", 1440.0);
+    let pause_menu_btn = make_pause_btn(ctx, "pause_menu_btn", GLASS_LILAC, "MENU", 1440.0);
+
+    // Under the title: an ornament, and the run so far.
+    let mut pause_divider = GameObject::new_rect(ctx, "pause_divider".into(),
+        Some(Image { shape: ShapeType::Rectangle(0.0, (PAUSE_DIVIDER.0, PAUSE_DIVIDER.1), 0.0), image: pause_divider_img(), color: None }),
+        PAUSE_DIVIDER, ((VW - PAUSE_DIVIDER.0) / 2.0, PAUSE_DIVIDER_Y),
+        vec!["hud".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+    pause_divider.visible = false;
+    pause_divider.layer = 10_001;
+    pause_divider.ignore_zoom = true;
+    let mut pause_stats = GameObject::build("pause_stats_text")
+        .size(PAUSE_PANEL_SIZE.0 - 160.0, 70.0)
+        .position((VW - (PAUSE_PANEL_SIZE.0 - 160.0)) / 2.0, PAUSE_STATS_Y)
+        .tag("hud")
+        .build(ctx);
+    pause_stats.visible = false;
+    pause_stats.layer = 10_001;
+    pause_stats.ignore_zoom = true;
+    scene = scene.with_object("pause_divider", pause_divider).with_object("pause_stats_text", pause_stats);
 
     // No on-screen SWING or PAUSE buttons. Swinging is the whole right half of
     // the screen and pausing is a swipe — see the touch-control block in
@@ -1115,8 +1147,8 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     // past constantly and pressed once.
 
     let mut start_prompt_text = GameObject::build("start_prompt_text")
-        .size(1300.0, 120.0)
-        .position((VW - 1300.0) * 0.5, VH * 0.50)
+        .size(2000.0, 120.0)
+        .position((VW - 2000.0) * 0.5, VH * 0.50)
         .tag("hud")
         .build(ctx);
     start_prompt_text.visible = false;
@@ -1204,7 +1236,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
     let settings_label_1 = make_settings_label(ctx, "settings_label_1", 1020.0);
     let settings_label_2 = make_settings_label(ctx, "settings_label_2", 1320.0);
 
-    let settings_back_btn = make_pause_btn(ctx, "settings_back_btn", GLASS_LILAC, "BACK", 1660.0);
+    let settings_back_btn = make_pause_btn(ctx, "settings_back_btn", GLASS_LILAC, "BACK", 1570.0);
 
     // ── Settings volume sliders ───────────────────────────────────────────
     // Tracks are thin solid-color rectangles; thumbs are small rounded rects.
@@ -1219,7 +1251,7 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 
     let make_slider_track = |ctx: &mut Context, id: &str, y: f32| {
         let mut obj = GameObject::new_rect(ctx, id.into(),
-            Some(Image { shape: ShapeType::Rectangle(0.0, (SLIDER_TRACK_W, SLIDER_TRACK_H), 0.0), image: solid(60, 62, 88, 220).into(), color: None }),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (SLIDER_TRACK_W, SLIDER_TRACK_H), 0.0), image: solid(150, 135, 255, 150).into(), color: None }),
             (SLIDER_TRACK_W, SLIDER_TRACK_H), (SLIDER_TRACK_X, y),
             vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
         obj.visible = false;
@@ -1390,6 +1422,19 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
                 obj.visible = false;
                 scene = scene.with_object(&name, obj);
             }
+        }
+        // The joints between the pieces, behind them: the body reads as one
+        // linked machine, while the gaps (the way through a coil) stay open.
+        // Scenery only: no collision, not a hook.
+        for i in 0..(SERPENT_SEGMENTS + 1) {
+            let name = format!("serpent_link_{i}");
+            let mut obj = GameObject::new_rect(ctx, name.clone().into(),
+                Some(Image { shape: ShapeType::Rectangle(0.0, (1024.0, 64.0), 0.0), image: crate::images::serpent_link(), color: None }),
+                (100.0, 60.0), (-9000.0, -9000.0), vec!["boss_fx".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+            obj.layer = LAYER_SPACE_HOOK - 1;
+            obj.gravity = 0.0;
+            obj.visible = false;
+            scene = scene.with_object(&name, obj);
         }
         // The exposed energy spine, drawn between head and tail once the body
         // between them is gone.
@@ -2308,6 +2353,14 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
         boss_bolt_free, impact_free, boss_asteroid_ids, comet_free, warn_free,
     };
 
+    // The MYSTIC trail's strand guides (invisible).
+    for (id, obj) in super::mystic_trail::objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
+    // SECOND WIND's pop (hidden until a save).
+    for (id, obj) in super::second_wind_pop::objects(ctx) {
+        scene = scene.with_object(&id, obj);
+    }
     // The tutorial's coaching panel (hidden unless it is the tutorial).
     for (id, obj) in super::tutorial::objects(ctx) {
         scene = scene.with_object(&id, obj);
@@ -2327,14 +2380,36 @@ pub fn build_scene_objects(ctx: &mut Context) -> (Scene, PoolSets) {
 /// glass card, the title.
 pub(crate) const PAUSE_OVERLAY_SIZE: (f32, f32) = (VW * 3.0, VH * 3.0);
 pub(crate) const PAUSE_OVERLAY_POS: (f32, f32) = (-VW, -VH);
-pub(crate) const PAUSE_PANEL_SIZE: (f32, f32) = (1700.0, 1560.0);
+pub(crate) const PAUSE_PANEL_SIZE: (f32, f32) = (1700.0, 1500.0);
 pub(crate) const PAUSE_PANEL_POS: (f32, f32) = ((VW - 1700.0) / 2.0, 270.0);
 pub(crate) const PAUSE_TITLE_Y: f32 = 360.0;
 
 /// A pause-menu button: a strong glass pill in `accent`, its label in the
 /// main menu's glowing type, centred.
+pub(crate) const PAUSE_DIVIDER: (f32, f32) = (1100.0, 36.0);
+pub(crate) const PAUSE_DIVIDER_Y: f32 = 590.0;
+pub(crate) const PAUSE_STATS_Y: f32 = 645.0;
+
+/// A fine line fading out to both ends, a small diamond at its middle.
+fn pause_divider_img() -> Arc<image::RgbaImage> {
+    let (w, h) = (PAUSE_DIVIDER.0 as u32, PAUSE_DIVIDER.1 as u32);
+    Arc::new(image::RgbaImage::from_fn(w, h, |x, y| {
+        let u = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+        let v = y as f32 + 0.5 - h as f32 * 0.5;
+        let line = (1.0 - u.abs()).powf(1.5) * (-(v / 1.6).powi(2)).exp();
+        let d = (u.abs() * w as f32 * 0.5) + v.abs();
+        let diamond = if d < 13.0 { 1.0 } else { (1.0 - (d - 13.0) / 3.0).max(0.0) };
+        let a = line.max(diamond * 0.95);
+        image::Rgba([200, 186, 255, (a * 255.0) as u8])
+    }))
+}
+
 fn pause_glass_btn(w: f32, h: f32, accent: [u8; 3], label: &str) -> Arc<image::RgbaImage> {
-    let glass = crate::menu_look::glass(w, h, accent, true).image;
+    pause_glass_btn_inner(w, h, accent, label, false)
+}
+
+fn pause_glass_btn_inner(w: f32, h: f32, accent: [u8; 3], label: &str, lit: bool) -> Arc<image::RgbaImage> {
+    let glass = crate::menu_look::glass(w, h, accent, lit).image;
     let mut img = image::imageops::resize(&*glass, w as u32, h as u32, image::imageops::FilterType::Triangle);
     let foot = [0, 1, 2].map(|i| (accent[i] as u16 / 2 + 128) as u8);
     if let Some(t) = crate::menu_look::glow_text_rgb(label, 78.0, accent, foot) {

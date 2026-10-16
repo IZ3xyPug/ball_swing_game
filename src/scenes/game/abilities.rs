@@ -32,15 +32,30 @@ pub const AB_OMNI: i32 = 2;
 pub const AB_BTN: (f32, f32, f32) = (40.0, VH - 540.0, 230.0);
 
 /// Momentum burst: seconds to refill the bar at rank 1, and per rank faster.
-const BURST_REFILL_S: f32 = 9.0;
-const BURST_REFILL_PER_RANK: f32 = 1.5;
+const BURST_REFILL_S: f32 = 8.0;
+const BURST_REFILL_PER_RANK: f32 = 1.3;
 /// Push: this share of the current speed, plus a floor, per rank more.
-const BURST_SHARE: f32 = 0.30;
-const BURST_SHARE_PER_RANK: f32 = 0.08;
-const BURST_FLOOR: f32 = 12.0;
+const BURST_SHARE: f32 = 0.45;
+const BURST_SHARE_PER_RANK: f32 = 0.12;
+const BURST_FLOOR: f32 = 18.0;
 /// Omni boost: the push (px/tick), and how much of the old velocity is kept.
-const OMNI_PUSH: f32 = 44.0;
-const OMNI_KEEP: f32 = 0.3;
+const OMNI_PUSH: f32 = 64.0;
+const OMNI_KEEP: f32 = 0.4;
+/// Alternating swing keeps this much more speed as it flips.
+const SWAP_KICK: f32 = 1.15;
+/// OVERDRIVE: after a boost the speed cap is lifted by this factor (per
+/// ability, per rank) and eases back over `OVERDRIVE_TICKS`. Without it the
+/// boost was clamped to the ordinary cap the same frame it was applied —
+/// at a full swing, which is when anyone fires it, it did almost nothing.
+pub const OVERDRIVE_TICKS: i32 = 75;
+const OVERDRIVE_BURST: f32 = 1.5;
+const OVERDRIVE_OMNI: f32 = 1.7;
+const OVERDRIVE_SWAP: f32 = 1.25;
+const OVERDRIVE_PER_RANK: f32 = 0.12;
+/// Swap and Omni win a charge back over time, faster per rank; they hold
+/// one more than their rank.
+const RECHARGE_S: f32 = 26.0;
+const RECHARGE_PER_RANK: f32 = 3.0;
 /// How far the stick must be dragged to count as aimed, screen px.
 const OMNI_DEADZONE: f32 = 50.0;
 
@@ -75,9 +90,11 @@ pub fn start_run(c: &mut Canvas) {
     };
     c.set_var("ab_kind", kind);
     c.set_var("ab_rank", rank);
-    // Burst starts full; the others start with a use per rank.
+    // Burst starts full; the others start full of charges (rank + 1).
     c.set_var("ab_bar", 1.0f32);
-    c.set_var("ab_charges", rank.max(0));
+    c.set_var("ab_charges", if rank > 0 { rank + 1 } else { 0 });
+    c.set_var("ab_recharge", 0i32);
+    c.set_var("ab_overdrive_ticks", 0i32);
     c.set_var("ab_aiming", false);
     c.set_var("ab_flash", 0i32);
     c.set_var("ab_last_fill", -1i32);
@@ -230,7 +247,7 @@ pub fn fire(c: &mut Canvas, st: &Arc<Mutex<State>>, aim: Option<(f32, f32)>) -> 
         AB_SWAP => {
             if c.get_i32("ab_charges") <= 0 { return false; }
             c.set_var("ab_charges", c.get_i32("ab_charges") - 1);
-            (-vx, -vy, (0.35, 0.9, 0.8))
+            (-vx * SWAP_KICK, -vy * SWAP_KICK, (0.35, 0.9, 0.8))
         }
         AB_OMNI => {
             let Some((ax, ay)) = aim else { return false };
@@ -251,7 +268,12 @@ pub fn fire(c: &mut Canvas, st: &Arc<Mutex<State>>, aim: Option<(f32, f32)>) -> 
         let mut s = st.lock().unwrap();
         s.vx = nvx;
         s.vy = nvy;
+        s.run_stats.abilities += 1;
     }
+    let lift = match kind { AB_BURST => OVERDRIVE_BURST, AB_OMNI => OVERDRIVE_OMNI, _ => OVERDRIVE_SWAP }
+        + OVERDRIVE_PER_RANK * (rank - 1.0);
+    c.set_var("ab_overdrive_ticks", OVERDRIVE_TICKS);
+    c.set_var("ab_overdrive_mult", lift);
     if let Some(o) = c.get_game_object_mut("player") { o.momentum = (nvx, nvy); }
     // Feedback: a burst ring at the player, a small kick, the button flashes.
     let at = { let s = st.lock().unwrap(); (s.px, s.py) };
@@ -290,11 +312,15 @@ pub fn register_input(canvas: &mut Canvas) {
     if canvas.get_bool("ab_input_registered") { return; }
     canvas.set_var("ab_input_registered", true);
     canvas.on_mouse_press(|c, btn, pos| {
-        // On a computer, a RIGHT click anywhere fires the equipped ability
-        // (left click is the grab). Omni Boost aims from the cat toward the
-        // cursor, as the E key does. The button stays for touch screens.
-        if btn == MouseButton::Right && !crate::constants::mobile_controls_enabled() && active(c) {
-            if matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) { return; }
+        // On a computer, a click anywhere (either button) fires the equipped
+        // ability; the mouse no longer swings (SPACE does). Omni Boost aims
+        // from the cat toward the cursor, as the E key does. The button stays
+        // for touch screens. Not while a menu or a choice is up: those clicks
+        // are theirs.
+        if (btn == MouseButton::Left || btn == MouseButton::Right)
+            && !crate::constants::mobile_controls_enabled() && active(c)
+        {
+            if click_is_for_ui(c) { return; }
             if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
                 fire_from_key(c, &st);
             }
@@ -338,6 +364,20 @@ pub fn register_input(canvas: &mut Canvas) {
     });
 }
 
+/// Whether a click belongs to something on screen rather than the ability:
+/// the pause menu, the start prompt, an upgrade node's choices, the boss
+/// reward cards, the cannon's fast-travel prompt, the death screen.
+fn click_is_for_ui(c: &Canvas) -> bool {
+    if c.get_bool("game_paused") || c.is_paused() || c.get_bool("start_prompt_active") { return true; }
+    if matches!(c.get_var("pause_menu_open"), Some(Value::Bool(true))) { return true; }
+    if crate::scenes::game::perks::reward_pending(c) || crate::scenes::game::death_screen::active(c) { return true; }
+    if let Some(st) = crate::scenes::game::build_scene::run_state().lock().unwrap().as_ref().cloned() {
+        let s = st.lock().unwrap();
+        if s.upgrade_dialogue_active || (s.cannon_ft_prompt && s.cannon_captured) || s.dead { return true; }
+    }
+    false
+}
+
 // ── Per frame ────────────────────────────────────────────────────────────────
 
 /// Refill the burst bar and draw the button. Every game tick.
@@ -364,6 +404,17 @@ pub fn tick(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         return;
     }
     let rank = c.get_i32("ab_rank").max(1) as f32;
+    // Swap / Omni: a charge comes back over time, up to rank + 1.
+    if kind != AB_BURST && c.get_i32("ab_charges") < rank as i32 + 1 {
+        let secs = (RECHARGE_S - RECHARGE_PER_RANK * (rank - 1.0)).max(8.0);
+        let t = c.get_i32("ab_recharge") + 1;
+        if t as f32 >= secs * 60.0 {
+            c.set_var("ab_recharge", 0i32);
+            c.set_var("ab_charges", c.get_i32("ab_charges") + 1);
+        } else {
+            c.set_var("ab_recharge", t);
+        }
+    }
     // Burst: the bar refills.
     if kind == AB_BURST {
         let secs = (BURST_REFILL_S - BURST_REFILL_PER_RANK * (rank - 1.0)).max(2.0);

@@ -32,14 +32,42 @@ fn demo_bytes(id: &str) -> Option<&'static [u8]> {
     })
 }
 
-/// Decoded once per upgrade (its frames are shared Arcs, so a clone is cheap).
-fn demo_sprite(id: &str) -> Option<AnimatedSprite> {
+/// Every clip, decoded once (its frames are shared Arcs, so a clone is cheap).
+fn cache() -> &'static Mutex<HashMap<String, Option<AnimatedSprite>>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<AnimatedSprite>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some(s) = cache.lock().unwrap().get(id) { return s.clone(); }
-    let s = demo_bytes(id).and_then(|b| AnimatedSprite::new(b, DEMO_SIZE, DEMO_FPS).ok());
-    cache.lock().unwrap().insert(id.to_string(), s.clone());
-    s
+    CACHE.get_or_init(Default::default)
+}
+
+fn decode(id: &str) -> Option<AnimatedSprite> {
+    demo_bytes(id).and_then(|b| AnimatedSprite::new(b, DEMO_SIZE, DEMO_FPS).ok())
+}
+
+/// Decode every clip off the game thread. A clip is a megabyte or two of
+/// GIF whose every frame is resized to the panel, which took long enough to
+/// freeze the carousel the first time each upgrade was scrolled onto.
+/// Called when the shop opens; idempotent.
+pub fn prewarm() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() { return; }
+    let ids: Vec<&'static str> = crate::profile::PERM_UPGRADES.iter().map(|u| u.id).collect();
+    let work = move || {
+        for id in ids {
+            if cache().lock().unwrap().contains_key(id) { continue; }
+            let s = decode(id);
+            cache().lock().unwrap().insert(id.to_string(), s);
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    { std::thread::spawn(work); }
+    #[cfg(target_arch = "wasm32")]
+    { work(); }
+}
+
+/// The clip for `id` if it has been decoded yet; never blocks on a decode.
+/// `None` = not ready, `Some(None)` = this upgrade has no clip.
+fn demo_sprite(id: &str) -> Option<Option<AnimatedSprite>> {
+    prewarm();
+    cache().lock().unwrap().get(id).cloned()
 }
 
 /// The panel's objects, for `shop::extend_with_shop`.
@@ -62,7 +90,16 @@ pub fn tick_demo(c: &mut Canvas) {
         && crate::shop::is_upgrade_category(c.get_i32("shop_active_category"));
     let idx = c.get_i32("shop_selected").max(0) as usize;
     let id = crate::profile::PERM_UPGRADES.get(idx).map(|u| u.id).unwrap_or("");
-    let sprite = if on { demo_sprite(id) } else { None };
+    // Still decoding: hide the panel (rather than leave the last upgrade's
+    // clip up under this one's name) and look again next frame.
+    let ready = if on { demo_sprite(id) } else { Some(None) };
+    let Some(sprite) = ready else {
+        for n in ["shop_demo_frame", "shop_demo"] {
+            if let Some(o) = c.get_game_object_mut(n) { o.visible = false; }
+        }
+        c.set_var("shop_demo_shown", -2i32);
+        return;
+    };
     let show = sprite.is_some();
     for n in ["shop_demo_frame", "shop_demo"] {
         if let Some(o) = c.get_game_object_mut(n) { o.visible = show; }

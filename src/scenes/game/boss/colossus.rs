@@ -3,10 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
 use crate::state::*;
-use crate::images::circle_cached;
-use crate::scenes::game::bootstrap::hook_asteroid_anim_for_spawn;
-use crate::scenes::game::helpers::center_warp_on_player;
-use crate::scenes::game::space_zone::wormhole2_template;
 #[allow(unused_imports)]
 use super::*;
 
@@ -964,6 +960,10 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // ── Apply per-part visuals + resolve strikes ──
     for (idx, f) in frames.iter().enumerate() {
         let part_size = colossus_part_size(idx as u32);
+        // Its sounds: a wind-up or charge as a telegraph begins, a slam as a
+        // strike lands, each gaze shot, the clap, the storm and the vents.
+        super::colossus_sfx::part_frame(c, f.id, f.alive && f.zone_visible && !f.zone_solid,
+            f.alive && f.zone_solid, f.alive && f.beam_t.is_some(), f.clap_wave, f.storm, f.vent);
 
         // The head opens a large gravity well during its wind-up and beam, so it
         // drags the player toward the head — and FORCES an untether so the
@@ -1138,12 +1138,14 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             {
                 if !f.shielded && f.weak_open && buffed {
                     let mut landed = false;
+                    let mut broke = false;
                     {
                         let mut s = st.lock().unwrap();
                         if s.boss_part_invuln_ticks == 0 {
                             if let Some(p) = s.boss_parts.iter_mut().find(|p| p.id == f.id && p.alive) {
                                 p.hp -= 1;
                                 let killed = p.hp <= 0;
+                                broke = killed;
                                 if killed {
                                     p.alive = false;
                                 }
@@ -1162,6 +1164,11 @@ pub(crate) fn tick_multi_part_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                         }
                     }
                     if landed {
+                        super::colossus_sfx::play(c, if broke {
+                            super::colossus_sfx::Sfx::Break
+                        } else {
+                            super::colossus_sfx::Sfx::Clang
+                        });
                         // On the part's surface where the player struck it,
                         // in the Colossus's own vulnerable colour.
                         let at = (sx + normal.0 * hit_r, sy + normal.1 * hit_r);

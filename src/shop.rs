@@ -20,13 +20,13 @@ pub const NUM_SLOTS:   usize = 7;
 pub const SLOT_CENTER: usize = 3;
 
 // ── Category data ───────────────────────────────────────────────────────────
-pub const SHOP_CAT_NAMES:     &[&str]          = &["CHARACTERS", "ROPES", "BACKGROUNDS", "TRAILS", "UPGRADES", "ABILITIES"];
+pub const SHOP_CAT_NAMES:     &[&str]          = &["CHARACTERS", "ROPES", "BACKGROUNDS", "TRAILS", "UPGRADES", "ABILITIES", "SKY"];
 /// The category cards' title and subtitle sizes: small enough that the
 /// longest ("BACKGROUNDS", "ACTIVE POWERS • TAP TO USE") stays on one line
 /// in Orbitron, which runs wide.
 const CAT_TITLE_PX: f32 = 46.0;
 const CAT_SUB_PX: f32 = 22.0;
-pub const SHOP_CAT_SUBTITLES: &[&str]          = &["CHANGE YOUR BALL", "STYLE YOUR SWING", "CHANGE THE SCENE", "LEAVE YOUR MARK", "SPEND META \u{2022} PERMANENT", "ACTIVE POWERS \u{2022} TAP TO USE"];
+pub const SHOP_CAT_SUBTITLES: &[&str]          = &["CHANGE YOUR BALL", "STYLE YOUR SWING", "CHANGE THE SCENE", "LEAVE YOUR MARK", "SPEND META \u{2022} PERMANENT", "ACTIVE POWERS \u{2022} TAP TO USE", "COLOUR YOUR COSMOS"];
 pub const SHOP_CAT_COLORS:    &[(u8, u8, u8)]  = &[
     ( 60,  80, 180), // 0 Characters  — indigo
     ( 20, 150, 140), // 1 Ropes       — teal
@@ -34,6 +34,7 @@ pub const SHOP_CAT_COLORS:    &[(u8, u8, u8)]  = &[
     (180,  80,  20), // 3 Trails      — orange
     (140,  30, 100), // 4 Purchasable — magenta
     (200, 110,  30), // 5 Abilities   — amber
+    ( 40, 120, 200), // 6 Sky         — blue
 ];
 pub const NUM_CATS: usize = SHOP_CAT_NAMES.len();
 
@@ -108,6 +109,7 @@ fn cat_items(cat: i32) -> (&'static [(u8,u8,u8)], &'static [&'static str]) {
         3 => (SHOP_TRAIL_COLORS,  SHOP_TRAIL_NAMES),
         4 => upgrade_cards(),
         5 => ability_cards(),
+        6 => (&crate::sky::SWATCHES, &crate::sky::NAMES),
         _ => (PLAYER_CHAR_COLORS, PLAYER_CHAR_NAMES),
     }
 }
@@ -117,9 +119,11 @@ fn cat_items(cat: i32) -> (&'static [(u8,u8,u8)], &'static [&'static str]) {
 pub fn is_upgrade_category(cat: i32) -> bool { cat == 4 }
 
 /// Returns (x, y, w, h) for each category card button (3+3 grid layout).
+/// Three to a row; a last row with one card centres it (SKY).
 fn cat_card_rect(idx: usize) -> (f32, f32, f32, f32) {
-    let (col, row) = ((idx % 3) as f32, (idx / 3) as f32);
-    (300.0 + col * 1100.0, 330.0 + row * 600.0, 1040.0, 520.0)
+    let (mut col, row) = ((idx % 3) as f32, (idx / 3) as f32);
+    if idx / 3 == (NUM_CATS - 1) / 3 && NUM_CATS % 3 == 1 { col = 1.0; }
+    (300.0 + col * 1100.0, 300.0 + row * 420.0, 1040.0, 380.0)
 }
 
 // ── Image cache (built once at startup) ────────────────────────────────────
@@ -128,6 +132,7 @@ static ROPE_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = O
 static BG_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
 static TRAIL_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
 static ABILITY_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
+static SKY_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
 static UPGRADE_CARD_CACHE: OnceLock<Vec<[std::sync::Arc<image::RgbaImage>; 2]>> = OnceLock::new();
 
 pub fn get_card_cache() -> &'static Vec<[std::sync::Arc<image::RgbaImage>; 2]> {
@@ -224,7 +229,26 @@ fn get_item_card_cache(cat: i32) -> Option<&'static Vec<[std::sync::Arc<image::R
             ]).collect()
         })),
         2 => Some(BG_CARD_CACHE.get_or_init(|| make_cache(SHOP_BG_COLORS))),
-        3 => Some(TRAIL_CARD_CACHE.get_or_init(|| make_cache(SHOP_TRAIL_COLORS))),
+        // SKY: each theme's nebula on the card; LIVING shows the original.
+        6 => Some(SKY_CARD_CACHE.get_or_init(|| (0..crate::sky::ITEMS).map(|i| {
+            let art = if i == crate::sky::EVENTS_IDX { Some(crate::scenes::game::sky_extras::card_art(i, 330)) }
+                else if i >= crate::sky::PLANET0 { Some(crate::sky::planet_card_art(i - crate::sky::PLANET0, 330)) }
+                else { crate::sky::thumbnail(if i == crate::sky::LIVING_IDX { 0 } else { i }, 330, false) };
+            match art {
+                Some(art) => [
+                    std::sync::Arc::new(art_card_img(&art, 1, false)),
+                    std::sync::Arc::new(art_card_img(&art, 1, true)),
+                ],
+                None => {
+                    let (r, g, b) = crate::sky::SWATCHES[i];
+                    [std::sync::Arc::new(shop_card_img(r, g, b, false)), std::sync::Arc::new(shop_card_img(r, g, b, true))]
+                }
+            }
+        }).collect())),
+        3 => Some(TRAIL_CARD_CACHE.get_or_init(|| (0..SHOP_TRAIL_COLORS.len()).map(|i| [
+            std::sync::Arc::new(trail_card_img(i, false)),
+            std::sync::Arc::new(trail_card_img(i, true)),
+        ]).collect())),
         // Abilities: the orb in the ability's colour, with its in-run icon on it.
         // Abilities: a plain card; the animated emblem rides on top of it.
         5 => Some(ABILITY_CARD_CACHE.get_or_init(|| {
@@ -301,6 +325,159 @@ fn shop_card_img(r: u8, g: u8, b: u8, selected: bool) -> image::RgbaImage {
     img
 }
 
+/// A TRAILS card: the plain card with a comet on it — a glowing head and a
+/// curved, tapering trail sweeping in behind it, each trail in its own style
+/// (0 white speed streak, 1 fire with embers, 2 ice with shards, 3 gold with
+/// glitter, 4 mystic twin strands with stars).
+fn trail_card_img(idx: usize, selected: bool) -> image::RgbaImage {
+    let mut img = shop_card_img(0, 0, 0, selected);
+    // Clear the plain ball the base card draws; the comet replaces it.
+    let (w, h) = (CARD_W as i32, CARD_H as i32);
+    let (fr, fg, fb, fa) = card_fill(selected);
+    let (bcx, bcy) = (w / 2, h / 2 - 60);
+    for py in (bcy - 125).max(0)..(bcy + 126).min(h) { for px in (bcx - 125).max(0)..(bcx + 126).min(w) {
+        let (dx, dy) = (px - bcx, py - bcy);
+        if dx * dx + dy * dy <= 125 * 125 { img.put_pixel(px as u32, py as u32, image::Rgba([fr, fg, fb, fa])); }
+    }}
+    // Light is accumulated in floats, blurred into a glow, then added on.
+    let (aw, ah) = (w as usize, h as usize);
+    let mut acc = vec![[0f32; 3]; aw * ah];
+    let mut add = |x: f32, y: f32, r: f32, c: [f32; 3], k: f32| {
+        let (x0, x1) = ((x - r - 1.0).max(0.0) as usize, ((x + r + 1.0) as usize).min(aw - 1));
+        let (y0, y1) = ((y - r - 1.0).max(0.0) as usize, ((y + r + 1.0) as usize).min(ah - 1));
+        for py in y0..=y1 { for px in x0..=x1 {
+            let d = ((px as f32 - x).powi(2) + (py as f32 - y).powi(2)).sqrt();
+            let a = (1.0 - (d - r + 1.0).clamp(0.0, 1.0)) * k;
+            if a > 0.0 { let o = &mut acc[py * aw + px]; for i in 0..3 { o[i] += c[i] * a; } }
+        }}
+    };
+    let lerp3 = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t);
+    // Theme: (tail start colour, tail end colour, head colour).
+    let (c0, c1, head) = match idx {
+        1 => ([255.0, 230.0, 120.0], [230.0, 40.0, 10.0], [255.0, 240.0, 190.0]),
+        2 => ([235.0, 250.0, 255.0], [40.0, 140.0, 255.0], [240.0, 252.0, 255.0]),
+        3 => ([255.0, 245.0, 170.0], [200.0, 130.0, 10.0], [255.0, 248.0, 200.0]),
+        4 => ([255.0, 150.0, 240.0], [110.0, 40.0, 230.0], [255.0, 220.0, 255.0]),
+        _ => ([255.0, 255.0, 255.0], [140.0, 170.0, 230.0], [255.0, 255.0, 255.0]),
+    };
+    // The path: from behind-lower-left, curving up to the head.
+    let (hx, hy) = (bcx as f32 + 82.0, bcy as f32 - 70.0);
+    let (sx, sy) = (bcx as f32 - 140.0, bcy as f32 + 120.0);
+    let (qx, qy) = (bcx as f32 - 40.0, bcy as f32 - 30.0);
+    let at = |t: f32| {
+        let u = 1.0 - t;
+        (u * u * sx + 2.0 * u * t * qx + t * t * hx, u * u * sy + 2.0 * u * t * qy + t * t * hy)
+    };
+    let mut seed = 0x9E37_79B9u32.wrapping_mul(idx as u32 + 1);
+    let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; (seed % 10_000) as f32 / 10_000.0 };
+    let steps = 220;
+    for i in 0..steps {
+        let t = i as f32 / (steps - 1) as f32; // 0 tail end .. 1 head
+        let (x, y) = at(t);
+        // Normal to the path, for offsets across it.
+        let (x2, y2) = at((t + 0.01).min(1.0));
+        let (tx, ty) = (x2 - x, y2 - y);
+        let l = (tx * tx + ty * ty).sqrt().max(1e-3);
+        let (nx, ny) = (-ty / l, tx / l);
+        let width = 3.0 + 30.0 * t.powf(1.4);
+        let col = lerp3(c1, c0, t);
+        let fade = t.powf(0.55);
+        match idx {
+            1 => {
+                // Fire: a flickering ribbon, wider and ragged.
+                let flick = (t * 40.0).sin() * 6.0 * (1.0 - t);
+                add(x + nx * flick, y + ny * flick, width * 1.1, col, 0.15 * fade);
+                add(x, y, width * 0.45, lerp3(col, [255.0, 250.0, 220.0], 0.35 * t), 0.10 * fade);
+            }
+            4 => {
+                // Mystic: two strands twisting round the path.
+                let ph = t * 18.0;
+                for k in [0.0f32, std::f32::consts::PI] {
+                    let o = (ph + k).sin() * (6.0 + 20.0 * t);
+                    add(x + nx * o, y + ny * o, 3.0 + 7.0 * t, col, 0.22 * fade);
+                }
+                add(x, y, width * 0.7, col, 0.04 * fade);
+            }
+            _ => {
+                add(x, y, width, col, 0.13 * fade);
+                add(x, y, width * 0.4, lerp3(col, [255.0; 3], 0.25), 0.10 * fade);
+            }
+        }
+    }
+    // Theme particles.
+    for _ in 0..34 {
+        let t = rnd().powf(0.7);
+        let (x, y) = at(t);
+        let off = (rnd() - 0.5) * (30.0 + 60.0 * (1.0 - t));
+        let (x, y) = (x + off * 0.7, y + off);
+        let col = lerp3(c1, c0, t);
+        match idx {
+            1 => { add(x, y - rnd() * 30.0, 2.0 + 3.0 * rnd(), [255.0, 160.0 + 80.0 * rnd(), 40.0], 0.9); }
+            2 => {
+                // Ice shard: a small diamond.
+                let r = 3.0 + 5.0 * rnd();
+                for k in 0..6 { let f = k as f32 / 5.0 - 0.5; add(x + f * r * 0.5, y + f * r * 2.0, r * (0.6 - f.abs()), col, 0.6); }
+            }
+            3 => {
+                // Glitter: four-point stars.
+                let r = 4.0 + 8.0 * rnd();
+                for k in -6..=6 { let f = k as f32 / 6.0 * r; let a = 1.0 - (f.abs() / r);
+                    add(x + f, y, 1.2, [255.0, 235.0, 150.0], 0.7 * a); add(x, y + f, 1.2, [255.0, 235.0, 150.0], 0.7 * a); }
+            }
+            4 => { add(x, y, 1.5 + 2.5 * rnd(), [255.0, 220.0, 255.0], 0.8); }
+            _ => {}
+        }
+    }
+    if idx == 0 {
+        // Speed lines across behind the head.
+        for k in 0..4 {
+            let y = hy + 40.0 + k as f32 * 26.0;
+            let len = 60.0 + 40.0 * (k % 2) as f32;
+            for j in 0..40 { let f = j as f32 / 39.0; add(hx - 70.0 - len * f, y + 30.0 * f, 2.2, [210.0, 225.0, 255.0], 0.5 * (1.0 - f)); }
+        }
+    }
+    // The head: a white-hot ball in the trail's colour.
+    let _ = head;
+    add(hx, hy, 34.0, c0, 0.55);
+    add(hx, hy, 30.0, lerp3(c0, c1, 0.35), 0.45);
+    add(hx, hy, 13.0, [255.0; 3], 0.55);
+    // Glow: a blur of everything so far, added back under it.
+    let mut glow = acc.clone();
+    for _ in 0..3 {
+        let src = glow.clone();
+        let r = 9isize;
+        for y in 0..ah { for x in 0..aw {
+            let mut s = [0f32; 3]; let mut n = 0.0;
+            let mut xx = x as isize - r; while xx <= x as isize + r {
+                if xx >= 0 && (xx as usize) < aw { let v = src[y * aw + xx as usize]; for i in 0..3 { s[i] += v[i]; } n += 1.0; }
+                xx += 3;
+            }
+            glow[y * aw + x] = s.map(|v| v / n);
+        }}
+        let src = glow.clone();
+        for y in 0..ah { for x in 0..aw {
+            let mut s = [0f32; 3]; let mut n = 0.0;
+            let mut yy = y as isize - r; while yy <= y as isize + r {
+                if yy >= 0 && (yy as usize) < ah { let v = src[yy as usize * aw + x]; for i in 0..3 { s[i] += v[i]; } n += 1.0; }
+                yy += 3;
+            }
+            glow[y * aw + x] = s.map(|v| v / n);
+        }}
+    }
+    // Only inside the icon area (keep the label band below clean).
+    let limit = (h as f32 * 0.72) as usize;
+    for y in 0..limit.min(ah) { for x in 0..aw {
+        let a = acc[y * aw + x]; let g = glow[y * aw + x];
+        let add_c = [0, 1, 2].map(|i| a[i] + g[i] * 1.6);
+        if add_c.iter().all(|v| *v < 0.5) { continue; }
+        let p = img.get_pixel_mut(x as u32, y as u32);
+        for i in 0..3 { p[i] = (p[i] as f32 + add_c[i]).min(255.0) as u8; }
+        let lum = add_c.iter().cloned().fold(0.0f32, f32::max) / 255.0;
+        p[3] = (p[3] as f32 + lum * 255.0).min(255.0) as u8;
+    }}
+    img
+}
+
 /// A carousel card's fill: violet glass over the sky, a touch lighter and
 /// denser when it is the one in the middle.
 fn card_fill(selected: bool) -> (u8, u8, u8, u8) {
@@ -349,7 +526,7 @@ pub fn rgb_text_spec(text: &str, font: &Font, size: f32, width: f32, t: f32) -> 
     let spans = text.chars().enumerate().map(|(i, ch)| {
         let hue = (t * 0.25 + i as f32 * 0.07).rem_euclid(1.0);
         let (r, g, b) = hsv(hue, 0.55, 1.0);
-        Span::new(ch.to_string(), size, Some(size * 1.25), std::sync::Arc::new(font.clone()),
+        Span::new(ch.to_string(), size, Some(size * 1.25), crate::objects::shared_font(&font),
             Color(r, g, b, 255), 0.0)
     }).collect();
     Text::new(spans, Some(width), Align::Center, None)
@@ -369,7 +546,7 @@ pub fn tick_rgb_text(c: &mut Canvas) {
     let f = c.get_i32("shop_rgb_t") + 1;
     c.set_var("shop_rgb_t", f);
     if f % 3 != 0 { return; }
-    let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) else { return };
+    let Some(font) = crate::scenes::game::helpers::ui_font() else { return };
     let t = f as f32 / 60.0;
     let s = c.virtual_scale();
     let title = match c.get_var("shop_title_now") { Some(Value::Str(v)) => v, _ => "SHOP".to_string() };
@@ -479,7 +656,7 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
             let base = cy + 0.62 * k;
             for (i, hgt) in [0.30f32, 0.52, 0.74].iter().enumerate() {
                 let x0 = cx + (-0.78 + i as f32 * 0.36) * k;
-                let f = 0.55 + 0.2 * i as f32;
+                let f = 0.84 + 0.08 * i as f32;
                 let c = [(ic[0] as f32 * f) as u8, (ic[1] as f32 * f) as u8, (ic[2] as f32 * f) as u8, 255];
                 fill(&mut img, x0, base - hgt * k, x0 + 0.26 * k, base, c);
             }
@@ -654,6 +831,38 @@ fn shop_cat_card_img(idx: usize, w: u32, h: u32) -> image::RgbaImage {
             dot(&mut img, bx, by, 0.24 * k, ic);
             dot(&mut img, bx - 0.05 * k, by - 0.05 * k, 0.11 * k, [255, 255, 255, 255]);
         }
+        6 => {
+            // Sky: a nebula. A cloud of overlapping puffs, the core bright,
+            // and three stars twinkling round it.
+            let k = icon_s as f32 * 1.6;
+            let (cx, cy) = (glow_cx as f32, glow_cy as f32);
+            let dot = |img: &mut image::RgbaImage, x: f32, y: f32, r: f32, c: [u8; 4]| {
+                let ri = r.ceil() as i32;
+                for dy in -ri..=ri { for dx in -ri..=ri {
+                    if (dx * dx + dy * dy) as f32 <= r * r {
+                        let (px, py) = (x as i32 + dx, y as i32 + dy);
+                        if px >= 0 && py >= 0 && (px as u32) < img.width() && (py as u32) < img.height() { img.put_pixel(px as u32, py as u32, image::Rgba(c)); }
+                    }
+                }}
+            };
+            let dim = [(ic[0] as f32 * 0.62) as u8, (ic[1] as f32 * 0.62) as u8, (ic[2] as f32 * 0.62) as u8, 255];
+            for (x, y, r) in [(-0.50, 0.12, 0.26), (-0.18, -0.10, 0.34), (0.20, 0.02, 0.30), (0.50, -0.14, 0.22), (0.02, 0.26, 0.24)] {
+                dot(&mut img, cx + x * k, cy + y * k, r * k, dim);
+            }
+            for (x, y, r) in [(-0.16, -0.06, 0.18), (0.14, 0.04, 0.15)] {
+                dot(&mut img, cx + x * k, cy + y * k, r * k, ic);
+            }
+            dot(&mut img, cx - 0.02 * k, cy - 0.02 * k, 0.08 * k, [255, 255, 255, 255]);
+            for (x, y, len) in [(-0.62, -0.58, 0.14), (0.60, 0.52, 0.12), (0.52, -0.66, 0.09)] {
+                let (sx, sy, l) = (cx + x * k, cy + y * k, (len * k) as i32);
+                for d in -l..=l {
+                    let a = 1.0 - d.abs() as f32 / l.max(1) as f32;
+                    let w = (2.5 * a).max(1.0);
+                    dot(&mut img, sx + d as f32, sy, w, [255, 255, 255, 255]);
+                    dot(&mut img, sx, sy + d as f32, w, [255, 255, 255, 255]);
+                }
+            }
+        }
         _ => {}
     }
 
@@ -741,7 +950,7 @@ pub fn show_categories(c: &mut Canvas) {
     c.clear_effect("shop_preview_trail");
 
     // Update title and back button text
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         let s = c.virtual_scale();
         if let Some(obj) = c.get_game_object_mut("shop_title_text") {
             obj.set_drawable(Box::new(ui_text_spec(
@@ -790,6 +999,7 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
         1 => c.get_i32("player_rope_selected"),
         2 => c.get_i32("player_bg_selected"),
         3 => c.get_i32("player_trail_selected"),
+        6 => c.get_i32(crate::sky::THEME_VAR),
         // Abilities open on the equipped one.
         5 => {
             let g = crate::profile::profile();
@@ -815,7 +1025,7 @@ pub fn show_carousel(c: &mut Canvas, cat: i32) {
     refresh_select_text(c, cat, sel as usize);
 
     // Update title and back button text
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         let s = c.virtual_scale();
         let cat_name = SHOP_CAT_NAMES.get(cat as usize).copied().unwrap_or("SHOP");
         c.set_var("shop_title_now", Value::Str(cat_name.to_string()));
@@ -972,7 +1182,7 @@ pub fn update_all_slot_images(c: &mut Canvas, selected: usize, cat: i32) {
 }
 
 pub fn update_all_slot_labels(c: &mut Canvas, selected: usize, cat: i32) {
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         let s_scale = c.virtual_scale();
         let (colors, names) = cat_items(cat);
         let n = colors.len();
@@ -987,15 +1197,19 @@ pub fn update_all_slot_labels(c: &mut Canvas, selected: usize, cat: i32) {
                 upgrade_slot_label(idx)
             } else if is_ability_category(cat) {
                 ability_slot_label(idx)
-            } else if cat == 0 || cat == 1 {
+            } else if cat == 0 || cat == 1 || cat == 6 {
                 look_slot_label(c, cat, idx)
             } else {
                 (names[idx].to_string(), Color(180, 210, 240, 200))
             };
+            // Long labels ("DESERT WORLD  •  400 META") shrink to stay on one
+            // line rather than wrapping under the card.
+            let n = label.chars().count() as f32;
+            let px = if n > 21.0 { (28.0 * 21.0 / n).max(19.0) } else { 28.0 };
             if let Some(obj) = c.get_game_object_mut(&name) {
                 obj.set_drawable(Box::new(ui_text_spec(
                     &label, &font,
-                    28.0 * s_scale, colour,
+                    px * s_scale, colour,
                     (CARD_W as f32) * s_scale,
                 )));
             }
@@ -1020,7 +1234,7 @@ pub fn refresh_carousel(c: &mut Canvas, cat: i32, selected: usize) {
 pub fn refresh_instruction(c: &mut Canvas, cat: i32, selected: usize) {
     let text = carousel_instruction(c, cat, selected);
     let scale = c.virtual_scale();
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 &text, &font, 30.0 * scale, Color(150, 180, 215, 210), 1600.0 * scale,
@@ -1033,6 +1247,15 @@ pub fn refresh_instruction(c: &mut Canvas, cat: i32, selected: usize) {
 /// it is the one equipped.
 pub fn look_state(c: &Canvas, cat: i32, idx: usize) -> (String, crate::cosmetics::Price, bool, bool) {
     use crate::cosmetics::*;
+    if cat == 6 {
+        let idx = idx.min(crate::sky::ITEMS - 1);
+        let (key, price) = crate::sky::item(idx);
+        let equipped = if idx == crate::sky::EVENTS_IDX { c.get_bool(crate::sky::EVENTS_VAR) }
+            else if idx >= crate::sky::PLANET0 { crate::sky::planet_of(c) == idx - crate::sky::PLANET0 }
+            else if idx == crate::sky::LIVING_IDX { c.get_bool(crate::sky::LIVING_VAR) }
+            else { c.get_i32(crate::sky::THEME_VAR).max(0) as usize == idx };
+        return (crate::sky::NAMES[idx].to_string(), price, owns(&key, price), equipped);
+    }
     let (key, price, name) = if cat == 0 {
         (char_key(idx), char_price(idx), PLAYER_CHAR_NAMES.get(idx).copied().unwrap_or(""))
     } else {
@@ -1055,8 +1278,11 @@ fn look_slot_label(c: &Canvas, cat: i32, idx: usize) -> (String, Color) {
         let m = g.lock().unwrap().meta_currency;
         m
     };
+    let toggle = cat == 6 && crate::sky::is_toggle(idx);
     if equipped {
-        (format!("{name}  \u{2022}  EQUIPPED"), Color(140, 255, 190, 230))
+        (format!("{name}  \u{2022}  {}", if toggle { "ON" } else { "EQUIPPED" }), Color(140, 255, 190, 230))
+    } else if owned && toggle {
+        (format!("{name}  \u{2022}  OFF"), Color(180, 210, 240, 200))
     } else if owned {
         (name, Color(180, 210, 240, 200))
     } else {
@@ -1078,14 +1304,16 @@ pub fn refresh_select_text(c: &mut Canvas, cat: i32, selected: usize) {
         "BUY".to_string()
     } else if is_ability_category(cat) {
         ability_action(selected).0
-    } else if cat == 0 || cat == 1 {
-        let (_, price, owned, _) = look_state(c, cat, selected);
-        if owned { "SELECT".to_string() } else { format!("BUY \u{2022} {}", price.label()) }
+    } else if cat == 0 || cat == 1 || cat == 6 {
+        let (_, price, owned, on) = look_state(c, cat, selected);
+        if !owned { format!("BUY \u{2022} {}", price.label()) }
+        else if cat == 6 && crate::sky::is_toggle(selected) { if on { "TURN OFF".into() } else { "TURN ON".into() } }
+        else { "SELECT".to_string() }
     } else {
         "SELECT".to_string()
     };
     let s = c.virtual_scale();
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         if let Some(obj) = c.get_game_object_mut("shop_select_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 &action, &font, 32.0 * s, Color(255, 255, 255, 255), 380.0 * s,
@@ -1103,7 +1331,7 @@ pub fn select_look(c: &mut Canvas, cat: i32, idx: usize) -> bool {
     if owned {
         return true;
     }
-    let key = if cat == 0 { char_key(idx) } else { rope_key(idx) };
+    let key = match cat { 0 => char_key(idx), 6 => crate::sky::item(idx).0, _ => rope_key(idx) };
     match buy(&key, price) {
         Ok(()) => {
             flash_instruction(c, &format!("UNLOCKED {name}!"));
@@ -1126,7 +1354,7 @@ pub fn select_look(c: &mut Canvas, cat: i32, idx: usize) -> bool {
 /// the blurb back.
 fn flash_instruction(c: &mut Canvas, text: &str) {
     let scale = c.virtual_scale();
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 text, &font, 34.0 * scale, Color(255, 236, 150, 240), 1600.0 * scale,
@@ -1151,6 +1379,9 @@ fn rope_swatch_pos(i: usize) -> (f32, f32) {
 }
 
 fn show_rope_colors(c: &mut Canvas, show: bool) {
+    // Ropes are no longer recoloured: every style wears its own colour, so
+    // the colour row never shows.
+    let show = show && false;
     for i in 0..SHOP_ROPE_COLORS.len() {
         set_visible(c, &format!("shop_rope_color_{i}"), show);
     }
@@ -1179,7 +1410,7 @@ fn place_rope_color_ring(c: &mut Canvas) {
         o.size = (d, d);
     }
     let scale = c.virtual_scale();
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         if let Some(obj) = c.get_game_object_mut("shop_rope_color_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 &format!("COLOUR  \u{2022}  {}   (W / S)", SHOP_ROPE_NAMES[sel]),
@@ -1191,7 +1422,9 @@ fn place_rope_color_ring(c: &mut Canvas) {
 
 /// Pick rope colour `i`: equipped at once and saved, whichever style is on.
 pub fn select_rope_color(c: &mut Canvas, i: usize) {
-    let i = i.min(SHOP_ROPE_COLORS.len() - 1);
+    // Ropes keep their ORIGINAL colour (recolouring was removed).
+    let _ = i;
+    let i = 0usize;
     c.set_var("player_rope_selected", i as i32);
     // The menu's swinging cat's rope takes the colour straight away.
     crate::menu_look::apply_menu_cat(c);
@@ -1294,37 +1527,26 @@ pub fn select_ability(c: &mut Canvas, idx: usize) {
 /// The line under the carousel: what the selected upgrade actually does, plus
 /// the player's balance. Cosmetic categories keep the browse hint.
 pub fn carousel_instruction(c: &Canvas, cat: i32, selected: usize) -> String {
+    // (The balance is not repeated here: the corner already shows the META.)
+    let _ = c;
     if cat == 0 || cat == 1 {
-        let meta = {
-            let g = crate::profile::profile();
-            let m = g.lock().unwrap().meta_currency;
-            m
-        };
-        return format!("A / D  or  <  >  to browse   \u{2022}   YOU HAVE {meta} META");
+        return "A / D  or  <  >  to browse".to_string();
+    }
+    if cat == 6 {
+        return crate::sky::blurb(selected.min(crate::sky::ITEMS - 1)).to_string();
     }
     if is_ability_category(cat) {
-        let meta = {
-            let g = crate::profile::profile();
-            let m = g.lock().unwrap().meta_currency;
-            m
-        };
         return match crate::profile::ABILITIES.get(selected) {
-            Some(a) => format!("{}   \u{2022}   UPGRADES: {}   \u{2022}   YOU HAVE {} META", a.blurb, a.per_rank, meta),
-            None => format!("YOU HAVE {meta} META"),
+            Some(a) => format!("{}   \u{2022}   UPGRADES: {}", a.blurb, a.per_rank),
+            None => String::new(),
         };
     }
     if !is_upgrade_category(cat) {
         return "A / D  or  <  >  to browse".to_string();
     }
-    let meta = {
-        let g = crate::profile::profile();
-        let m = g.lock().unwrap().meta_currency;
-        m
-    };
-    let _ = c;
     match crate::profile::PERM_UPGRADES.get(selected) {
-        Some(u) => format!("{}   •   YOU HAVE {} META   •   ENTER TO BUY", u.blurb, meta),
-        None => format!("YOU HAVE {meta} META"),
+        Some(u) => format!("{}   •   ENTER TO BUY", u.blurb),
+        None => String::new(),
     }
 }
 
@@ -1341,12 +1563,13 @@ pub fn init_shop(canvas: &mut Canvas) {
     canvas.set_var("shop_preview_angle",     0.0f32);
     canvas.set_var("shop_instr_restore",     0i32);
 
-    // Pre-warm caches
+    // Pre-warm caches (the upgrade demo clips decode on their own thread)
+    crate::shop_demos::prewarm();
     get_card_cache();
     get_cat_card_cache();
 
     // Set category label texts — use card-relative width so text stays inside each box
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         let s = canvas.virtual_scale();
         for i in 0..NUM_CATS {
             let (_, _, cw, _) = cat_card_rect(i);
@@ -1382,21 +1605,7 @@ pub fn handle_shop_key(c: &mut Canvas, key: &Key) {
     let (colors, _) = cat_items(cat);
     let n = colors.len() as i32;
     let cur = c.get_i32("shop_selected");
-    if cat == 1 {
-        let step: i32 = match key {
-            Key::Character(ch) if ch == "w" => -1,
-            Key::Character(ch) if ch == "s" => 1,
-            Key::Named(NamedKey::ArrowUp) => -1,
-            Key::Named(NamedKey::ArrowDown) => 1,
-            _ => 0,
-        };
-        if step != 0 {
-            let n = SHOP_ROPE_COLORS.len() as i32;
-            let now = c.get_i32("player_rope_selected").max(0);
-            select_rope_color(c, (((now + step) % n + n) % n) as usize);
-            return;
-        }
-    }
+    // (W/S used to step the rope COLOUR; ropes are no longer recoloured.)
     let dir: i32 = match key {
         Key::Character(ch) if ch == "a" => -1,
         Key::Character(ch) if ch == "d" =>  1,
@@ -1485,7 +1694,9 @@ pub const SHOP_TRAIL_DOTS: usize = 18;
 const TRAIL_DOT_TEX_R: u32 = 34;
 
 /// Centre of the shop preview pane.
-fn preview_center() -> (f32, f32) { (VW * 0.5, 250.0) }
+/// (Below the SELECT button: up under the title it covered the heading and
+/// ran into the instruction line.)
+fn preview_center() -> (f32, f32) { (VW * 0.5, 1800.0) }
 
 /// How long the ROPES preview's rope is: an in-game rope of ~690 px at the
 /// preview's 1.6x, lying across most of the panel.
@@ -1515,6 +1726,39 @@ fn bg_preview_img(idx: usize) -> Arc<image::RgbaImage> {
         }).collect()
     });
     cache[idx.min(cache.len().saturating_sub(1))].clone()
+}
+
+/// A SKY theme's nebula for the preview pane (built once per theme).
+fn sky_preview_img(theme: usize) -> Option<Arc<image::RgbaImage>> {
+    static CACHE: OnceLock<Mutex<Vec<Option<Arc<image::RgbaImage>>>>> = OnceLock::new();
+    let theme = theme.min(crate::sky::THEMES.len() - 1);
+    let mut cache = CACHE.get_or_init(|| Mutex::new(vec![None; crate::sky::THEMES.len()])).lock().unwrap();
+    if cache[theme].is_none() {
+        cache[theme] = crate::sky::thumbnail(theme, 1000, true).map(Arc::new);
+    }
+    cache[theme].clone()
+}
+
+/// WEATHER, SKY EVENTS or a backdrop for the preview pane (built once each).
+fn extras_preview_img(idx: usize) -> Option<Arc<image::RgbaImage>> {
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<usize, Arc<image::RgbaImage>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Some(i) = cache.lock().unwrap().get(&idx) { return Some(i.clone()); }
+    let img = Arc::new(crate::scenes::game::sky_extras::card_art(idx, 500));
+    cache.lock().unwrap().insert(idx, img.clone());
+    Some(img)
+}
+
+/// A planet for the preview pane (built once each).
+fn planet_preview_img(i: usize) -> Option<Arc<image::RgbaImage>> {
+    static CACHE: OnceLock<Mutex<Vec<Option<Arc<image::RgbaImage>>>>> = OnceLock::new();
+    let n = crate::sky::PLANETS.len();
+    let i = i.min(n - 1);
+    let mut cache = CACHE.get_or_init(|| Mutex::new(vec![None; n])).lock().unwrap();
+    if cache[i].is_none() {
+        cache[i] = Some(Arc::new(crate::sky::planet_thumbnail(i, 780)));
+    }
+    cache[i].clone()
 }
 
 /// Cached animated calico ball for the character preview (slow playback).
@@ -1613,13 +1857,86 @@ fn hide_trail_dots(c: &mut Canvas) {
     }
 }
 
+const PREVIEW_TRAIL_EMITTERS: [&str; 3] = ["shop_trail_a", "shop_trail_b", "shop_trail_c"];
+const PREVIEW_MYSTIC_GUIDES: [&str; 2] = ["shop_mystic_guide_a", "shop_mystic_guide_b"];
+const PREVIEW_MYSTIC_STRANDS: [&str; 2] = ["shop_trail_mystic_a", "shop_trail_mystic_b"];
+
+/// Take the preview's real trail down (any other screen or category).
+fn clear_preview_trail(c: &mut Canvas) {
+    if c.get_i32("shop_trail_emit") == 0 { return; }
+    c.set_var("shop_trail_emit", 0i32);
+    for n in PREVIEW_TRAIL_EMITTERS.iter().chain(&PREVIEW_MYSTIC_STRANDS) { c.remove_emitter(n); }
+}
+
+/// The ROPES preview's leftovers (the classic rope's animation, a premium
+/// rope's strip) — so nothing of it lingers behind another category.
+fn clear_rope_preview(c: &mut Canvas) {
+    if !c.get_game_object("shop_preview_trail").is_some_and(|o| o.visible || o.animated_sprite.is_some()) { return; }
+    c.clear_effect("shop_preview_trail");
+    if let Some(o) = c.get_game_object_mut("shop_preview_trail") {
+        o.animated_sprite = None;
+        o.tags.retain(|t| !t.starts_with("classic_"));
+        o.visible = false;
+    }
+}
+
+/// TRAILS: the ball sweeps a wide loop with the game's own trail emitters on
+/// it (and MYSTIC's twin strands), so the preview is the trail itself.
+fn tick_trail_preview(c: &mut Canvas, sel: usize, pcx: f32, pcy: f32) {
+    let sel = sel.min(SHOP_TRAIL_COLORS.len() - 1);
+    if c.get_i32("shop_trail_emit") != sel as i32 + 1 {
+        clear_preview_trail(c);
+        c.set_var("shop_trail_emit", sel as i32 + 1);
+        for e in crate::scenes::game::build_scene::trail_emitters(SHOP_TRAIL_COLORS[sel], PREVIEW_TRAIL_EMITTERS) {
+            c.add_emitter(e);
+        }
+        for n in PREVIEW_TRAIL_EMITTERS { c.attach_emitter_to(n, "shop_preview_ball"); }
+        if sel == 4 {
+            for (s, g) in PREVIEW_MYSTIC_STRANDS.iter().zip(PREVIEW_MYSTIC_GUIDES) {
+                c.add_emitter(crate::scenes::game::mystic_trail::strand_emitter(s));
+                c.attach_emitter_to(s, g);
+            }
+        }
+    }
+    hide_trail_dots(c);
+    set_visible(c, "shop_preview_trail", false);
+    // A wide oval across the panel, fast enough that the trail streams out
+    // behind it the way it does in a swing.
+    let t = c.get_i32("shop_trail_t") + 1;
+    c.set_var("shop_trail_t", t);
+    let a = t as f32 * 0.045;
+    let (rx, ry) = (440.0, 70.0);
+    let (bx, by) = (pcx + rx * a.cos(), pcy + ry * a.sin());
+    let v = (-rx * a.sin() * 0.045, ry * a.cos() * 0.045);
+    if let Some(obj) = c.get_game_object_mut("shop_preview_ball") {
+        let d = 88.0;
+        obj.tags.retain(|t| !t.starts_with("breed_"));
+        obj.animated_sprite = None;
+        obj.set_image(Image {
+            shape: ShapeType::Ellipse(0.0, (d, d), 0.0),
+            image: circle_cached((d * 0.5) as u32, 235, 235, 235),
+            color: None,
+        });
+        obj.size = (d, d);
+        obj.position = (bx - d * 0.5, by - d * 0.5);
+        obj.visible = true;
+    }
+    if sel == 4 {
+        crate::scenes::game::mystic_trail::weave(c, PREVIEW_MYSTIC_GUIDES, t, (bx, by), v);
+    }
+}
+
 /// Per-frame shop preview: an orbiting ball with the selected character/trail
 /// colour, plus a background preview for the background category. The trail
 /// mirrors the gameplay loop's particle trail (round, tapering, trailing behind
 /// the ball) and the ROPES category shows a recoloured energy-hook animation.
 pub fn tick_shop_preview(c: &mut Canvas) {
-    if !matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) { return; }
     let cat = c.get_i32("shop_active_category");
+    let in_shop = matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true)));
+    // The real trail runs only while TRAILS is being browsed.
+    if !(in_shop && cat == 3 && c.get_i32("shop_screen") == 1) { clear_preview_trail(c); }
+    if cat != 1 { clear_rope_preview(c); }
+    if !in_shop { return; }
     let sel = c.get_i32("shop_selected").max(0) as usize;
     if c.get_i32("shop_screen") != 1 || cat == 4 || cat == 5 {
         set_visible(c, "shop_preview_panel", false);
@@ -1644,6 +1961,40 @@ pub fn tick_shop_preview(c: &mut Canvas) {
             obj.size = (bw, bh);
             obj.position = (pcx - bw * 0.5, pcy - bh * 0.5);
             obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: bg_preview_img(sel), color: None });
+        }
+        return;
+    }
+    // SKY: the theme's nebula in the pane; LIVING NEBULA shows the equipped
+    // theme breathing.
+    if cat == 6 {
+        set_visible(c, "shop_preview_ball", false);
+        set_visible(c, "shop_preview_trail", false);
+        hide_trail_dots(c);
+        // A planet card: the planet in the pane.
+        if sel >= crate::sky::PLANET0 {
+            let img = if sel == crate::sky::EVENTS_IDX { extras_preview_img(sel) } else { planet_preview_img(sel - crate::sky::PLANET0) };
+            if let (Some(img), Some(obj)) = (img, c.get_game_object_mut("shop_preview_bg")) {
+                let (bw, bh) = (img.width() as f32, img.height() as f32);
+                obj.size = (bw, bh);
+                obj.position = (pcx - bw * 0.5, pcy - bh * 0.5);
+                obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: img, color: None });
+                obj.visible = true;
+            }
+            return;
+        }
+        let living = sel == crate::sky::LIVING_IDX;
+        let theme = if living { c.get_i32(crate::sky::THEME_VAR).max(0) as usize } else { sel };
+        let t = c.get_i32("shop_sky_t") + 1;
+        c.set_var("shop_sky_t", t);
+        let breath = (t as f32 / 240.0 * std::f32::consts::TAU).sin();
+        let (k, a) = if living { (1.0 + 0.025 * breath, 0.78 + 0.22 * breath) } else { (1.0, 1.0) };
+        if let (Some(img), Some(obj)) = (sky_preview_img(theme), c.get_game_object_mut("shop_preview_bg")) {
+            let (bw, bh) = (img.width() as f32 * k, img.height() as f32 * k);
+            obj.size = (bw, bh);
+            obj.position = (pcx - bw * 0.5, pcy - bh * 0.5);
+            obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (bw, bh), 0.0), image: img,
+                color: Some(Color(255, 255, 255, (a * 255.0) as u8)) });
+            obj.visible = true;
         }
         return;
     }
@@ -1690,7 +2041,8 @@ pub fn tick_shop_preview(c: &mut Canvas) {
             let frame = crate::cosmetics::rope_frame(style, t);
             let tint = crate::cosmetics::rope_tint(style_idx, color_idx, rgb);
             if let Some(tile) = crate::cosmetics::rope_tile(style_idx, frame, tint) {
-                let (w, h) = (style.beam * 1.6, len);
+                let k = crate::cosmetics::rope_beam_scale(style_idx);
+                let (w, h) = (style.beam * 1.6 * k, len);
                 if let Some(obj) = c.get_game_object_mut("shop_preview_trail") {
                     obj.animated_sprite = None;
                     obj.tags.retain(|t| !t.starts_with("classic_"));
@@ -1699,12 +2051,17 @@ pub fn tick_shop_preview(c: &mut Canvas) {
                     obj.rotation = 90.0;
                     obj.visible = true;
                 }
-                let reps = h / (style.cell_len() * 1.6);
+                let reps = h / (style.cell_len() * 1.6 * k);
                 c.attach_effect("shop_preview_trail",
                     Effect::TiledStrip { image: tile, repeats: reps, phase: -t * style.flow, mirror: style.mirror, alpha: 1.0 },
                     EffectColor::WHITE, (w, h));
             }
         }
+        return;
+    }
+
+    if cat == 3 {
+        tick_trail_preview(c, sel, pcx, pcy);
         return;
     }
 
@@ -1810,6 +2167,17 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
     get_item_card_cache(2); // pre-warm background carousel cache
     get_item_card_cache(3); // pre-warm trail carousel cache
     get_cat_card_cache(); // pre-warm category card cache
+    // The rest, off the main thread: built on first click they stalled the
+    // menu (the SKY cards recolour the whole nebula, one per theme).
+    std::thread::spawn(|| {
+        for cat in [6, 4, 5] { get_item_card_cache(cat); }
+        for t in 0..crate::sky::THEMES.len() { let _ = sky_preview_img(t); }
+        for p in 0..crate::sky::PLANETS.len() { let _ = planet_preview_img(p); }
+        let _ = extras_preview_img(crate::sky::EVENTS_IDX);
+        let size = (ROPE_THICKNESS * 1.6, PREVIEW_ROPE_LEN);
+        let _ = energy_hook_preview(0, SHOP_ROPE_COLORS[0], size);
+        for i in 0..NUM_CHARS { let _ = breed_preview_anim(i); }
+    });
 
     let bg_w = VW + 800.0;
     let bg_h = VH;
@@ -1854,8 +2222,8 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
     // Carousel instruction text (hidden until carousel screen)
     let instr_y = CARD_CENTER_Y - CARD_H as f32 / 2.0 - 100.0 - 90.0;
     let mut instr_obj = GameObject::build("shop_instr_text")
-        .size(1000.0, 80.0)
-        .position(VW * 0.5 - 500.0, instr_y)
+        .size(1600.0, 80.0)
+        .position(VW * 0.5 - 800.0, instr_y)
         .build(ctx);
     instr_obj.visible = false;
 
@@ -2027,6 +2395,13 @@ pub fn extend_with_shop(ctx: &mut Context, scene: Scene) -> Scene {
         preview_bg.layer = 42;
         preview_bg.visible = false;
 
+        for g in PREVIEW_MYSTIC_GUIDES {
+            let mut o = GameObject::new_rect(ctx, g.into(), None::<Image>, (2.0, 2.0), (-9000.0, -9000.0),
+                vec![], (0.0, 0.0), (1.0, 1.0), 0.0);
+            o.visible = false;
+            o.gravity = 0.0;
+            scene = scene.with_object(g, o);
+        }
         scene = scene
             .with_object("shop_preview_panel", preview_panel)
             .with_object("shop_preview_ball",  preview_ball)
@@ -2218,7 +2593,7 @@ pub fn buy_selected_upgrade(c: &mut Canvas) {
         Ok(level) => format!("{}  >  RANK {}", u.name, level),
         Err(reason) => format!("{}   \u{2022}   {}", u.name, reason),
     };
-    if let Ok(font) = Font::from_bytes(include_bytes!("../assets/font.ttf")) {
+    if let Some(font) = crate::scenes::game::helpers::ui_font() {
         if let Some(obj) = c.get_game_object_mut("shop_instr_text") {
             obj.set_drawable(Box::new(ui_text_spec(
                 &text, &font, 30.0 * scale, Color(255, 236, 150, 240), 1600.0 * scale,

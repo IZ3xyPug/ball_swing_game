@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::achievements::*;
 use crate::constants::*;
-use crate::gameplay::zone_index_for_distance;
 use crate::hud::*;
 use crate::state::*;
 use crate::difficulty::ZONE_CYCLE_DISTANCE;
@@ -83,7 +82,7 @@ pub fn tick_hud(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         s.hud_coin_alpha = target_alpha;
     }
     let coin_alpha = s.hud_coin_alpha;
-    let dirty_alpha = coin_alpha != s.hud_last_coin_alpha;
+    let _dirty_alpha = coin_alpha != s.hud_last_coin_alpha;
 
     // The counter fades with a TINT, not by rebuilding its pixels.
     //

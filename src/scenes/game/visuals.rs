@@ -507,10 +507,11 @@ fn tick_zoom(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         ((VH - ZOOM_TOP_MARGIN) / (VH - effective_y).abs().max(1.0)).clamp(1.0 / ZOOM_MAX, 1.0)
     };
 
-    // In the boss arena the Dune-style height zoom would pull way out on the
-    // tall zero-g space; keep the boss readable by capping how far out it goes.
+    // In the boss arena the camera holds one zoom. The lane's height zoom
+    // (out as the player climbs) made the arena breathe in and out under the
+    // fight, which read as the zoom being wrong.
     let in_boss = s.boss_active && s.boss_spawned && s.boss_hp > 0;
-    let target_zoom = if in_boss { (target_zoom * BOSS_CAM_ZOOM_SCALE).max(BOSS_CAM_MIN_ZOOM) } else { target_zoom };
+    let target_zoom = if in_boss { BOSS_CAM_ZOOM } else { target_zoom };
 
     let px = s.px;
     let py = s.py;

@@ -2,7 +2,6 @@ use quartz::*;
 use std::sync::{Arc, Mutex};
 
 use crate::constants::*;
-use crate::state::*;
 use super::beatmap::*;
 #[allow(unused_imports)]
 use super::*;
@@ -913,7 +912,7 @@ fn tick_weakpoint(
             o.visible = true;
             // Pulses, and brightens as the window runs out, so "hurry" is
             // legible without a number.
-            let urgency = 1.0 - (window as f32 / CONDUCTOR_WINDOW_TICKS as f32).clamp(0.0, 1.0);
+            let _urgency = 1.0 - (window as f32 / CONDUCTOR_WINDOW_TICKS as f32).clamp(0.0, 1.0);
             let beat = ((window as f32 * 0.35).sin().abs() * 60.0) as u8;
             o.set_tint(Color(255, 255, 255, (170 + beat as u32).min(255) as u8));
             // No glow: the marker below carries the state, in the same reticle

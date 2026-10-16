@@ -66,11 +66,9 @@ pub const DECOR_KINDS: &[DecorKind] = &[
     DecorKind { name: "small ringed planet", png: png!("ringed_small"), size: (200.0, 300.0), parallax: 0.16, weight: 7, drift: (0.0, 0.0), spin: 0.0, tilt: 0.0, bob: false, rare: false, tint: MID },
     // Floaters: they cross the sky under their own drift (see
     // `self_propelled`), never pushed around by the camera.
-    DecorKind { name: "ring station", png: png!("station"), size: (240.0, 340.0), parallax: 0.18, weight: 6, drift: (-0.9, 0.0), spin: 0.05, tilt: 0.0, bob: false, rare: false, tint: MID },
     DecorKind { name: "satellite", png: png!("satellite"), size: (170.0, 240.0), parallax: 0.22, weight: 7, drift: (-1.3, 0.06), spin: 0.08, tilt: 0.0, bob: false, rare: false, tint: NEAR },
     DecorKind { name: "derelict", png: png!("derelict"), size: (220.0, 320.0), parallax: 0.2, weight: 5, drift: (-1.0, 0.1), spin: 0.03, tilt: -8.0, bob: false, rare: false, tint: MID },
     DecorKind { name: "asteroids", png: png!("asteroids"), size: (200.0, 300.0), parallax: 0.2, weight: 7, drift: (-1.1, 0.04), spin: 0.06, tilt: 0.0, bob: false, rare: false, tint: MID },
-    DecorKind { name: "crystals", png: png!("crystals"), size: (170.0, 240.0), parallax: 0.2, weight: 4, drift: (-0.8, 0.0), spin: 0.04, tilt: 0.0, bob: true, rare: false, tint: NEAR },
     DecorKind { name: "space buoy", png: png!("buoy"), size: (130.0, 180.0), parallax: 0.24, weight: 3, drift: (-0.7, 0.0), spin: 0.0, tilt: 0.0, bob: true, rare: false, tint: NEAR },
     // Movers: across the sky on their own.
     DecorKind { name: "comet", png: png!("comet"), size: (220.0, 320.0), parallax: 0.15, weight: 5, drift: (7.5, 1.6), spin: 0.0, tilt: 12.0, bob: false, rare: false, tint: NEAR },

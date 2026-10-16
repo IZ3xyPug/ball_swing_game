@@ -320,6 +320,7 @@ fn tick_coin_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &Image, tech_bounce_img_flipped: &Image, thruster_anim: Option<&AnimatedSprite>, thruster_anim_flipped: Option<&AnimatedSprite>) {
     let mut s = st.lock().unwrap();
     let collected = find_collected_pickups(c, &s.flip_live.clone(), FLIP_W, FLIP_H);
+    s.run_stats.powerups += collected.len() as u32;
     for name in &collected {
         s.flip_live.retain(|n| n != name); s.flip_magnet_locked.retain(|n| n != name); s.flip_free.push(name.clone());
         let score_mult = if s.score_x2_timer > 0 { 2 } else { 1 };
@@ -340,6 +341,7 @@ fn tick_flip_collect(c: &mut Canvas, st: &Arc<Mutex<State>>, tech_bounce_img: &I
 fn tick_score_x2_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let collected = find_collected_pickups(c, &s.score_x2_live.clone(), SCORE_X2_W, SCORE_X2_H);
+    s.run_stats.powerups += collected.len() as u32;
     for name in &collected {
         s.score_x2_live.retain(|n| n != name); s.score_x2_magnet_locked.retain(|n| n != name);
         s.score_x2_free.push(name.clone()); s.score_x2_timer = SCORE_X2_DURATION;
@@ -351,6 +353,7 @@ fn tick_score_x2_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 fn tick_zero_g_collect(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     let mut s = st.lock().unwrap();
     let collected = find_collected_pickups(c, &s.zero_g_live.clone(), ZERO_G_W, ZERO_G_H);
+    s.run_stats.powerups += collected.len() as u32;
     for name in &collected {
         s.zero_g_live.retain(|n| n != name); s.zero_g_magnet_locked.retain(|n| n != name);
         s.zero_g_free.push(name.clone()); s.zero_g_timer = ZERO_G_DURATION;

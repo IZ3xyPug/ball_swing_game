@@ -188,5 +188,9 @@ pub fn player_magnet_radius(s: &State) -> f32 {
 /// ranks and permanent multiplier as the coin magnet so the upgrade is global.
 #[inline]
 pub fn player_powerup_magnet_radius(s: &State) -> f32 {
-    POWERUP_MAGNET_RADIUS * s.perm_magnet_mult * (1.0 + MAGNET_UPGRADE_PER_STEP * s.run_magnet_buys as f32)
+    // As the coin magnet, a fifth wider: at the old 160 px a power-up was
+    // only pulled once it was all but touching, so MAGNETISM looked like it
+    // did nothing for zero-g or double score.
+    let _ = POWERUP_MAGNET_RADIUS;
+    player_magnet_radius(s) * 1.2
 }

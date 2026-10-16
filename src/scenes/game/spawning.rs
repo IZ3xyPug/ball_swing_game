@@ -349,9 +349,9 @@ pub fn tick_spawning(
     if matches!(c.get_var("spawn_coins_on"), Some(Value::Bool(true)) | None) {
         spawn_coins(c, st, coin_spawn_image, coin_spawn_anim);
     }
-    if matches!(c.get_var("spawn_flips_on"), Some(Value::Bool(true)) | None) {
-        spawn_flips(c, st);
-    }
+    // Gravity flips are the Gravity Weaver's alone: the flip pickups never
+    // turn up outside a boss fight (in any mode).
+    let _ = spawn_flips;
     if matches!(c.get_var("spawn_score_x2_on"), Some(Value::Bool(true)) | None) {
         spawn_score_x2(c, st);
     }
@@ -367,7 +367,8 @@ pub fn tick_spawning(
     }
     spawn_rocket_pads(c, st);
     spawn_main_asteroids(c, st);
-    super::gravity_cannon::spawn_cannons(c, st);
+    // Gravity cannons are off: no more spawn (the code stays, unused).
+    let _ = super::gravity_cannon::spawn_cannons;
     // Auto-comet: counts down and fires with 50% chance.
     spawn_auto_comet(c, st);
     tick_spawn_animations(c, st);
@@ -740,6 +741,11 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // queue. The queue stays a nominal proposal line and the backstop above
         // is what makes each real placement reachable; when avoidance displaces
         // a node the next hop simply springs back toward that line.
+        // A payoff's launch: owe a coin trail along the flight to it (the
+        // world is not flipped then; flipped, the arc would hang wrong).
+        if spec.launch && has_prev && s.gravity_dir > 0.0 {
+            s.reward_arcs.push_back((prev_x, prev_y, hx, hy));
+        }
         s.last_hook_x = hx;
         s.last_hook_y = hy;
         s.live_hooks.push(id.clone());
@@ -786,7 +792,12 @@ fn spawn_hooks(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         // no shelter in it, and a deterministic cadence makes that guarantee
         // structural instead of a race against RNG. `solar.rs` still checks
         // that a shelter is actually in range before starting a telegraph.
-        let shield_due = (hx - s.last_shield_x) >= SHIELD_NODE_X_GAP;
+        // Not until flares are near: shelters from the start of a run were a
+        // gold node with nothing to shelter from for a million px. They begin
+        // a stretch before the first flare, so it never fires into none.
+        let flares_near = s.distance + FLARE_SHELTER_LEAD
+            >= crate::hazards::stage(crate::hazards::Hazard::SolarFlare).introduce_distance();
+        let shield_due = flares_near && (hx - s.last_shield_x) >= SHIELD_NODE_X_GAP;
         let is_shield_hook = shield_due && !is_special_hook
             && !is_extended_hook && !is_buff_hook;
         if is_shield_hook {
@@ -1120,6 +1131,12 @@ fn spawn_spinners(c: &mut Canvas, st: &Arc<Mutex<State>>) {
 
 // ── Coins ─────────────────────────────────────────────────────────────────────
 
+/// A payoff launch's coin trail: how many coins, how far under the nodes'
+/// line the flight runs, and how high it crests mid-gap.
+const LAUNCH_TRAIL_COINS: usize = 7;
+const LAUNCH_TRAIL_DROP: f32 = 260.0;
+const LAUNCH_TRAIL_CREST: f32 = 300.0;
+
 fn spawn_coins(
     c: &mut Canvas,
     st: &Arc<Mutex<State>>,
@@ -1127,6 +1144,39 @@ fn spawn_coins(
     coin_spawn_anim: &Option<AnimatedSprite>,
 ) {
     let mut s = st.lock().unwrap();
+    // Payoff launches first: a trail of coins along the flight between the
+    // two nodes, rising to a crest and falling into the catch, so nailing the
+    // launch is visibly paid. Random batches near it step aside (they place
+    // from `coin_rightmost`, pushed past the trail).
+    while s.coin_free.len() >= LAUNCH_TRAIL_COINS {
+        let Some((x0, y0, x1, y1)) = s.reward_arcs.pop_front() else { break };
+        let mut batch = Vec::new();
+        for i in 0..LAUNCH_TRAIL_COINS {
+            let u = 0.2 + 0.6 * i as f32 / (LAUNCH_TRAIL_COINS - 1) as f32;
+            // The flight runs about a rope's length under the nodes' line,
+            // cresting in the middle.
+            let base = y0 + (y1 - y0) * u + LAUNCH_TRAIL_DROP;
+            let y = base - LAUNCH_TRAIL_CREST * 4.0 * u * (1.0 - u);
+            let x = x0 + (x1 - x0) * u;
+            let Some(id) = s.coin_free.pop() else { break };
+            s.coin_live.push(id.clone());
+            batch.push((id, x, y, (i % 8) as usize));
+        }
+        s.coin_rightmost = s.coin_rightmost.max(x1);
+        drop(s);
+        for (id, cx, cy, phase) in &batch {
+            if let Some(obj) = c.get_game_object_mut(id) {
+                obj.position = (*cx - COIN_R, *cy - COIN_R);
+                obj.visible = true;
+                obj.set_image(coin_spawn_image.clone());
+                if let Some(anim) = coin_spawn_anim {
+                    if obj.animated_sprite.is_none() { obj.set_animation(anim.clone()); }
+                    if let Some(a) = obj.animated_sprite.as_mut() { a.set_frame(*phase); }
+                }
+            }
+        }
+        s = st.lock().unwrap();
+    }
     let mut batches = 0usize;
     while batches < COIN_BATCHES_BUDGET_PER_TICK
         && s.coin_rightmost < s.px + GEN_AHEAD
@@ -1264,6 +1314,26 @@ fn spawn_coins(
         }
 
         if spawn_batch.is_empty() { break; }
+
+        // Keep the pattern clear of the grab nodes: a coin sitting on a node
+        // reads as part of it, and catching one meant grabbing the other.
+        // Lift the whole pattern (away from the floor) until it is clear.
+        {
+            let hooks: Vec<(f32, f32)> = s.live_hooks.iter()
+                .filter_map(|h| c.get_game_object(h))
+                .map(|o| (o.position.0 + HOOK_R, o.position.1 + HOOK_R))
+                .collect();
+            let up = if s.gravity_dir < 0.0 { 1.0 } else { -1.0 };
+            for _ in 0..6 {
+                let worst = spawn_batch.iter().flat_map(|(_, x, y, _)| hooks.iter().map(move |(hx, hy)| {
+                    let (dx, dy) = (x - hx, y - hy);
+                    (dx * dx + dy * dy).sqrt()
+                })).fold(f32::INFINITY, f32::min);
+                if worst >= COIN_NODE_CLEARANCE { break; }
+                let lift = COIN_NODE_CLEARANCE - worst + 20.0;
+                for b in spawn_batch.iter_mut() { b.2 += up * lift; }
+            }
+        }
 
         s.coin_rightmost = if spawn_grid {
             spawned_start_x + (COIN_GRID_COLS as f32 - 1.0) * COIN_GRID_SPACING_X

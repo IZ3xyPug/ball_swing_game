@@ -452,6 +452,7 @@ fn go_with(c: &mut Canvas, scene: &str, slow: bool) {
     if busy(c) { return; }
     c.set_var("tr_slow", slow);
     c.set_var("tr_phase", CLOSING);
+    crate::ui_sfx::transition(c);
     c.set_var("tr_t", 0i32);
     c.set_var("tr_next", Value::Str(scene.to_string()));
     ensure_panels(c);

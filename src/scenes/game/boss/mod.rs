@@ -31,6 +31,8 @@ pub(crate) mod phase_cine;
 pub(crate) mod colossus_finale;
 pub(crate) mod fx_kit;
 pub(crate) mod colossus_fx;
+pub(crate) mod colossus_sfx;
+pub(crate) mod boss_sfx;
 pub(crate) mod serpent_fx;
 pub(crate) mod titan_fx;
 pub(crate) mod magnetar_fx;
@@ -116,6 +118,8 @@ pub fn tick_boss(c: &mut Canvas, st: &Arc<Mutex<State>>) {
     // A phase change, if one is playing: after the fight's own tick, so its
     // hold on the player and the camera wins.
     tick_phase_cine(c, st);
+    // Every other boss's sounds, read off the fight's state.
+    boss_sfx::tick(c, st);
     // The Colossus's last stand: its look layered over the fight.
     colossus_finale::tick_colossus_finale(c, st);
     // Each boss's attacks, dressed (they hide themselves out of their fight).

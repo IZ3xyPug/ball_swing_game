@@ -35,11 +35,20 @@ pub(crate) const WEAVER_LOOM_IDX: usize = WEAVER_SPINDLES;
 
 /// Ticks a part rests between shuttles, staggered per spindle so no two
 /// throw in lockstep.
-fn weaver_idle_len(i: usize) -> u32 {
+fn weaver_idle_len(i: usize, core: bool) -> u32 {
     if i == WEAVER_LOOM_IDX {
-        return WEAVER_LOOM_IDLE_TICKS;
+        return if core { WEAVER_LOOM_IDLE_TICKS_CORE } else { WEAVER_LOOM_IDLE_TICKS };
     }
     WEAVER_IDLE_TICKS + (i as u32 * 23) % 61
+}
+
+/// The second phase (the loom alone) is quicker on every count: its wind-up,
+/// and the window it stays open after a throw.
+fn weaver_tel_len(i: usize, core: bool) -> u32 {
+    if core && i == WEAVER_LOOM_IDX { WEAVER_TELEGRAPH_TICKS_CORE } else { WEAVER_TELEGRAPH_TICKS }
+}
+fn weaver_rec_len(i: usize, core: bool) -> u32 {
+    if core && i == WEAVER_LOOM_IDX { WEAVER_RECOVER_TICKS_CORE } else { WEAVER_RECOVER_TICKS }
 }
 
 fn weaver_part_size(i: usize) -> f32 {
@@ -214,7 +223,9 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
         if s.boss_contact_cooldown > 0 { s.boss_contact_cooldown -= 1; }
         if s.weaver_flip_open > 0 { s.weaver_flip_open -= 1; }
         s.weaver_orbit += WEAVER_ORBIT_RATE;
-        s.boss_phase += 0.006;
+        // The loom weaves round the arena faster once it is alone.
+        let alone = (0..WEAVER_SPINDLES).all(|i| !s.boss_parts.get(i).map_or(false, |p| p.alive));
+        s.boss_phase += if alone { WEAVER_CORE_DRIFT } else { 0.006 };
         if check || reach {
             // The checks park the player inside the fight; they are proving
             // the boss's paths, not the player's survival, so hearts stay up.
@@ -527,7 +538,7 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     // on the flip must STAY open for it, not start a wind-up
                     // a few frames in (which flashed "hit me" and shut again).
                     if cooldown_ok && !telegraph && !began && gauntlet_step == 0 && !flip_open && !revealing
-                        && p.state_ticks >= weaver_idle_len(i)
+                        && p.state_ticks >= weaver_idle_len(i, core_phase)
                     {
                         p.state = PartState::Telegraph;
                         p.state_ticks = 0;
@@ -550,7 +561,7 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                     if !frozen {
                         p.state_ticks += 1;
                     }
-                    if p.state_ticks >= WEAVER_TELEGRAPH_TICKS {
+                    if p.state_ticks >= weaver_tel_len(i, core_phase) {
                         p.state = PartState::Attack;
                         p.state_ticks = 0;
                     }
@@ -574,7 +585,7 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
                 }
                 PartState::Recover => {
                     p.state_ticks += 1;
-                    if p.state_ticks >= WEAVER_RECOVER_TICKS {
+                    if p.state_ticks >= weaver_rec_len(i, core_phase) {
                         p.state = PartState::Idle;
                         p.state_ticks = 0;
                     }
@@ -608,10 +619,10 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             // `WEAVER_TELEGRAPH_CLEAR` ticks), so the thread lands on a clean
             // frame instead of on top of its own warning.
             let lane_up = p.state == PartState::Telegraph
-                && p.state_ticks + WEAVER_TELEGRAPH_CLEAR < WEAVER_TELEGRAPH_TICKS
+                && p.state_ticks + WEAVER_TELEGRAPH_CLEAR < weaver_tel_len(i, core_phase)
                 && !(in_transit && g_parts[0] == i);
             let closing = if p.state == PartState::Recover {
-                Some(p.state_ticks as f32 / WEAVER_RECOVER_TICKS as f32)
+                Some(p.state_ticks as f32 / weaver_rec_len(i, core_phase) as f32)
             } else if weak_open {
                 Some(flip_closing)
             } else {
@@ -622,7 +633,7 @@ pub(crate) fn tick_gravity_weaver(c: &mut Canvas, st: &Arc<Mutex<State>>) {
             frames.push(Frame {
                 alive: true, shielded: false, weak_open, pos, dir: p.target,
                 lane: if lane_up {
-                    Some(p.state_ticks as f32 / WEAVER_TELEGRAPH_TICKS as f32)
+                    Some(p.state_ticks as f32 / weaver_tel_len(i, core_phase) as f32)
                 } else { None },
                 thread_live: p.state == PartState::Attack,
                 retract,

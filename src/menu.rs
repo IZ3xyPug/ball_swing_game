@@ -1,12 +1,10 @@
 use quartz::*;
 use std::sync::{Arc, Mutex};
-use crate::achievements::*;
 use crate::constants::*;
 use crate::audio_state;
 use crate::images::*;
 use crate::objects::{ui_text_left_spec, ui_text_spec};
-use crate::scenes::game::helpers::{volume_value, set_volume_value, music_volume, ui_font,
-                                   position_volume_sliders, update_volume_labels};
+use crate::scenes::game::helpers::{volume_value, set_volume_value, music_volume, ui_font, update_volume_labels};
 use crate::shop;
 
 const MENU_TRACKS: [&[u8]; 3] = [ASSET_MENU_BGM, ASSET_MENU_BGM_2, ASSET_MENU_BGM_3];
@@ -73,6 +71,7 @@ pub(crate) fn step_game_mode(c: &mut Canvas, delta: i32) {
 /// the mouse-press handler. START (sets the mode) and SHOP (a sub-view of this
 /// scene) keep their custom events.
 pub(crate) fn activate_menu_button(c: &mut Canvas, name: &str) {
+    crate::ui_sfx::click(c);
     match name {
         "start_btn" => c.run(Action::Custom { name: "goto_game".into() }),
         "menu_shop_btn" => c.run(Action::Custom { name: "goto_shop".into() }),
@@ -80,6 +79,8 @@ pub(crate) fn activate_menu_button(c: &mut Canvas, name: &str) {
         "menu_achievements_btn" => c.set_var("queue_scene", "achievements"),
         "menu_stats_btn" => c.set_var("queue_scene", "stats"),
         "menu_daily_btn" => c.set_var("queue_scene", "daily_reward"),
+        "menu_leaderboard_btn" => c.set_var("queue_scene", "leaderboard"),
+        "menu_credits_btn" => c.set_var("queue_scene", "credits"),
         "menu_profile_btn" => c.set_var("queue_scene", "profile"),
         "menu_boss_order_btn" => c.set_var("queue_scene", "boss_order"),
         _ => {}
@@ -100,31 +101,52 @@ pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
         if !c.is_scene("menu") {
             return;
         }
-        if matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true))) {
-            return;
-        }
         let world = c.screen_to_world(pos);
+        let in_shop = matches!(c.get_var("menu_in_shop"), Some(Value::Bool(true)));
 
         // Click the planet and it pops: swells, springs back (see
-        // `menu_look::tick_menu_look`). Cosmetic; the click goes nowhere else.
+        // `menu_look::tick_menu_look`). Cosmetic. Works in the shop too (it
+        // is the same planet); there the shop's own buttons still take the
+        // click as well.
         if crate::menu_look::planet_hit(c, world) {
             let t = c.get_i32("menu_t");
             c.set_var("planet_pop_t", t);
+            let pokes = c.get_i32("planet_pokes") + 1;
+            c.set_var("planet_pokes", pokes);
+            crate::achievements::on_planet_poke(pokes);
+            return;
+        }
+        if in_shop {
             return;
         }
 
-        // The mode selector's arrows.
+        // PLAY's dropdown, while it is open: a row chooses that mode (and
+        // starts), a click anywhere else but PLAY closes it.
         //
         // Handled HERE, in the handler registered at app start, and not in the
         // menu's `on_enter` — a mouse-press callback registered there does not
         // survive the scene load, which is the reason this function exists at
-        // all (see its call site in `lib.rs`). Every attempt to add tap or
-        // gesture handling in `on_enter` was dead code that never received an
-        // event.
-        if let Some(d) = mode_arrow_hit(c, world) {
-            step_game_mode(c, d);
+        // all (see its call site in `lib.rs`).
+        if crate::menu_look::dd_open(c) {
+            if let Some(r) = crate::menu_look::dd_row_hit(c, world) {
+                c.set_var("menu_dd_sel", r);
+                if !crate::menu_look::dd_fresh(c) {
+                    c.run(Action::Custom { name: "goto_game".into() });
+                }
+                return;
+            }
+            let on_play = c.get_game_object("start_btn").is_some_and(|o| world.0 >= o.position.0
+                && world.0 <= o.position.0 + o.size.0 && world.1 >= o.position.1 && world.1 <= o.position.1 + o.size.1);
+            // PLAY again folds it back up, as does a click anywhere else.
+            if on_play && !crate::menu_look::dd_fresh(c) {
+                crate::ui_sfx::click(c);
+                crate::menu_look::close_dropdown(c);
+            } else if !crate::menu_look::dd_panel_hit(c, world) && !on_play {
+                crate::menu_look::close_dropdown(c);
+            }
             return;
         }
+        let _ = mode_arrow_hit;
 
         const BTNS: &[(&str, &str)] = &[
             ("start_btn", "goto_game"),
@@ -133,6 +155,8 @@ pub(crate) fn push_menu_press_handler(canvas: &mut Canvas) {
             ("menu_achievements_btn", "goto_achievements"),
             ("menu_stats_btn", "goto_stats"),
             ("menu_daily_btn", "goto_daily_reward"),
+            ("menu_leaderboard_btn", "goto_leaderboard"),
+            ("menu_credits_btn", "goto_credits"),
             ("menu_profile_btn", "goto_profile"),
             ("menu_boss_order_btn", "goto_boss_order"),
         ];
@@ -597,20 +621,32 @@ pub static GAME_MODES: &[(&str, &str)] = &[
 pub fn select_profile_and_continue(canvas: &mut Canvas, idx: usize) {
     crate::profile::select_profile(idx);
     let p = crate::profile::profile();
-    let (tutorial_done, extra_hearts, c_char, c_rope, c_bg, c_trail, c_rope_style) = {
+    let (tutorial_done, extra_hearts, c_char, c_rope, c_bg, c_trail, c_rope_style, sky_theme, sky_living, sky_planet) = {
         let g = p.lock().unwrap();
         (g.tutorial_done, g.permanent_extra_hearts, g.cosmetic_char, g.cosmetic_rope, g.cosmetic_bg,
-         g.cosmetic_trail, g.cosmetic_rope_style)
+         g.cosmetic_trail, g.cosmetic_rope_style, g.sky_theme, g.sky_living, g.sky_planet)
     };
+    canvas.set_var(crate::sky::THEME_VAR, sky_theme as i32);
+    canvas.set_var(crate::sky::LIVING_VAR, sky_living);
+    canvas.set_var(crate::sky::PLANET_VAR, sky_planet as i32);
+    {
+        let g = p.lock().unwrap();
+        canvas.set_var(crate::sky::EVENTS_VAR, g.sky_events);
+    }
     // Permanent extra hearts are read into the run on game start; push them now
     // so the first run already benefits.
     canvas.set_var(crate::constants::META_EXTRA_HEARTS_VAR, extra_hearts as i32);
     // Apply the profile's saved cosmetics.
     canvas.set_var("player_char_selected", c_char as i32);
-    canvas.set_var("player_rope_selected", c_rope as i32);
+    // Rope colours were removed: always the ORIGINAL colour.
+    let _ = c_rope;
+    canvas.set_var("player_rope_selected", 0i32);
     canvas.set_var("player_bg_selected", c_bg as i32);
     canvas.set_var("player_trail_selected", c_trail as i32);
     canvas.set_var("player_rope_style_selected", c_rope_style as i32);
+    // With the background known (it tints the planet), build the planet's
+    // sky now, in the background, so PLAY never waits for it.
+    crate::sky::prewarm_planet(canvas);
     // Pre-mark already-unlocked achievements so they aren't re-triggered.
     if tutorial_done {
         canvas.load_scene("menu");
@@ -630,7 +666,15 @@ pub(crate) fn apply_profile_text(canvas: &mut Canvas) {
     let profiles = crate::profile::all_profiles();
     for i in 0..crate::profile::SLOT_COUNT {
         let p = profiles.get(i).cloned().unwrap_or_default();
-        let tut = if p.tutorial_done { "Tutorial done" } else { "New" };
+        // "New" only for a profile that has never played; otherwise what it
+        // has done (it used to mean only "tutorial not finished", so a
+        // profile fifty runs in could still say New).
+        let tut = if p.runs_played == 0 {
+            if p.tutorial_done { "Ready".to_string() } else { "New".to_string() }
+        } else {
+            let runs = if p.runs_played == 1 { "1 run".to_string() } else { format!("{} runs", p.runs_played) };
+            format!("{runs}   \u{2022}   Best {} px", group_digits(p.best_distance as u64))
+        };
         let label = format!("{}   \u{2022}   Meta {}   \u{2022}   {}", p.name, p.meta_currency, tut);
         if let Some(obj) = canvas.get_game_object_mut(&format!("profile_slot_text_{i}")) {
             obj.set_drawable(Box::new(ui_text_spec(&label, &font, 32.0 * s, Color(210, 225, 245, 255), 1080.0 * s)));
@@ -784,7 +828,7 @@ pub fn build_profile_scene(ctx: &mut Context) -> Scene {
         scene = scene.with_object(n, o);
     }
 
-    let mut scene = scene.on_enter(|canvas| {
+    let scene = scene.on_enter(|canvas| {
         // Reset the camera to a known zoom-1.0 state so the slot bands and their
         // labels render in the same coordinate space (mirrors the gameover scene;
         // inheriting a leftover camera from the menu can shift UI text sideways).
@@ -985,6 +1029,12 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             Target::name("menu_profile_btn"),
         )
         .on_enter(|canvas| {
+            // The META badge is rebuilt showing 0 with the scene; forget what
+            // was drawn last so the counter redraws the real value. (Kept from
+            // the last visit, it matched the profile and never redrew, so META
+            // read 0 on every boot and every return from a run.)
+            canvas.set_var("menu_meta_shown", -1i32);
+            canvas.set_var("menu_dd_open", false);
             // Returning to main menu is the only transition that stops in-game music.
             audio_state::stop_game_bgm();
             // Only start a new menu track if none is currently playing.
@@ -1051,6 +1101,17 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                             play_menu_track(c, next);
                             return;
                         }
+                        // PLAY's dropdown takes the keys while it is open.
+                        if crate::menu_look::dd_open(c) {
+                            match key {
+                                Key::Named(NamedKey::ArrowUp) => crate::menu_look::dd_step(c, -1),
+                                Key::Named(NamedKey::ArrowDown) => crate::menu_look::dd_step(c, 1),
+                                Key::Named(NamedKey::Enter) => c.run(Action::Custom { name: "goto_game".into() }),
+                                Key::Named(NamedKey::Escape) => crate::menu_look::close_dropdown(c),
+                                _ => {}
+                            }
+                            return;
+                        }
                         // Up and down move the lit item; Enter opens it.
                         match key {
                             Key::Named(NamedKey::ArrowUp) => { crate::menu_look::step_selection(c, -1); return; }
@@ -1062,14 +1123,8 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                             }
                             _ => {}
                         }
-                        let delta = match key {
-                            Key::Named(NamedKey::ArrowLeft)  => -1,
-                            Key::Named(NamedKey::ArrowRight) =>  1,
-                            _ => 0,
-                        };
-                        if delta != 0 {
-                            step_game_mode(c, delta);
-                        }
+                        // (Left / Right no longer change the mode: PLAY's dropdown does.)
+                        let _ = step_game_mode;
                     }
                 });
 
@@ -1214,6 +1269,15 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             // `start_game`; the run opens zoomed in on the player and pulls out.
             canvas.register_custom_event("goto_game".into(), |c| {
                 if c.get_i32("menu_launch_t") > 0 || crate::transition::busy(c) { return; }
+                // PLAY opens the dropdown of modes; choosing one launches.
+                if !crate::menu_look::dd_open(c) {
+                    crate::menu_look::open_dropdown(c);
+                    return;
+                }
+                if crate::menu_look::dd_fresh(c) { return; }
+                let sel = c.get_i32("menu_dd_sel").max(0);
+                c.set_var("game_mode_idx", sel);
+                crate::menu_look::snap_dropdown_shut(c);
                 c.set_var("menu_launch_t", 1i32);
             });
             canvas.register_custom_event("start_game_now".into(), |c| {
@@ -1275,7 +1339,32 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                 // A cat or a rope style has to be OWNED to be equipped:
                 // SELECT buys it first when it is not (or says why not, and
                 // stays on the carousel).
-                if (cat == 0 || cat == 1) && !shop::select_look(c, cat, sel.max(0) as usize) {
+                if (cat == 0 || cat == 1 || cat == 6) && !shop::select_look(c, cat, sel.max(0) as usize) {
+                    return;
+                }
+                // SKY: a theme is worn; LIVING NEBULA switches on or off and
+                // stays on the carousel, since it is a toggle.
+                if cat == 6 {
+                    let sel = sel.max(0) as usize;
+                    let mut living = c.get_bool(crate::sky::LIVING_VAR);
+                    let mut theme = c.get_i32(crate::sky::THEME_VAR).max(0);
+                    let mut planet = crate::sky::planet_of(c) as i32;
+                    let mut events = c.get_bool(crate::sky::EVENTS_VAR);
+                    if sel == crate::sky::EVENTS_IDX { events = !events; }
+                    else if sel >= crate::sky::PLANET0 { planet = (sel - crate::sky::PLANET0) as i32; }
+                    else if sel == crate::sky::LIVING_IDX { living = !living; } else { theme = sel as i32; }
+                    c.set_var(crate::sky::PLANET_VAR, planet);
+                    c.set_var(crate::sky::EVENTS_VAR, events);
+                    crate::profile::save_sky_events(events);
+                    c.set_var(crate::sky::THEME_VAR, theme);
+                    c.set_var(crate::sky::LIVING_VAR, living);
+                    crate::profile::save_sky(theme as u32, living, planet as u32);
+                    crate::sky::prewarm_planet(c);
+                    if crate::sky::is_toggle(sel) {
+                        shop::refresh_carousel(c, cat, sel);
+                    } else {
+                        shop::show_categories(c);
+                    }
                     return;
                 }
                 match cat {
@@ -1286,7 +1375,10 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
                         c.set_var("player_rope_style_selected", sel);
                         crate::profile::save_rope_style(sel.max(0) as u32);
                     }
-                    2 => c.set_var("player_bg_selected",   sel),
+                    2 => {
+                        c.set_var("player_bg_selected", sel);
+                        crate::sky::prewarm_planet(c);
+                    }
                     3 => c.set_var("player_trail_selected", sel),
                     _ => {}
                 }
@@ -1327,10 +1419,13 @@ pub fn build_menu_scene(ctx: &mut Context) -> Scene {
             canvas.register_custom_event("shop_cat_3".into(), |c| { if shop_ready(c) { shop::show_carousel(c, 3); } });
             canvas.register_custom_event("shop_cat_4".into(), |c| { if shop_ready(c) { shop::show_carousel(c, 4); } });
             canvas.register_custom_event("shop_cat_5".into(), |c| { if shop_ready(c) { shop::show_carousel(c, 5); } });
+            canvas.register_custom_event("shop_cat_6".into(), |c| { if shop_ready(c) { shop::show_carousel(c, 6); } });
             canvas.register_custom_event("goto_menu_settings".into(), |c| crate::transition::go(c, "menu_settings"));
             canvas.register_custom_event("goto_achievements".into(), |c| crate::transition::go(c, "achievements"));
             canvas.register_custom_event("goto_stats".into(), |c| crate::transition::go(c, "stats"));
             canvas.register_custom_event("goto_daily_reward".into(), |c| crate::transition::go(c, "daily_reward"));
+            canvas.register_custom_event("goto_leaderboard".into(), |c| crate::transition::go(c, "leaderboard"));
+            canvas.register_custom_event("goto_credits".into(), |c| crate::transition::go(c, "credits"));
             canvas.register_custom_event("goto_profile".into(), |c| crate::transition::go(c, "profile"));
         })
 }
@@ -1344,7 +1439,7 @@ const MS_SLIDER_TRACK_H: f32 = 24.0;
 const MS_SLIDER_THUMB_W: f32 = 60.0;
 const MS_SLIDER_THUMB_H: f32 = 80.0;
 const MS_SLIDER_TRACK_X: f32 = (VW - MS_SLIDER_TRACK_W) / 2.0;
-const MS_SLIDER_Y: [f32; 3] = [760.0, 990.0, 1220.0];
+const MS_SLIDER_Y: [f32; 3] = [720.0, 930.0, 1140.0];
 const MS_SLIDER_VARS:   [&str; 3] = ["vol_master", "vol_music", "vol_sound"];
 const MS_SLIDER_THUMBS: [&str; 3] = ["ms_slider_master_thumb", "ms_slider_music_thumb", "ms_slider_sound_thumb"];
 const MS_SLIDER_TRACKS: [&str; 3] = ["ms_slider_master_track", "ms_slider_music_track", "ms_slider_sound_track"];
@@ -1365,9 +1460,9 @@ fn menu_settings_update_labels(c: &mut Canvas) {
 }
 
 /// The graphics row under the sliders: a label and LOW / MEDIUM / HIGH.
-const MS_GFX_Y: f32 = 1440.0;
+const MS_GFX_Y: f32 = 1340.0;
 /// The effect switches under it.
-const MS_FX_Y: f32 = 1660.0;
+const MS_FX_Y: f32 = 1630.0;
 const MS_FX_IDS: [&str; 3] = ["ms_fx_0", "ms_fx_1", "ms_fx_2"];
 const MS_GFX_BTN: (f32, f32) = (420.0, 120.0);
 const MS_GFX_IDS: [&str; 3] = ["ms_gfx_low", "ms_gfx_med", "ms_gfx_high"];
@@ -1445,7 +1540,7 @@ pub fn build_menu_settings_scene(ctx: &mut Context) -> Scene {
     // Slider tracks
     let make_ms_track = |ctx: &mut Context, id: &str, y: f32| {
         GameObject::new_rect(ctx, id.into(),
-            Some(Image { shape: ShapeType::Rectangle(0.0, (MS_SLIDER_TRACK_W, MS_SLIDER_TRACK_H), 0.0), image: solid(110, 160, 235, 130).into(), color: None }),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (MS_SLIDER_TRACK_W, MS_SLIDER_TRACK_H), 0.0), image: solid(150, 135, 255, 150).into(), color: None }),
             (MS_SLIDER_TRACK_W, MS_SLIDER_TRACK_H), (MS_SLIDER_TRACK_X, y),
             vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0)
     };
@@ -2010,7 +2105,8 @@ fn register_ach_scrolling(canvas: &mut Canvas) {
         if !c.is_scene("achievements") { return; }
         // Line-based wheels report small steps, trackpads report pixels.
         let step = if dy.abs() <= 6.0 { dy * 160.0 } else { dy * 2.0 };
-        ach_scroll_by(c, -step);
+        // Inverted (on request): the wheel moves the list the other way.
+        ach_scroll_by(c, step);
     });
     canvas.on_key_press(|c, key| {
         if !c.is_scene("achievements") { return; }
@@ -2137,12 +2233,88 @@ pub fn build_achievements_scene(ctx: &mut Context) -> Scene {
         })
 }
 
-/// Stats layout: the two columns' text and the glass cards behind them.
-const STATS_LEFT_X: f32 = 560.0;
-const STATS_RIGHT_X: f32 = 2160.0;
-const STATS_COL_Y: f32 = 480.0;
-const STATS_CARD_W: f32 = 1260.0;
-const STATS_CARD_H: f32 = 720.0;
+/// Stats layout: four sections in a 2x2 grid, each a glass card with its
+/// own coloured title over a table (names left, values right).
+const STATS_CARD: (f32, f32) = (1600.0, 760.0);
+const STATS_XS: [f32; 2] = [260.0, 1980.0];
+const STATS_YS: [f32; 2] = [330.0, 1150.0];
+const STATS_PAD: f32 = 90.0;
+const STATS_ROW_H: f32 = 64.0;
+/// Each section: its title and accent.
+const STATS_SECTIONS: [(&str, [u8; 3]); 4] = [
+    ("CAREER", crate::menu_look::GLASS_LILAC),
+    ("RECORDS", crate::menu_look::GLASS_GOLD),
+    ("COMBAT", crate::menu_look::GLASS_ROSE),
+    ("COLLECTION", [120, 235, 170]),
+];
+
+fn stats_rect(i: usize) -> (f32, f32) { (STATS_XS[i % 2], STATS_YS[i / 2]) }
+
+/// 1234567 -> "1,234,567".
+fn group_digits(n: u64) -> String {
+    let d = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i) % 3 == 0 { out.push(','); }
+        out.push(ch);
+    }
+    out
+}
+
+/// The four sections' rows, from the active profile.
+fn stats_rows() -> [Vec<(&'static str, String)>; 4] {
+    use crate::profile::{ABILITIES, PERM_UPGRADES};
+    let g = crate::profile::profile();
+    let p = g.lock().unwrap();
+    let px = |d: u64| format!("{} px", group_digits(d));
+    let t = p.time_played_seconds;
+    let time = if t >= 3600 { format!("{}h {:02}m", t / 3600, (t % 3600) / 60) } else { format!("{}m {:02}s", t / 60, t % 60) };
+    let ranks: u32 = PERM_UPGRADES.iter().map(|u| p.upgrade_level(u.id).min(u.max)).sum::<u32>()
+        + ABILITIES.iter().map(|a| p.upgrade_level(a.id).min(a.max)).sum::<u32>();
+    let ranks_max: u32 = PERM_UPGRADES.iter().map(|u| u.max).sum::<u32>() + ABILITIES.iter().map(|a| a.max).sum::<u32>();
+    let avg = if p.runs_played > 0 { p.total_distance / p.runs_played as u64 } else { 0 };
+    [
+        vec![
+            ("RUNS PLAYED", group_digits(p.runs_played as u64)),
+            ("NORMAL / CASUAL / RUSH", format!("{} / {} / {}", p.runs_normal, p.runs_casual, p.runs_bossrush)),
+            ("TIME PLAYED", time),
+            ("TOTAL DISTANCE", px(p.total_distance)),
+            ("AVERAGE RUN", px(avg)),
+            ("NODES GRABBED", group_digits(p.hooks_grabbed)),
+            ("COINS COLLECTED", group_digits(p.total_coins)),
+            ("DEATHS", group_digits(p.deaths as u64)),
+        ],
+        vec![
+            ("BEST DISTANCE", px(p.best_distance as u64)),
+            ("BEST  NORMAL", px(p.best_distance_normal as u64)),
+            ("BEST  CASUAL", px(p.best_distance_casual as u64)),
+            ("BEST  BOSS RUSH", px(p.best_distance_bossrush as u64)),
+            ("MOST COINS IN A RUN", group_digits(p.best_run_coins)),
+            ("TOP SPEED", group_digits(p.top_speed as u64)),
+            ("LONGEST TIME IN THE AIR", format!("{:.1} s", p.longest_air_ticks as f32 / 60.0)),
+            ("BEST DAILY", px(p.daily_best as u64)),
+        ],
+        vec![
+            ("BOSSES DEFEATED", group_digits(p.bosses_defeated as u64)),
+            ("BOSS TYPES BEATEN", format!("{} / 7", p.boss_kinds_defeated.len().min(7))),
+            ("FLAWLESS BOSS KILLS", group_digits(p.untouchable_kinds.len() as u64)),
+            ("SOLAR FLARES SURVIVED", group_digits(p.flares_survived as u64)),
+            ("ABILITIES USED", group_digits(p.abilities_used as u64)),
+            ("SECOND WINDS USED", group_digits(p.second_winds_used as u64)),
+            ("TRIPS TO SPACE", group_digits(p.space_trips as u64)),
+        ],
+        vec![
+            ("ACHIEVEMENTS", format!("{} / {}", p.achievements.len(), crate::achievements::ACHIEVEMENTS.len())),
+            ("UPGRADE RANKS", format!("{} / {}", ranks, ranks_max)),
+            ("COSMETICS OWNED", group_digits(p.owned_cosmetics.len() as u64)),
+            ("POWER-UPS COLLECTED", group_digits(p.powerups_collected as u64)),
+            ("RARE SIGHTS SEEN", group_digits(p.rare_seen.len() as u64)),
+            ("DAILY CHALLENGES DONE", group_digits(p.dailies_done as u64)),
+            ("DAILY STREAK", format!("{} days", p.daily_streak)),
+            ("META ON HAND", group_digits(p.meta_currency)),
+        ],
+    ]
+}
 
 /// Every page's back pill reads the same.
 fn set_page_back_label(c: &mut Canvas, id: &str) {
@@ -2161,31 +2333,31 @@ fn set_page_back_label(c: &mut Canvas, id: &str) {
 
 pub fn build_stats_scene(ctx: &mut Context) -> Scene {
     let back_btn = crate::menu_look::page_back_btn(ctx, "stats_back_btn");
-
-    // A glass card behind each column (they replace the old divider line).
-    let card = |ctx: &mut Context, id: &str, x: f32| crate::menu_look::glass_obj(ctx, id,
-        (STATS_CARD_W, STATS_CARD_H), (x - 140.0, STATS_COL_Y - 110.0), crate::menu_look::GLASS_LILAC, false, vec!["ui".into()]);
-    let left_card = card(ctx, "stats_left_card", STATS_LEFT_X);
-    let right_card = card(ctx, "stats_right_card", STATS_RIGHT_X);
-
-    // Two text objects, one per column.  Populated in on_enter.
-    let make_col_text = |ctx: &mut Context, id: &str, x: f32| {
-        GameObject::build(id)
-            .size(1380.0, 1300.0)
-            .position(x, STATS_COL_Y)
-            .tag("ui")
-            .build(ctx)
-    };
-    let left_col  = make_col_text(ctx, "stats_left_col",  STATS_LEFT_X);
-    let right_col = make_col_text(ctx, "stats_right_col", STATS_RIGHT_X);
-
     let back_text = crate::menu_look::page_back_text(ctx, "stats_back_text");
-
-    crate::menu_look::with_page_look(ctx, Scene::new("stats"), "STATISTICS")
-        .with_object("stats_left_card",  left_card)
-        .with_object("stats_right_card", right_card)
-        .with_object("stats_left_col",   left_col)
-        .with_object("stats_right_col",  right_col)
+    let mut scene = crate::menu_look::with_page_look(ctx, Scene::new("stats"), "STATISTICS");
+    for (i, (_, accent)) in STATS_SECTIONS.iter().enumerate() {
+        let (x, y) = stats_rect(i);
+        let card = crate::menu_look::glass_obj(ctx, &format!("stats_card_{i}"), STATS_CARD, (x, y),
+            *accent, false, vec!["ui".into()]);
+        // A rule under the title, in the section's colour.
+        let mut rule = image::RgbaImage::new(4, 4);
+        for px in rule.pixels_mut() { *px = image::Rgba([accent[0], accent[1], accent[2], 190]); }
+        let rule_w = STATS_CARD.0 - STATS_PAD * 2.0;
+        let rule = GameObject::new_rect(ctx, format!("stats_rule_{i}").into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (rule_w, 5.0), 0.0), image: std::sync::Arc::new(rule), color: None }),
+            (rule_w, 5.0), (x + STATS_PAD, y + 150.0), vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        scene = scene.with_object(&format!("stats_card_{i}"), card).with_object(&format!("stats_rule_{i}"), rule);
+        for (part, dy) in [("head", 48.0), ("lbl", 182.0), ("val", 182.0)] {
+            let id = format!("stats_{part}_{i}");
+            let o = GameObject::build(&id)
+                .size(STATS_CARD.0 - STATS_PAD * 2.0, STATS_CARD.1 - dy)
+                .position(x + STATS_PAD, y + dy)
+                .tag("ui")
+                .build(ctx);
+            scene = scene.with_object(&id, o);
+        }
+    }
+    scene
         .with_object("stats_back_btn",   back_btn)
         .with_object("stats_back_text",  back_text)
         .with_event(
@@ -2204,82 +2376,207 @@ pub fn build_stats_scene(ctx: &mut Context) -> Scene {
             set_page_back_label(canvas, "stats_back_text");
             if let Some(font) = ui_font() {
                 let s = canvas.virtual_scale();
-
-                // Left column: 4 per-profile lifetime stats.
-                let lc_name = Color(185, 170, 240, 225);
-                let lc_val  = Color(255, 255, 255, 255);
-                let col_w   = 1380.0 * s;
-
-                let (total_coins, deaths, best_dist, runs, bosses,
-                     best_casual, best_normal, best_bossrush) = {
-                    let p = crate::profile::profile();
-                    let g = p.lock().unwrap();
-                    (g.total_coins, g.deaths, g.best_distance, g.runs_played,
-                     g.bosses_defeated,
-                     g.best_distance_casual, g.best_distance_normal, g.best_distance_bossrush)
-                };
-                let left_stats: [(&str, String); 4] = [
-                    ("COINS COLLECTED", format!("{}", total_coins)),
-                    ("DEATHS",          format!("{}", deaths)),
-                    ("BEST DISTANCE",   format!("{} px", best_dist)),
-                    ("RUNS PLAYED",     format!("{}", runs)),
-                ];
-                let right_stats: [(&str, String); 4] = [
-                    ("BEST  NORMAL",    format!("{} px", best_normal)),
-                    ("BEST  CASUAL",    format!("{} px", best_casual)),
-                    ("BEST  BOSS RUSH", format!("{} px", best_bossrush)),
-                    ("BOSSES DEFEATED", format!("{}", bosses)),
-                ];
-
-                let make_stat_text = |name: &str, val: &str, font: &Font, s: f32, name_col: Color, val_col: Color, w: f32| {
-                    Text::new(
-                        vec![
-                            Span::new(name.to_string(), 38.0 * s, Some(46.0 * s), Arc::new(font.clone()), name_col, 0.0),
-                            Span::new(format!("  {}", val), 48.0 * s, Some(46.0 * s), Arc::new(font.clone()), val_col, 0.0),
-                        ],
-                        Some(w),
-                        Align::Left,
-                        None,
-                    )
-                };
-
-                // Build multiline text for each column by stacking stat blocks.
-                // Each stat gets 2 lines (name row, value row) with visual gap.
-                // We use individual drawables stacked via a helper below.
-                // For simplicity, combine stat entries into one multi-span Text
-                // using newlines between entries.
-                let mut left_spans: Vec<Span> = Vec::new();
-                let mut right_spans: Vec<Span> = Vec::new();
-                let line_h = Some(52.0 * s);
-                let gap_h  = Some(28.0 * s);
-                let _ = make_stat_text; // suppress unused warning
-
-                for (i, (name, val)) in left_stats.iter().enumerate() {
-                    left_spans.push(Span::new(name.to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
-                    left_spans.push(Span::new(format!("\n"), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
-                    left_spans.push(Span::new(val.to_string(), 52.0 * s, line_h, Arc::new(font.clone()), lc_val, 0.0));
-                    if i < left_stats.len() - 1 {
-                        left_spans.push(Span::new("\n\n".to_string(), 20.0 * s, gap_h, Arc::new(font.clone()), lc_val, 0.0));
+                let f = crate::objects::shared_font(&font);
+                let w = (STATS_CARD.0 - STATS_PAD * 2.0) * s;
+                let line = Some(STATS_ROW_H * s);
+                for (i, rows) in stats_rows().iter().enumerate() {
+                    let (title, accent) = STATS_SECTIONS[i];
+                    let bright = |c: u8| (c as f32 * 0.6 + 255.0 * 0.4) as u8;
+                    let head = Text::new(vec![Span::new(title.to_string(), 76.0 * s, Some(90.0 * s), f.clone(),
+                        Color(bright(accent[0]), bright(accent[1]), bright(accent[2]), 255), 6.0 * s)], Some(w), Align::Left, None);
+                    let col = |align: Align, size: f32, colour: Color, pick: &dyn Fn(&(&str, String)) -> String| {
+                        let text = rows.iter().map(|r| pick(r)).collect::<Vec<_>>().join("\n");
+                        Text::new(vec![Span::new(text, size * s, line, f.clone(), colour, 0.0)], Some(w), align, None)
+                    };
+                    let labels = col(Align::Left, 38.0, Color(190, 200, 235, 230), &|r| r.0.to_string());
+                    let values = col(Align::Right, 44.0, Color(255, 255, 255, 255), &|r| r.1.clone());
+                    for (part, t) in [("head", head), ("lbl", labels), ("val", values)] {
+                        if let Some(obj) = canvas.get_game_object_mut(&format!("stats_{part}_{i}")) {
+                            obj.set_drawable(Box::new(t));
+                        }
                     }
-                }
-                for (i, (name, val)) in right_stats.iter().enumerate() {
-                    right_spans.push(Span::new(name.to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
-                    right_spans.push(Span::new("\n".to_string(), 36.0 * s, line_h, Arc::new(font.clone()), lc_name, 0.0));
-                    right_spans.push(Span::new(val.to_string(), 52.0 * s, line_h, Arc::new(font.clone()), lc_val, 0.0));
-                    if i < right_stats.len() - 1 {
-                        right_spans.push(Span::new("\n\n".to_string(), 20.0 * s, gap_h, Arc::new(font.clone()), lc_val, 0.0));
-                    }
-                }
-
-                if let Some(obj) = canvas.get_game_object_mut("stats_left_col") {
-                    obj.set_drawable(Box::new(Text::new(left_spans, Some(col_w), Align::Left, None)));
-                }
-                if let Some(obj) = canvas.get_game_object_mut("stats_right_col") {
-                    obj.set_drawable(Box::new(Text::new(right_spans, Some(col_w), Align::Left, None)));
                 }
             }
 
             canvas.register_custom_event("stats_back".into(), |c| crate::transition::go(c, "menu"));
+        })
+}
+
+// ── Leaderboard scene ────────────────────────────────────────────────────────
+// Three cards side by side, one per mode: the ten best runs on this computer
+// (every profile's), the active profile's own lit gold.
+
+const LB_CARD: (f32, f32) = (1060.0, 1520.0);
+const LB_GAP: f32 = 80.0;
+const LB_Y: f32 = 330.0;
+const LB_PAD: f32 = 70.0;
+const LB_ROW_H: f32 = 108.0;
+/// (mode index, title, accent), left to right.
+const LB_MODES: [(usize, &str, [u8; 3]); 3] = [
+    (1, "NORMAL", crate::menu_look::GLASS_LILAC),
+    (0, "CASUAL", [130, 220, 160]),
+    (2, "BOSS RUSH", crate::menu_look::GLASS_ROSE),
+];
+
+fn lb_x(i: usize) -> f32 {
+    let row = 3.0 * LB_CARD.0 + 2.0 * LB_GAP;
+    (VW - row) * 0.5 + i as f32 * (LB_CARD.0 + LB_GAP)
+}
+
+pub fn build_leaderboard_scene(ctx: &mut Context) -> Scene {
+    let back_btn = crate::menu_look::page_back_btn(ctx, "lb_back_btn");
+    let back_text = crate::menu_look::page_back_text(ctx, "lb_back_text");
+    let mut scene = crate::menu_look::with_page_look(ctx, Scene::new("leaderboard"), "LEADERBOARD");
+    for (i, (_, _, accent)) in LB_MODES.iter().enumerate() {
+        let x = lb_x(i);
+        let card = crate::menu_look::glass_obj(ctx, &format!("lb_card_{i}"), LB_CARD, (x, LB_Y),
+            *accent, false, vec!["ui".into()]);
+        let mut rule = image::RgbaImage::new(4, 4);
+        for px in rule.pixels_mut() { *px = image::Rgba([accent[0], accent[1], accent[2], 190]); }
+        let rule_w = LB_CARD.0 - LB_PAD * 2.0;
+        let rule = GameObject::new_rect(ctx, format!("lb_rule_{i}").into(),
+            Some(Image { shape: ShapeType::Rectangle(0.0, (rule_w, 5.0), 0.0), image: std::sync::Arc::new(rule), color: None }),
+            (rule_w, 5.0), (x + LB_PAD, LB_Y + 150.0), vec!["ui".into()], (0.0, 0.0), (1.0, 1.0), 0.0);
+        scene = scene.with_object(&format!("lb_card_{i}"), card).with_object(&format!("lb_rule_{i}"), rule);
+        for (part, dx, dy) in [("head", 0.0, 48.0), ("rank", 0.0, 190.0), ("name", 110.0, 190.0), ("dist", 0.0, 190.0)] {
+            let id = format!("lb_{part}_{i}");
+            let o = GameObject::build(&id)
+                .size(LB_CARD.0 - LB_PAD * 2.0 - dx, LB_CARD.1 - dy)
+                .position(x + LB_PAD + dx, LB_Y + dy)
+                .tag("ui")
+                .build(ctx);
+            scene = scene.with_object(&id, o);
+        }
+    }
+    scene
+        .with_object("lb_back_btn", back_btn)
+        .with_object("lb_back_text", back_text)
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "lb_back".into() },
+                target: Target::name("lb_back_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("lb_back_btn"),
+        )
+        .on_enter(|canvas| {
+            canvas.set_camera(Camera::new((VW, VH), (VW, VH)));
+            crate::menu_look::register_page_tick(canvas);
+            set_page_back_label(canvas, "lb_back_text");
+            let me = {
+                let g = crate::profile::profile();
+                let p = g.lock().unwrap();
+                crate::leaderboard::display_name(&p.name, crate::profile::active_index())
+            };
+            if let Some(font) = ui_font() {
+                let s = canvas.virtual_scale();
+                let f = crate::objects::shared_font(&font);
+                let line = Some(LB_ROW_H * s);
+                for (i, (mode, title, accent)) in LB_MODES.iter().enumerate() {
+                    let w = (LB_CARD.0 - LB_PAD * 2.0) * s;
+                    let bright = |c: u8| (c as f32 * 0.6 + 255.0 * 0.4) as u8;
+                    // The mode's name, and (smaller, on the same line) what
+                    // it is ranked by.
+                    let head = Text::new(vec![
+                        Span::new(title.to_string(), 76.0 * s, Some(90.0 * s), f.clone(),
+                            Color(bright(accent[0]), bright(accent[1]), bright(accent[2]), 255), 6.0 * s),
+                        Span::new(format!("    BY {}", crate::leaderboard::ranked_by(*mode)), 30.0 * s, Some(90.0 * s), f.clone(),
+                            Color(190, 182, 235, 210), 3.0 * s),
+                    ], Some(w), Align::Left, None);
+                    let rows = crate::leaderboard::top(*mode);
+                    // One span per row, so each row takes its own colour.
+                    // One span per row, so each row takes its own colour;
+                    // `empty` is what the column says with no runs yet.
+                    let col = |align: Align, size: f32, w: f32, empty: &str, pick: &dyn Fn(usize, &crate::leaderboard::Entry) -> String| {
+                        let spans: Vec<Span> = if rows.is_empty() {
+                            vec![Span::new(empty.to_string(), size * s, line, f.clone(), Color(170, 160, 215, 200), 0.0)]
+                        } else {
+                            rows.iter().enumerate().map(|(k, e)| {
+                                let colour = if e.name == me { Color(255, 226, 140, 255) }
+                                    else if k == 0 { Color(255, 255, 255, 255) }
+                                    else { Color(205, 210, 240, 235) };
+                                let nl = if k + 1 < rows.len() { "\n" } else { "" };
+                                Span::new(format!("{}{nl}", pick(k, e)), size * s, line, f.clone(), colour, 0.0)
+                            }).collect()
+                        };
+                        Text::new(spans, Some(w), align, None)
+                    };
+                    let rank = col(Align::Left, 40.0, w, "", &|k, _| format!("{}.", k + 1));
+                    let name = col(Align::Left, 40.0, w - 110.0 * s, "NO RUNS YET", &|_, e| e.name.clone());
+                    let dist = col(Align::Right, 44.0, w, "", &|_, e| crate::leaderboard::shown(*mode, e, group_digits));
+                    for (part, t) in [("head", head), ("rank", rank), ("name", name), ("dist", dist)] {
+                        if let Some(obj) = canvas.get_game_object_mut(&format!("lb_{part}_{i}")) {
+                            obj.set_drawable(Box::new(t));
+                        }
+                    }
+                }
+            }
+            canvas.register_custom_event("lb_back".into(), |c| crate::transition::go(c, "menu"));
+        })
+}
+
+// ── Credits scene ────────────────────────────────────────────────────────────
+// Everyone who made the game. Edit `CREDITS` to add people: a role, then the
+// names under it.
+
+const CREDITS: &[(&str, &[&str])] = &[
+    ("CREATED BY", &["YOUR NAME HERE"]),
+    ("PLAYTESTING", &["ADD PLAYTESTERS HERE"]),
+    ("MUSIC", &["ADD MUSIC CREDITS HERE"]),
+    ("SOUND EFFECTS", &["SYNTHESISED FOR THE GAME"]),
+    ("PIXEL ART TOOLS", &["PIXELLAB"]),
+    ("FONT", &["ORBITRON  -  THE LEAGUE OF MOVEABLE TYPE  (SIL OFL 1.1)"]),
+    ("ENGINE", &["QUARTZ"]),
+    ("AND YOU", &["THANKS FOR PLAYING!"]),
+];
+const CREDITS_CARD: (f32, f32) = (2600.0, 1520.0);
+const CREDITS_Y: f32 = 330.0;
+const CREDITS_PAD: f32 = 110.0;
+
+pub fn build_credits_scene(ctx: &mut Context) -> Scene {
+    let back_btn = crate::menu_look::page_back_btn(ctx, "credits_back_btn");
+    let back_text = crate::menu_look::page_back_text(ctx, "credits_back_text");
+    let x = (VW - CREDITS_CARD.0) * 0.5;
+    let card = crate::menu_look::glass_obj(ctx, "credits_card", CREDITS_CARD, (x, CREDITS_Y),
+        crate::menu_look::GLASS_LILAC, false, vec!["ui".into()]);
+    let body = GameObject::build("credits_body")
+        .size(CREDITS_CARD.0 - CREDITS_PAD * 2.0, CREDITS_CARD.1 - CREDITS_PAD * 2.0)
+        .position(x + CREDITS_PAD, CREDITS_Y + CREDITS_PAD)
+        .tag("ui")
+        .build(ctx);
+    crate::menu_look::with_page_look(ctx, Scene::new("credits"), "CREDITS")
+        .with_object("credits_card", card)
+        .with_object("credits_body", body)
+        .with_object("credits_back_btn", back_btn)
+        .with_object("credits_back_text", back_text)
+        .with_event(
+            GameEvent::MousePress {
+                action: Action::Custom { name: "credits_back".into() },
+                target: Target::name("credits_back_btn"),
+                button: Some(MouseButton::Left),
+            },
+            Target::name("credits_back_btn"),
+        )
+        .on_enter(|canvas| {
+            canvas.set_camera(Camera::new((VW, VH), (VW, VH)));
+            crate::menu_look::register_page_tick(canvas);
+            set_page_back_label(canvas, "credits_back_text");
+            if let Some(font) = ui_font() {
+                let s = canvas.virtual_scale();
+                let f = crate::objects::shared_font(&font);
+                let mut spans = Vec::new();
+                for (k, (role, names)) in CREDITS.iter().enumerate() {
+                    spans.push(Span::new(format!("{role}\n"), 36.0 * s, Some(52.0 * s), f.clone(), Color(185, 170, 255, 255), 4.0 * s));
+                    let last = k + 1 == CREDITS.len();
+                    let tail = if last { "" } else { "\n\n" };
+                    spans.push(Span::new(format!("{}{tail}", names.join("\n")), 50.0 * s, Some(62.0 * s), f.clone(), Color(255, 255, 255, 255), 0.0));
+                }
+                let w = (CREDITS_CARD.0 - CREDITS_PAD * 2.0) * s;
+                if let Some(obj) = canvas.get_game_object_mut("credits_body") {
+                    obj.set_drawable(Box::new(Text::new(spans, Some(w), Align::Center, None)));
+                }
+            }
+            canvas.register_custom_event("credits_back".into(), |c| crate::transition::go(c, "menu"));
         })
 }
 
@@ -2564,7 +2861,7 @@ fn boss_order_refresh(canvas: &mut Canvas) {
             }
         };
         slot_spans.push(Span::new(label, BO_ROW_FONT * sc, Some(BO_ROW_H * sc),
-            std::sync::Arc::new(font.clone()), colour, 0.0));
+            crate::objects::shared_font(&font), colour, 0.0));
     }
     if let Some(obj) = canvas.get_game_object_mut("bo_slot_col") {
         obj.set_drawable(Box::new(Text::new(slot_spans, Some(1380.0 * sc), Align::Left, None)));

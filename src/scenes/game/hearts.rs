@@ -184,6 +184,7 @@ pub fn lose_heart(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
         let mut s = st.lock().unwrap();
         if s.free_respawns_left > 0 && s.hearts <= 1 {
             s.free_respawns_left -= 1;
+            s.run_stats.second_winds += 1;
             s.player_buff = 0;
             s.buff_timer = 0;
             s.buff_hit_flash = 0;
@@ -193,6 +194,7 @@ pub fn lose_heart(c: &mut Canvas, st: &Arc<Mutex<State>>) -> bool {
             drop(s);
             c.set_var("free_respawns_left", Value::I32(left));
             hearts_hud_update(c, st);
+            super::second_wind_pop::trigger(c);
             if let Some(cam) = c.camera_mut() {
                 // Green flash rather than red: a saved life should not read as
                 // damage taken.

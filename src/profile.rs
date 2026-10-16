@@ -25,7 +25,7 @@ pub fn set_saves_dir(dir: &str) {
     let _ = SAVES_DIR.set(PathBuf::from(dir));
 }
 
-fn saves_dir() -> &'static PathBuf {
+pub(crate) fn saves_dir() -> &'static PathBuf {
     SAVES_DIR.get_or_init(default_saves_dir)
 }
 
@@ -98,6 +98,13 @@ pub struct PlayerProfile {
     pub cosmetic_rope: u32,
     pub cosmetic_bg: u32,
     pub cosmetic_trail: u32,
+    /// SKY: the nebula's colour theme, and whether LIVING NEBULA is on.
+    pub sky_theme: u32,
+    pub sky_living: bool,
+    /// SKY: the planet below.
+    pub sky_planet: u32,
+    /// SKY: SKY EVENTS (meteor showers) on.
+    pub sky_events: bool,
     /// Rope STYLE (cosmetics::ROPE_STYLES index); `cosmetic_rope` is its
     /// colour, chosen separately.
     pub cosmetic_rope_style: u32,
@@ -122,6 +129,15 @@ pub struct PlayerProfile {
     pub runs_bossrush: u32,
     /// Solar flares lived through (the run's own flares), lifetime.
     pub flares_survived: u32,
+    /// Lifetime extras for the stats page (all recorded at run end).
+    pub total_distance: u64,
+    /// Fastest the cat has ever moved (game speed units, as the HUD's).
+    pub top_speed: u32,
+    /// Longest stretch off the rope, in frames (60 a second).
+    pub longest_air_ticks: u32,
+    pub abilities_used: u32,
+    pub second_winds_used: u32,
+    pub space_trips: u32,
     /// The active ability taken into runs (an `ABILITIES` id), or empty.
     /// Ranks owned of each ability live in `perm_levels` beside the upgrades.
     pub equipped_ability: String,
@@ -163,7 +179,10 @@ impl PlayerProfile {
     fn load(idx: usize) -> Self {
         let mut p = PlayerProfile::default();
         p.name = format!("Player {}", idx + 1);
+        let mut char_version = 0u32;
+        let mut had_file = false;
         if let Ok(text) = std::fs::read_to_string(Self::path(idx)) {
+            had_file = true;
             for line in text.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {
@@ -196,10 +215,22 @@ impl PlayerProfile {
                                 .collect();
                         }
                         "cosmetic_char" => p.cosmetic_char = v.parse().unwrap_or(0),
+                        "char_save_version" => char_version = v.parse().unwrap_or(0),
                         "cosmetic_rope" => p.cosmetic_rope = v.parse().unwrap_or(0),
                         "cosmetic_bg" => p.cosmetic_bg = v.parse().unwrap_or(0),
                         "cosmetic_trail" => p.cosmetic_trail = v.parse().unwrap_or(0),
                         "cosmetic_rope_style" => p.cosmetic_rope_style = v.parse().unwrap_or(0),
+                        "sky_theme" => p.sky_theme = v.parse().unwrap_or(0),
+                        "sky_living" => p.sky_living = v == "true" || v == "1",
+                        // Older saves kept the planet's place in a list that
+                        // has since changed; the id is what is written now.
+                        "sky_planet" => {
+                            const OLD: [&str; 8] = ["earth", "lava", "gas", "ice", "ocean", "toxic", "desert", "violet"];
+                            let i: usize = v.parse().unwrap_or(0);
+                            p.sky_planet = OLD.get(i).and_then(|id| crate::sky::planet_by_id(id)).unwrap_or(0) as u32;
+                        }
+                        "sky_planet_id" => p.sky_planet = crate::sky::planet_by_id(v).unwrap_or(0) as u32,
+                        "sky_events" => p.sky_events = v == "true",
                         "owned_cosmetics" => {
                             p.owned_cosmetics = v.split(',').map(|s| s.trim().to_string())
                                 .filter(|s| !s.is_empty())
@@ -220,6 +251,12 @@ impl PlayerProfile {
                         "runs_normal" => p.runs_normal = v.parse().unwrap_or(0),
                         "runs_bossrush" => p.runs_bossrush = v.parse().unwrap_or(0),
                         "flares_survived" => p.flares_survived = v.parse().unwrap_or(0),
+                        "total_distance" => p.total_distance = v.parse().unwrap_or(0),
+                        "top_speed" => p.top_speed = v.parse().unwrap_or(0),
+                        "longest_air_ticks" => p.longest_air_ticks = v.parse().unwrap_or(0),
+                        "abilities_used" => p.abilities_used = v.parse().unwrap_or(0),
+                        "second_winds_used" => p.second_winds_used = v.parse().unwrap_or(0),
+                        "space_trips" => p.space_trips = v.parse().unwrap_or(0),
                         "equipped_ability" => p.equipped_ability = v.to_string(),
                         "best_run_coins" => p.best_run_coins = v.parse().unwrap_or(0),
                         "boss_kinds_defeated" => p.boss_kinds_defeated = list(v),
@@ -237,6 +274,12 @@ impl PlayerProfile {
                     }
                 }
             }
+        }
+        // Saves from before the plain-colour balls were removed numbered the
+        // breeds from 7: a plain colour goes back to the calico, a breed moves
+        // down to its new number.
+        if had_file && char_version < CHAR_SAVE_VERSION {
+            p.cosmetic_char = match p.cosmetic_char { 0 => 0, 1..=6 => 0, n => n - 6 };
         }
         p
     }
@@ -278,6 +321,15 @@ impl PlayerProfile {
             self.daily_best, self.daily_best_day,
         ));
         body.push_str(&format!("graphics_quality={}\nfx_off={}\n", self.graphics_quality, self.fx_off));
+        body.push_str(&format!("char_save_version={}\n", CHAR_SAVE_VERSION));
+        body.push_str(&format!("sky_theme={}\nsky_living={}\nsky_planet_id={}\nsky_events={}\n",
+            self.sky_theme, self.sky_living,
+            crate::sky::PLANETS.get(self.sky_planet as usize).map_or("earth", |p| p.id), self.sky_events));
+        body.push_str(&format!(
+            "total_distance={}\ntop_speed={}\nlongest_air_ticks={}\nabilities_used={}\nsecond_winds_used={}\nspace_trips={}\n",
+            self.total_distance, self.top_speed, self.longest_air_ticks,
+            self.abilities_used, self.second_winds_used, self.space_trips,
+        ));
         for a in ABILITIES {
             let level = self.upgrade_level(a.id);
             if level > 0 {
@@ -362,11 +414,38 @@ pub fn save_profile() {
     g.lock().unwrap().save(idx);
 }
 
+/// The character numbering a save was written with: 2 since the plain-colour
+/// balls were removed (breeds start at 1, not 7).
+const CHAR_SAVE_VERSION: u32 = 2;
+
+/// A run's counts beyond distance, coins and time, for the stats page.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RunExtras {
+    pub grabs: u32,
+    pub powerups: u32,
+    pub top_speed: f32,
+    pub best_air_ticks: u32,
+    pub abilities: u32,
+    pub second_winds: u32,
+    pub went_to_space: bool,
+}
+
 /// Record a finished run's lifetime stats on the active profile and persist.
 /// `mode_idx` is the GameMode::index() of the run (0 casual, 1 normal, 2 boss rush).
-pub fn record_run(mode_idx: i32, distance_px: f32, coins_on_hand: u64, seconds: u64) {
+///
+/// Returns the run's place on this computer's leaderboard, if it made it.
+pub fn record_run(mode_idx: i32, distance_px: f32, coins_on_hand: u64, seconds: u64, extra: RunExtras,
+                  score: u32, bosses: u32) -> Option<usize> {
     let g = profile();
     let mut p = g.lock().unwrap();
+    p.total_distance = p.total_distance.saturating_add(distance_px.max(0.0) as u64);
+    p.hooks_grabbed = p.hooks_grabbed.saturating_add(extra.grabs as u64);
+    p.powerups_collected = p.powerups_collected.saturating_add(extra.powerups);
+    p.top_speed = p.top_speed.max(extra.top_speed.max(0.0) as u32);
+    p.longest_air_ticks = p.longest_air_ticks.max(extra.best_air_ticks);
+    p.abilities_used = p.abilities_used.saturating_add(extra.abilities);
+    p.second_winds_used = p.second_winds_used.saturating_add(extra.second_winds);
+    if extra.went_to_space { p.space_trips = p.space_trips.saturating_add(1); }
     let d = distance_px.max(0.0) as u32;
     if d > p.best_distance { p.best_distance = d; }
     match mode_idx {
@@ -379,6 +458,11 @@ pub fn record_run(mode_idx: i32, distance_px: f32, coins_on_hand: u64, seconds: 
     p.runs_played += 1;
     p.time_played_seconds = p.time_played_seconds.saturating_add(seconds);
     p.save(active_index());
+    let name = p.name.clone();
+    drop(p);
+    crate::leaderboard::record(mode_idx, &name, active_index(), crate::leaderboard::Run {
+        distance: d, score, bosses, secs: seconds.min(u32::MAX as u64) as u32,
+    })
 }
 
 /// Increment the active profile's death counter.
@@ -428,6 +512,24 @@ pub fn save_cosmetics(char: u32, rope: u32, bg: u32, trail: u32) {
     p.cosmetic_rope = rope;
     p.cosmetic_bg = bg;
     p.cosmetic_trail = trail;
+    p.save(active_index());
+}
+
+/// Save the SKY choices.
+pub fn save_sky(theme: u32, living: bool, planet: u32) {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    p.sky_theme = theme;
+    p.sky_living = living;
+    p.sky_planet = planet;
+    p.save(active_index());
+}
+
+/// Save SKY EVENTS on or off.
+pub fn save_sky_events(on: bool) {
+    let g = profile();
+    let mut p = g.lock().unwrap();
+    p.sky_events = on;
     p.save(active_index());
 }
 
@@ -605,13 +707,13 @@ pub const ABILITIES: &[Ability] = &[
     Ability {
         id: "ab_swap", name: "ALTERNATING SWING",
         blurb: "FLIP THE DIRECTION YOU'RE SWINGING",
-        per_rank: "+1 USE PER RUN",
+        per_rank: "+1 CHARGE, FASTER RECHARGE",
         max: 4, unlock_cost: 850, growth: 1.6, color: (90, 220, 200),
     },
     Ability {
         id: "ab_omni", name: "OMNI BOOST",
         blurb: "BOOST IN ANY DIRECTION YOU AIM",
-        per_rank: "+1 USE PER RUN",
+        per_rank: "+1 CHARGE, FASTER RECHARGE",
         max: 4, unlock_cost: 1300, growth: 1.6, color: (190, 120, 255),
     },
 ];

@@ -84,10 +84,12 @@ fn items() -> Vec<(&'static str, &'static str, &'static str)> {
 }
 
 /// The corner links: (hit-area object, text object, label, width).
-const LINKS: [(&str, &str, &str, f32); 3] = [
+const LINKS: [(&str, &str, &str, f32); 5] = [
+    ("menu_leaderboard_btn", "menu_leaderboard_text", "LEADERBOARD", 410.0),
     ("menu_achievements_btn", "menu_achievements_text", "ACHIEVEMENTS", 430.0),
-    ("menu_stats_btn", "menu_stats_text", "STATS", 230.0),
+    ("menu_stats_btn", "menu_stats_text", "STATS", 210.0),
     ("menu_daily_btn", "menu_daily_text", "DAILY REWARD", 430.0),
+    ("menu_credits_btn", "menu_credits_text", "CREDITS", 280.0),
 ];
 const LINKS_Y: f32 = 1955.0;
 const LINKS_RIGHT: f32 = VW - 200.0;
@@ -95,13 +97,13 @@ const LINK_GAP: f32 = 40.0;
 
 /// Colours: the lit item, the rest, the accents.
 const LIT: Color = Color(255, 255, 255, 255);
-const DIM: Color = Color(160, 185, 230, 190);
-const ACCENT: Color = Color(150, 200, 255, 255);
+const DIM: Color = Color(178, 170, 232, 190);
+const ACCENT: Color = Color(190, 175, 255, 255);
 
-fn link_xs() -> [f32; 3] {
-    let mut xs = [0.0; 3];
+fn link_xs() -> [f32; LINKS.len()] {
+    let mut xs = [0.0; LINKS.len()];
     let mut right = LINKS_RIGHT;
-    for i in (0..3).rev() {
+    for i in (0..LINKS.len()).rev() {
         xs[i] = right - LINKS[i].3;
         right = xs[i] - LINK_GAP;
     }
@@ -125,11 +127,12 @@ fn sky_image() -> Arc<image::RgbaImage> {
 /// The sky's colour at world height `y`.
 fn sky_colour(y: f32) -> [u8; 3] {
     // Stops at WORLD heights: the shop's sky, then the menu's.
-    // Blue: deep navy overhead to a blue glow at the horizon.
+    // Midnight (the MIDNIGHT background's palette): near-black indigo
+    // overhead, deepening to a violet-indigo glow at the horizon.
     let stops: [(f32, [f32; 3]); 6] = [
-        (0.0, [2.0, 4.0, 14.0]), (VH * 0.56, [5.0, 12.0, 34.0]),
-        (MENU_Y, [3.0, 7.0, 22.0]), (MENU_Y + VH * 0.45, [7.0, 16.0, 44.0]),
-        (MENU_Y + VH * 0.78, [18.0, 40.0, 92.0]), (MENU_Y + VH, [52.0, 98.0, 168.0]),
+        (0.0, [3.0, 2.0, 10.0]), (VH * 0.56, [9.0, 7.0, 26.0]),
+        (MENU_Y, [5.0, 4.0, 16.0]), (MENU_Y + VH * 0.45, [12.0, 9.0, 34.0]),
+        (MENU_Y + VH * 0.78, [28.0, 21.0, 70.0]), (MENU_Y + VH, [70.0, 54.0, 138.0]),
     ];
     let t = y.clamp(stops[0].0, stops[5].0);
     let i = stops.iter().position(|s| s.0 >= t).unwrap_or(stops.len() - 1).max(1);
@@ -192,7 +195,7 @@ fn horizon_image() -> Arc<image::RgbaImage> {
         Arc::new(image::RgbaImage::from_fn(w, h, |x, y| {
             let p = full.get_pixel(x, y + top);
             let fade = smooth(0.0, 0.42, y as f32 / h as f32);
-            let tint = [0.26, 0.40, 0.68];
+            let tint = [0.34, 0.27, 0.66]; // midnight indigo
             image::Rgba([(p[0] as f32 * tint[0]) as u8, (p[1] as f32 * tint[1]) as u8, (p[2] as f32 * tint[2]) as u8, (fade * 255.0) as u8])
         }))
     }).clone()
@@ -216,16 +219,25 @@ fn near_star_tiles() -> [(&'static str, f32); 6] {
      ("menu_stars_e", MENU_Y - VH * 2.0), ("menu_stars_f", MENU_Y - VH * 2.0)]
 }
 
-/// The horizon image's bottom row, averaged: what lies below it.
+/// What lies below the horizon image (only a window taller than 16:9 sees
+/// it): the cloud layer carried on, the horizon mirrored at its bottom edge
+/// and continued, at the same scale as the horizon quad above it. (It was the
+/// bottom row's average colour, which showed as a flat band.)
 fn horizon_floor() -> Arc<image::RgbaImage> {
     static IMG: OnceLock<Arc<image::RgbaImage>> = OnceLock::new();
     IMG.get_or_init(|| {
         let h = horizon_image();
-        let y = h.height() - 1;
-        let mut sum = [0u32; 3];
-        for x in 0..h.width() { let p = h.get_pixel(x, y); for k in 0..3 { sum[k] += p[k] as u32; } }
-        let n = h.width();
-        solid([(sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8, 255])
+        let (w, hh) = h.dimensions();
+        // The floor quad is SKY_BLEED tall, the horizon's 0.4 VH: rows to match.
+        let rows = ((hh as f32) * SKY_BLEED / (VH * 0.4)).round().max(1.0) as u32;
+        let mut out = image::RgbaImage::new(w, rows);
+        for y in 0..rows {
+            // Down from the bottom edge: back up the image, then down again.
+            let k = y % (2 * hh);
+            let src = if k < hh { hh - 1 - k } else { k - hh };
+            for x in 0..w { out.put_pixel(x, y, *h.get_pixel(x, src)); }
+        }
+        Arc::new(out)
     }).clone()
 }
 
@@ -278,7 +290,8 @@ fn logo_image() -> Option<Arc<image::RgbaImage>> {
 /// Text in the logo's style (fill, outline, violet glow), at `px` glyph size.
 /// Built once per (text, size); the page titles use it too.
 pub fn glow_text(text: &str, px: f32) -> Option<Arc<image::RgbaImage>> {
-    glow_text_rgb(text, px, [80, 150, 255], [170, 210, 255])
+    // Midnight: a violet-indigo glow, a lavender foot.
+    glow_text_rgb(text, px, [120, 100, 255], [200, 190, 255])
 }
 
 /// `glow_text` in other colours: the glow, and the fill at the foot of the
@@ -447,6 +460,27 @@ pub fn menu_objects(ctx: &mut Context) -> Vec<(String, GameObject)> {
     v.push(quad(ctx, "menu_mode_selector", clear_pixel(), (MODE_W, ITEM_H), (MODE_X, y0 + LIST_Y0), vec!["ui".into()]));
     v.push(text_obj(ctx, "menu_mode_name_text", (MODE_W, ITEM_H), (MODE_X, y0 + LIST_Y0 + (ITEM_H - 46.0) * 0.5)));
     v.push(text_obj(ctx, "menu_mode_desc_text", (MODE_W + 300.0, 50.0), (MODE_X - 150.0, y0 + LIST_Y0 + ITEM_H - 6.0)));
+    // PLAY's dropdown of modes (hidden until PLAY is pressed).
+    {
+        let (x, y) = dd_origin();
+        let mut panel = glass_obj(ctx, "menu_dd_panel", (DD_W, DD_ROW * 3.0 + DD_PAD * 2.0), (x, y), GLASS_LILAC, true, vec!["ui".into()]);
+        panel.visible = false;
+        panel.layer = 800;
+        v.push(("menu_dd_panel".into(), panel));
+        let mut hl = glass_obj(ctx, "menu_dd_hl", (DD_W - DD_PAD * 2.0, DD_ROW - 10.0), (x + DD_PAD, y + DD_PAD), [200, 220, 255], false, vec!["ui".into()]);
+        hl.visible = false;
+        hl.layer = 801;
+        v.push(("menu_dd_hl".into(), hl));
+        for i in 0..3 {
+            for (part, dy) in [("name", 18.0), ("desc", 74.0)] {
+                let id = format!("menu_dd_{part}_{i}");
+                let (sid, mut o) = text_obj(ctx, &id, (DD_W - DD_PAD * 4.0, 50.0), (x + DD_PAD * 2.0, y + DD_PAD + i as f32 * DD_ROW + dy));
+                o.visible = false;
+                o.layer = 802;
+                v.push((sid, o));
+            }
+        }
+    }
     // Corner links and the controls hint.
     for (i, x) in link_xs().into_iter().enumerate() {
         let (hit, text, _, w) = LINKS[i];
@@ -454,7 +488,53 @@ pub fn menu_objects(ctx: &mut Context) -> Vec<(String, GameObject)> {
         v.push(text_obj(ctx, text, (w, 90.0), (x, y0 + LINKS_Y + 24.0)));
     }
     v.push(text_obj(ctx, "menu_hint_text", (1600.0, 50.0), (LIST_X - 92.0, y0 + LINKS_Y + 30.0)));
+    // An achievement earned on the menu (the planet's) pops up here; the
+    // game's own popup lives in the game scene.
+    let mut panel = glass_obj(ctx, "menu_toast_panel", TOAST_SIZE, (VW * 0.5 - TOAST_SIZE.0 * 0.5, y0 - 400.0), GLASS_GOLD, true, vec!["ui".into()]);
+    panel.visible = false;
+    panel.layer = 900;
+    v.push(("menu_toast_panel".into(), panel));
+    for id in ["menu_toast_title", "menu_toast_desc"] {
+        let (k, mut o) = text_obj(ctx, id, (TOAST_SIZE.0 - 80.0, 70.0), (0.0, y0 - 400.0));
+        o.visible = false;
+        o.layer = 901;
+        v.push((k, o));
+    }
     v
+}
+
+const TOAST_SIZE: (f32, f32) = (1160.0, 170.0);
+const TOAST_TICKS: i32 = 300;
+
+/// The menu's achievement popup: slides down, holds, slides back up.
+fn tick_menu_toast(c: &mut Canvas) {
+    let mut t = c.get_i32("menu_toast_t");
+    if t <= 0 {
+        let Some((title, desc, tier)) = crate::achievements::next_toast() else { return };
+        let Some(font) = ui_font() else { return };
+        let s = c.virtual_scale();
+        let (r, g, b) = tier.rgb();
+        if let Some(o) = c.get_game_object_mut("menu_toast_title") {
+            o.set_drawable(Box::new(ui_text_left_spec(&format!("ACHIEVEMENT  -  {title}"), &font, 44.0 * s, Color(r, g, b, 255), (TOAST_SIZE.0 - 80.0) * s)));
+        }
+        if let Some(o) = c.get_game_object_mut("menu_toast_desc") {
+            o.set_drawable(Box::new(ui_text_left_spec(&desc, &font, 28.0 * s, Color(210, 220, 235, 230), (TOAST_SIZE.0 - 80.0) * s)));
+        }
+        t = TOAST_TICKS;
+    }
+    t -= 1;
+    c.set_var("menu_toast_t", t);
+    let age = TOAST_TICKS - t;
+    let slide = (age.min(t) as f32 / 24.0).clamp(0.0, 1.0);
+    let ease = 1.0 - (1.0 - slide).powi(3);
+    // Pinned to the top of the screen, wherever the menu's camera is.
+    let cam_y = c.camera().map_or(MENU_Y, |cam| cam.position.1);
+    let y = cam_y - TOAST_SIZE.1 - 20.0 + (TOAST_SIZE.1 + 50.0) * ease;
+    let x = VW * 0.5 - TOAST_SIZE.0 * 0.5;
+    let on = t > 0;
+    for (id, dx, dy) in [("menu_toast_panel", 0.0, 0.0), ("menu_toast_title", 40.0, 28.0), ("menu_toast_desc", 40.0, 96.0)] {
+        if let Some(o) = c.get_game_object_mut(id) { o.position = (x + dx, y + dy); o.visible = on; }
+    }
 }
 
 /// Put the player's equipped cat on the rope (call on menu entry).
@@ -497,15 +577,13 @@ pub fn draw_menu_text(c: &mut Canvas) {
             o.set_drawable(Box::new(ui_text_left_spec(label, &font, ITEM_SIZE * s, col, ITEM_W * s)));
         }
     }
-    let idx = (c.get_i32("game_mode_idx").max(0) as usize).min(crate::menu::GAME_MODES.len() - 1);
-    let (name, desc) = crate::menu::GAME_MODES[idx];
-    let mode_col = if sel == 0 { ACCENT } else { Color(150, 140, 200, 200) };
-    let mode = format!("<   {name}   >");
+    // The old "< MODE >" picker is gone: PLAY opens a dropdown of modes.
+    let _ = (ACCENT, MODE_W);
     for (id, t, sz, col, w, left) in [
-        ("menu_mode_name_text", mode.as_str(), 40.0, mode_col, MODE_W, false),
-        ("menu_mode_desc_text", desc, 22.0, Color(160, 150, 210, if sel == 0 { 220 } else { 150 }), MODE_W + 300.0, false),
+        ("menu_mode_name_text", "", 40.0, LIT, MODE_W, false),
+        ("menu_mode_desc_text", "", 22.0, LIT, MODE_W + 300.0, false),
         ("menu_sub_text", "S W I N G   T H R O U G H   T H E   S T A R S", 26.0, Color(170, 200, 245, 210), LOGO_W, false),
-        ("menu_hint_text", "SPACE  PLAY      UP / DOWN  SELECT      LEFT / RIGHT  MODE      ENTER  OPEN", 28.0, Color(170, 195, 240, 215), 1600.0, true),
+        ("menu_hint_text", "", 28.0, Color(190, 180, 240, 215), 1600.0, true),
     ] {
         if let Some(o) = c.get_game_object_mut(id) {
             let spec = if left { ui_text_left_spec(t, &font, sz * s, col, w * s) } else { ui_text_spec(t, &font, sz * s, col, w * s) };
@@ -517,6 +595,150 @@ pub fn draw_menu_text(c: &mut Canvas) {
         let col = if hover == i as i32 { LIT } else { Color(190, 210, 245, 230) };
         if let Some(o) = c.get_game_object_mut(text) {
             o.set_drawable(Box::new(ui_text_spec(label, &font, 34.0 * s, col, w * s)));
+        }
+    }
+}
+
+// ── PLAY's dropdown ──────────────────────────────────────────────────────────
+//
+// PLAY opens a list of the modes beside it; one is lit (the last one
+// played to start with); choosing one starts the run. Up / Down or the mouse
+// light a row, Enter / Space / a click choose it, Escape or a click away
+// closes it.
+
+/// The rows unfold under PLAY, indented; each row a mode's name over its
+/// one-line description. Opening eases the rows down and in and pushes the
+/// rest of the menu down to make room (and closing the reverse), as the
+/// menu glides into the shop rather than snapping.
+const DD_W: f32 = 1400.0;
+const DD_ROW: f32 = 108.0;
+const DD_PAD: f32 = 16.0;
+const DD_X: f32 = LIST_X + 40.0;
+/// How far the items under PLAY move down when it is open.
+const DD_PUSH: f32 = DD_ROW * 3.0 + 26.0;
+
+fn dd_origin() -> (f32, f32) { (DD_X, MENU_Y + LIST_Y0 + ITEM_H - 6.0) }
+
+pub fn dd_open(c: &Canvas) -> bool { matches!(c.get_var("menu_dd_open"), Some(Value::Bool(true))) }
+
+/// How far open it is, eased (0 shut .. 1 open).
+fn dd_k(c: &Canvas) -> f32 { match c.get_var("menu_dd_k") { Some(Value::F32(v)) => v, _ => 0.0 } }
+
+pub fn open_dropdown(c: &mut Canvas) {
+    let n = crate::menu::GAME_MODES.len() as i32;
+    let cur = match c.get_var("game_mode_idx") { Some(Value::I32(v)) => v, _ => 1 };
+    c.set_var("menu_dd_open", true);
+    c.set_var("menu_dd_sel", cur.clamp(0, n - 1));
+    c.set_var("menu_dd_since", c.get_i32("menu_t"));
+    c.set_var("menu_dd_drawn", -1i32);
+}
+
+pub fn close_dropdown(c: &mut Canvas) {
+    c.set_var("menu_dd_open", false);
+    c.set_var("menu_dd_drawn", -1i32);
+}
+
+/// Shut at once, no fold (a mode was chosen: the menu's pull-away comes
+/// next, and the list should not still be folding up under it).
+pub fn snap_dropdown_shut(c: &mut Canvas) {
+    close_dropdown(c);
+    c.set_var("menu_dd_k", 0.0f32);
+    tick_dropdown(c);
+}
+
+/// Opened just now (the click or key that opened it must not also choose).
+pub fn dd_fresh(c: &Canvas) -> bool { c.get_i32("menu_t") - c.get_i32("menu_dd_since") < 8 }
+
+pub fn dd_step(c: &mut Canvas, d: i32) {
+    let n = crate::menu::GAME_MODES.len() as i32;
+    let k = (c.get_i32("menu_dd_sel") + d).rem_euclid(n);
+    c.set_var("menu_dd_sel", k);
+    c.set_var("menu_dd_drawn", -1i32);
+    crate::ui_sfx::click(c);
+}
+
+/// The row of the dropdown at world point `w`, if any.
+pub fn dd_row_hit(c: &Canvas, w: (f32, f32)) -> Option<i32> {
+    if !dd_open(c) { return None; }
+    let (x, y) = dd_origin();
+    let n = crate::menu::GAME_MODES.len();
+    if w.0 < x - 40.0 || w.0 > x + DD_W { return None; }
+    let r = ((w.1 - y) / DD_ROW).floor();
+    if r < 0.0 || r >= n as f32 { return None; }
+    Some(r as i32)
+}
+
+/// Inside the unfolded rows at all.
+pub fn dd_panel_hit(c: &Canvas, w: (f32, f32)) -> bool {
+    let (x, y) = dd_origin();
+    dd_open(c) && w.0 >= x - 40.0 && w.0 <= x + DD_W && w.1 >= y && w.1 <= y + DD_ROW * 3.0
+}
+
+/// Every menu frame: ease open/shut, push the items under PLAY down, and
+/// place and fade the rows.
+fn tick_dropdown(c: &mut Canvas) {
+    let target = if dd_open(c) { 1.0 } else { 0.0 };
+    let k0 = dd_k(c);
+    let k = if (target - k0).abs() < 0.004 { target } else { k0 + (target - k0) * 0.2 };
+    c.set_var("menu_dd_k", k);
+    let e = k * k * (3.0 - 2.0 * k);
+    let y0 = MENU_Y;
+    // The items under PLAY, pushed down.
+    for (i, (hit, text, _)) in items().into_iter().enumerate().skip(1) {
+        let y = y0 + LIST_Y0 + i as f32 * LIST_STEP + DD_PUSH * e;
+        if let Some(o) = c.get_game_object_mut(hit) { o.position.1 = y; }
+        if let Some(o) = c.get_game_object_mut(text) { o.position.1 = y + (ITEM_H - ITEM_SIZE * 1.1) * 0.5; }
+    }
+    // The rows: in from a little above, fading up.
+    let (x, oy) = dd_origin();
+    let sel = c.get_i32("menu_dd_sel").max(0) as usize;
+    let show = k > 0.02;
+    let a = (e * 255.0) as u8;
+    let slide = (1.0 - e) * -26.0;
+    if let Some(o) = c.get_game_object_mut("menu_dd_panel") { o.visible = false; }
+    if let Some(o) = c.get_game_object_mut("menu_dd_hl") {
+        o.visible = show;
+        o.size = (DD_W, DD_ROW - 10.0);
+        o.position = (x - 30.0, oy + sel as f32 * DD_ROW + 5.0 + slide);
+        // The glass is cached per size, so this only re-tints it.
+        let mut g = glass(DD_W, DD_ROW - 10.0, GLASS_LILAC, false);
+        g.color = Some(Color(255, 255, 255, a));
+        o.set_image(g);
+    }
+    for i in 0..3 {
+        for (part, dy) in [("name", 6.0), ("desc", 62.0)] {
+            if let Some(o) = c.get_game_object_mut(&format!("menu_dd_{part}_{i}")) {
+                o.visible = show;
+                o.position = (x, oy + i as f32 * DD_ROW + dy + slide);
+            }
+        }
+    }
+    // Redraw the text when the fade or the lit row changes.
+    let key = (a as i32) * 4 + sel as i32;
+    if show && c.get_i32("menu_dd_drawn") != key {
+        c.set_var("menu_dd_drawn", key);
+        let Some(font) = ui_font() else { return };
+        let s = c.virtual_scale();
+        let fade = |col: Color| Color(col.0, col.1, col.2, ((col.3 as f32) * e) as u8);
+        for (i, (name, desc)) in crate::menu::GAME_MODES.iter().enumerate() {
+            let lit = i == sel;
+            if let Some(o) = c.get_game_object_mut(&format!("menu_dd_name_{i}")) {
+                o.set_drawable(Box::new(ui_text_left_spec(name, &font, 48.0 * s, fade(if lit { LIT } else { DIM }), DD_W * s)));
+            }
+            if let Some(o) = c.get_game_object_mut(&format!("menu_dd_desc_{i}")) {
+                o.set_drawable(Box::new(ui_text_left_spec(desc, &font, 27.0 * s,
+                    fade(if lit { Color(205, 198, 250, 235) } else { Color(160, 152, 215, 170) }), DD_W * s)));
+            }
+        }
+    }
+}
+
+/// The mouse over a row lights it (every menu frame while open).
+fn tick_dropdown_hover(c: &mut Canvas, w: (f32, f32)) {
+    if let Some(r) = dd_row_hit(c, w) {
+        if r != c.get_i32("menu_dd_sel") {
+            c.set_var("menu_dd_sel", r);
+            c.set_var("menu_dd_drawn", -1i32);
         }
     }
 }
@@ -542,10 +764,153 @@ pub fn selected_button(c: &Canvas) -> &'static str {
 
 // ── Per frame ────────────────────────────────────────────────────────────────
 
+/// The swing as a real pendulum: `menu_th` (angle from straight down, rad,
+/// unbounded so whole turns can be counted) and `menu_om` (rad/tick).
+/// Gravity is tuned so a free swing has the old `SWING_RATE`, and an energy
+/// keeper nudges it toward the old `SWING_AMP` arc: let go gently and it
+/// builds back up; spin it hard over the top and it bleeds the extra off and
+/// eases back into the default swing.
+const SWING_K: f32 = SWING_RATE * SWING_RATE;
+/// How quickly the keeper restores the default arc (per tick).
+const SWING_KEEP: f32 = 0.017;
+/// The most of its speed an over-energetic swing loses a tick.
+const SWING_DRAG: f32 = 0.008;
+/// The cat can be grabbed within this far of its centre.
+const GRAB_R: f32 = CAT_SIZE * 0.62;
+
+/// How much heavier gravity is at angle `a` (0..π from straight down): the
+/// default swing's gentle pull inside its arc, much heavier above it, so a
+/// cat thrown high drops back like it weighs something.
+fn swing_heavy(a: f32) -> f32 {
+    let pi = std::f32::consts::PI;
+    let x = ((a - SWING_AMP) / (pi * 0.75 - SWING_AMP)).clamp(0.0, 1.0);
+    1.0 + 10.0 * x * x * (3.0 - 2.0 * x)
+}
+
+/// The height energy matching that gravity (its integral), tabulated once:
+/// measured with the plain pendulum's instead, a fall from the top looked
+/// like far too much energy.
+fn swing_height(th: f32) -> f32 {
+    const N: usize = 512;
+    static TABLE: OnceLock<Vec<f32>> = OnceLock::new();
+    let t = TABLE.get_or_init(|| {
+        let pi = std::f32::consts::PI;
+        let mut u = vec![0.0f32; N + 1];
+        for i in 1..=N {
+            let (a0, a1) = ((i - 1) as f32 / N as f32 * pi, i as f32 / N as f32 * pi);
+            let am = (a0 + a1) * 0.5;
+            u[i] = u[i - 1] + SWING_K * swing_heavy(am) * am.sin() * (a1 - a0);
+        }
+        u
+    });
+    let pi = std::f32::consts::PI;
+    let a = ((th + pi).rem_euclid(2.0 * pi) - pi).abs() / pi * N as f32;
+    let i = (a as usize).min(N - 1);
+    let f = a - i as f32;
+    t[i] * (1.0 - f) + t[i + 1] * f
+}
+
+fn swing_energy(th: f32, om: f32) -> f32 {
+    0.5 * om * om + swing_height(th)
+}
+
+/// One free tick of the swing.
+fn swing_step(th: f32, om: f32) -> (f32, f32) {
+    let e0 = swing_energy(SWING_AMP, 0.0);
+    let pi = std::f32::consts::PI;
+    let a = (th + pi).rem_euclid(2.0 * pi) - pi; // -π..π
+    let mut om = om - SWING_K * swing_heavy(a.abs()) * th.sin();
+    let e = swing_energy(th, om);
+    // Short of the default swing: pumped back up through its arc.
+    if e < e0 && a.abs() < SWING_AMP {
+        om += SWING_KEEP * ((e0 - e) / e0).min(1.0) * om;
+    }
+    // Over it: a gentle air drag, the same everywhere, bleeds the extra off.
+    // (It used to brake hard through the arc, which read as the cat
+    // suddenly slowing on the way down.)
+    if e > e0 {
+        om *= 1.0 - SWING_DRAG * ((e - e0) / e0).min(1.0);
+    }
+    // A swing with no motion at the bottom has nothing to pump: a nudge.
+    if om.abs() < 1e-4 && th.abs() < 1e-3 { om += 1e-3; }
+    (th + om, om)
+}
+
+/// The angle from the node to `p`, the nearest turn to `near` (so dragging
+/// round and round keeps counting rather than jumping back by 2π).
+fn angle_near(p: (f32, f32), node: (f32, f32), near: f32) -> f32 {
+    let a = (p.0 - node.0).atan2(p.1 - node.1);
+    let tau = std::f32::consts::TAU;
+    a + ((near - a) / tau).round() * tau
+}
+
+/// Every menu frame: drag (the mouse holding the cat) or swing freely.
+fn tick_swing(c: &mut Canvas, tf: f32) -> f32 {
+    if !c.get_bool("menu_drag_registered") {
+        c.set_var("menu_drag_registered", true);
+        c.on_mouse_press(|c, btn, _| {
+            if btn == MouseButton::Left && c.is_scene("menu") { c.set_var("menu_mouse_down", true); c.set_var("menu_mouse_edge", true); }
+        });
+        c.on_mouse_release(|c, btn, _| {
+            if btn == MouseButton::Left { c.set_var("menu_mouse_down", false); c.set_var("menu_dragging", false); }
+        });
+    }
+    // Start in step with the old swing.
+    let (mut th, mut om) = match (c.get_var("menu_th"), c.get_var("menu_om")) {
+        (Some(Value::F32(a)), Some(Value::F32(b))) => (a, b),
+        _ => (SWING_AMP * (tf * SWING_RATE).sin(), SWING_AMP * SWING_RATE * (tf * SWING_RATE).cos()),
+    };
+    let node = (NODE_POS.0, MENU_Y + NODE_POS.1);
+    let mouse = c.mouse_position().map(|sp| c.screen_to_world(sp));
+    // A fresh press on the cat picks it up.
+    if c.get_bool("menu_mouse_edge") {
+        c.set_var("menu_mouse_edge", false);
+        let cat = (node.0 + ROPE_LEN * th.sin(), node.1 + ROPE_LEN * th.cos());
+        if let Some(m) = mouse {
+            let ok = !c.get_bool("menu_in_shop") && ((m.0 - cat.0).powi(2) + (m.1 - cat.1).powi(2)).sqrt() < GRAB_R;
+            c.set_var("menu_dragging", ok);
+        }
+    }
+    let dragging = c.get_bool("menu_dragging") && c.get_bool("menu_mouse_down") && !c.get_bool("menu_in_shop");
+    if dragging {
+        if let Some(m) = mouse {
+            // The rope never lets go: the cat follows the mouse round its
+            // circle, and the swing's speed is how fast it was moved.
+            let target = angle_near(m, node, th);
+            let d = (target - th).clamp(-0.6, 0.6);
+            om = om * 0.4 + d * 0.6;
+            th += d;
+        }
+    } else {
+        let (a, b) = swing_step(th, om);
+        th = a;
+        om = b.clamp(-0.6, 0.6);
+    }
+    // Keep the count bounded once it has settled into ordinary swings.
+    if th.abs() > 40.0 && om.abs() < 0.05 {
+        th = th.rem_euclid(std::f32::consts::TAU);
+        if th > std::f32::consts::PI { th -= std::f32::consts::TAU; }
+    }
+    c.set_var("menu_th", th);
+    c.set_var("menu_om", om);
+    th
+}
+
+/// Where the swing will be in `ticks`, if left alone (the PLAY dive aims there).
+fn swing_ahead(c: &Canvas, ticks: i32) -> f32 {
+    let (mut th, mut om) = match (c.get_var("menu_th"), c.get_var("menu_om")) {
+        (Some(Value::F32(a)), Some(Value::F32(b))) => (a, b),
+        _ => (0.0, 0.0),
+    };
+    for _ in 0..ticks.max(0) { let (a, b) = swing_step(th, om); th = a; om = b.clamp(-0.6, 0.6); }
+    th
+}
+
 /// Animate the sky and the swing (always — they are on screen through the
 /// climb into the shop), and, while on the menu, follow the mouse for hover
 /// and ease the marker to the lit item.
 pub fn tick_menu_look(c: &mut Canvas) {
+    tick_menu_toast(c);
     let t = c.get_i32("menu_t") + 1;
     c.set_var("menu_t", t);
     let tf = t as f32;
@@ -593,8 +958,9 @@ pub fn tick_menu_look(c: &mut Canvas) {
         o.rotation = (tf * 0.006).sin() * 3.0;
     }
 
-    // The swing: a slow pendulum, the cat curling at the ends of the arc.
-    let th = SWING_AMP * (tf * SWING_RATE).sin();
+    // The swing: a pendulum the player can grab and throw, the cat curling
+    // at the ends of the arc.
+    let th = tick_swing(c, tf);
     let (nx, ny) = (NODE_POS.0, y0 + NODE_POS.1);
     let (cx, cy) = (nx + ROPE_LEN * th.sin(), ny + ROPE_LEN * th.cos());
     if let Some(o) = c.get_game_object_mut("menu_rope") {
@@ -614,6 +980,7 @@ pub fn tick_menu_look(c: &mut Canvas) {
     // Hover: the mouse over an item lights it; over a link, underline-lights it.
     if let Some(sp) = c.mouse_position() {
         let w = c.screen_to_world(sp);
+        if dd_open(c) { tick_dropdown_hover(c, w); }
         let inside = |c: &Canvas, id: &str| c.get_game_object(id).map_or(false, |o|
             w.0 >= o.position.0 && w.0 <= o.position.0 + o.size.0 && w.1 >= o.position.1 && w.1 <= o.position.1 + o.size.1);
         let moved = c.get_f32("menu_mouse_x") != sp.0 || c.get_f32("menu_mouse_y") != sp.1;
@@ -636,7 +1003,9 @@ pub fn tick_menu_look(c: &mut Canvas) {
 
     // Marker and bar ease to the lit row; the lit text nudges right.
     let sel = c.get_i32("menu_sel").max(0) as f32;
-    let target = y0 + LIST_Y0 + sel * LIST_STEP;
+    tick_dropdown(c);
+    let push = { let k = dd_k(c); k * k * (3.0 - 2.0 * k) * DD_PUSH };
+    let target = y0 + LIST_Y0 + sel * LIST_STEP + if sel >= 1.0 { push } else { 0.0 };
     let cur = { let v = c.get_f32("menu_marker_y"); if v == 0.0 { target } else { v } };
     let y = cur + (target - cur) * 0.25;
     c.set_var("menu_marker_y", y);
@@ -665,7 +1034,7 @@ pub fn tick_menu_look(c: &mut Canvas) {
 // "‹ BACK" pill bottom-left that the shop uses.
 
 /// The scenes that wear the page look (their drift is ticked by `register_page_tick`).
-const PAGE_SCENES: [&str; 5] = ["menu_settings", "profile", "achievements", "stats", "daily_reward"];
+const PAGE_SCENES: [&str; 7] = ["menu_settings", "profile", "achievements", "stats", "daily_reward", "leaderboard", "credits"];
 
 /// Title: glyph size, and the top of the image.
 const PAGE_TITLE_PX: f32 = 130.0;
@@ -680,7 +1049,7 @@ pub const PAGE_BACK_LABEL: &str = "<  BACK";
 
 /// Glass accents.
 /// (Named for its first colour; the menu went blue.)
-pub const GLASS_LILAC: [u8; 3] = [120, 175, 255];
+pub const GLASS_LILAC: [u8; 3] = [150, 135, 255];
 pub const GLASS_GOLD: [u8; 3] = [240, 200, 110];
 pub const GLASS_ROSE: [u8; 3] = [255, 120, 150];
 
@@ -890,8 +1259,7 @@ pub fn tick_launch(c: &mut Canvas) -> bool {
             // cat made the camera keep correcting its aim mid-dive; this way
             // it flies one smooth path and the cat swings into the spot.
             if t == DRAW_TICKS + 1 {
-                let end_t = (c.get_i32("menu_t") + (LAUNCH_TICKS - DRAW_TICKS)) as f32;
-                let th = SWING_AMP * (end_t * SWING_RATE).sin();
+                let th = swing_ahead(c, (LAUNCH_TICKS - DRAW_TICKS) as i32);
                 let (nx, ny) = (NODE_POS.0, MENU_Y + NODE_POS.1);
                 c.set_var("menu_dive_x", nx + ROPE_LEN * th.sin());
                 c.set_var("menu_dive_y", ny + ROPE_LEN * th.cos());

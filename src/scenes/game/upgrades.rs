@@ -337,7 +337,7 @@ pub fn upgrade_dialogue_key(c: &mut Canvas, st: &Arc<Mutex<State>>, key: &Key) -
     upgrade_dialogue_select(c, st, opt)
 }
 
-fn buy_option(c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) {
+fn buy_option(_c: &mut Canvas, st: &Arc<Mutex<State>>, opt: u8) {
     match opt {
         1 => {
             let (cost, coins) = {
@@ -417,10 +417,10 @@ fn update_dialogue_text(c: &mut Canvas, st: &Arc<Mutex<State>>) {
          s.run_heart_refill_buys, s.run_magnet_buys, s.hearts, s.max_hearts)
     };
     let rhc = (UPGRADE_RUN_HEART_BASE as f32 * UPGRADE_RUN_HEART_GROWTH.powi(r_h_b as i32)).round() as u32;
-    let rbc = (UPGRADE_BREATH_BASE as f32 * UPGRADE_BREATH_GROWTH.powi(r_b_b as i32)).round() as u32;
-    let rmc = (UPGRADE_MOMENTUM_BASE as f32 * UPGRADE_MOMENTUM_GROWTH.powi(r_m_b as i32)).round() as u32;
+    let _rbc = (UPGRADE_BREATH_BASE as f32 * UPGRADE_BREATH_GROWTH.powi(r_b_b as i32)).round() as u32;
+    let _rmc = (UPGRADE_MOMENTUM_BASE as f32 * UPGRADE_MOMENTUM_GROWTH.powi(r_m_b as i32)).round() as u32;
     let rfc = (UPGRADE_HEART_REFILL_BASE as f32 * UPGRADE_HEART_REFILL_GROWTH.powi(r_h_r_b as i32)).round() as u32;
-    let rmgc = (UPGRADE_MAGNET_BASE as f32 * UPGRADE_MAGNET_GROWTH.powi(r_mag_b as i32)).round() as u32;
+    let _rmgc = (UPGRADE_MAGNET_BASE as f32 * UPGRADE_MAGNET_GROWTH.powi(r_mag_b as i32)).round() as u32;
 
     if let Some(obj) = c.get_game_object_mut("upgrade_dialogue_panel") {
         obj.visible = true;

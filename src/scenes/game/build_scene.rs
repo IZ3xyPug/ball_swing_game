@@ -21,10 +21,13 @@ use crate::shop::{SHOP_ROPE_COLORS, SHOP_TRAIL_COLORS, SHOP_BG_COLORS};
 // images are guaranteed to be ready.
 
 struct BgImages {
-    vivid:         image::RgbaImage,
-    vivid_flip:    image::RgbaImage,
-    palettes:      Vec<image::RgbaImage>,
-    palettes_flip: Vec<image::RgbaImage>,
+    // Arcs, handed to the sky object as they are: the renderer keys its
+    // textures by the Arc, so the same one is uploaded once a session, not
+    // a fresh 33 MB copy (twice) at the start of every run.
+    vivid:         Arc<image::RgbaImage>,
+    vivid_flip:    Arc<image::RgbaImage>,
+    palettes:      Vec<Arc<image::RgbaImage>>,
+    palettes_flip: Vec<Arc<image::RgbaImage>>,
     space:         Arc<image::RgbaImage>,
     transparent_stars: Arc<image::RgbaImage>,
 }
@@ -36,6 +39,13 @@ unsafe impl Sync for BgImages {}
 static BG_IMAGES: OnceLock<BgImages> = OnceLock::new();
 
 fn compute_bg_images() -> BgImages {
+    let t0 = std::time::Instant::now();
+    let imgs = compute_bg_images_inner();
+    if std::env::var("START_PROFILE").is_ok() { eprintln!("BG_IMAGES built in {:?}", t0.elapsed()); }
+    imgs
+}
+
+fn compute_bg_images_inner() -> BgImages {
     let bg_w = VW as u32;
     let bg_h = VH as u32;
     let starfield = star_field(bg_w, bg_h, STARFIELD_STAR_COUNT, 0xCAFE_BABE);
@@ -56,33 +66,235 @@ fn compute_bg_images() -> BgImages {
 
     let vivid = composite_starfield_gradient(sf, &grad_vivid, bg_w, bg_h, blend_h);
 
-    let palettes: Vec<image::RgbaImage> = SHOP_BG_COLORS.iter().map(|&(pr, pg, pb)| {
+    // Earth's surface, as a planet: the photo's clouds over an ocean and land
+    // (the photo alone is all cloud, and pulled to the sky's colour it read
+    // as fog).
+    let earth_surface = earth_surface(&grad_start);
+    // One per background colour, built side by side (each is a full-size
+    // picture; one after another they took most of the ~1.6 s this took).
+    let palettes: Vec<image::RgbaImage> = std::thread::scope(|scope| {
+        let earth_surface = &earth_surface;
+        let grad_start = &grad_start;
+        let handles: Vec<_> = SHOP_BG_COLORS.iter().map(|&(pr, pg, pb)| scope.spawn(move || {
         let mut tinted = grad_start.clone();
-        for px in tinted.pixels_mut() {
-            px[0] = (px[0] as f32 * 0.30 + pr as f32 * 0.70).min(255.0) as u8;
-            px[1] = (px[1] as f32 * 0.30 + pg as f32 * 0.70).min(255.0) as u8;
-            px[2] = (px[2] as f32 * 0.30 + pb as f32 * 0.70).min(255.0) as u8;
+        let hz = (bg_h as f32 * EARTH_HORIZON) as u32;
+        for (x, y, px) in tinted.enumerate_pixels_mut() {
+            // The air keeps the sky's strong tint, as it always had; the
+            // ground only a little of it, so it keeps its own colours.
+            let ground = earth_surface.get_pixel(x, y);
+            let g = ((y as f32 - (hz as f32 - 8.0)) / 14.0).clamp(0.0, 1.0);
+            let air = [px[0] as f32 * 0.30 + pr as f32 * 0.70, px[1] as f32 * 0.30 + pg as f32 * 0.70, px[2] as f32 * 0.30 + pb as f32 * 0.70];
+            let land = [ground[0] as f32 * 0.78 + pr as f32 * 0.22, ground[1] as f32 * 0.78 + pg as f32 * 0.22, ground[2] as f32 * 0.78 + pb as f32 * 0.22];
+            for i in 0..3 { px[i] = (air[i] + (land[i] - air[i]) * g).min(255.0) as u8; }
         }
         composite_starfield_gradient(sf, &tinted, bg_w, bg_h, blend_h)
-    }).collect();
-    let palettes_flip: Vec<image::RgbaImage> =
-        palettes.iter().map(|img| flip_image_vertical(img)).collect();
+        })).collect();
+        handles.into_iter().map(|h| h.join().expect("palette")).collect()
+    });
+    let palettes_flip: Vec<Arc<image::RgbaImage>> =
+        palettes.iter().map(|img| Arc::new(flip_image_vertical(img))).collect();
+    let palettes: Vec<Arc<image::RgbaImage>> = palettes.into_iter().map(Arc::new).collect();
 
     let space = starfield.image.clone();
 
+    // The moving stars, transparent between them, and faded out over the
+    // planet: these panels cover the whole sky, so their stars were showing
+    // on the planet's ground as if through gaps in it.
     let transparent_stars = {
         let mut img: image::RgbaImage = (*sf).clone();
-        for pixel in img.pixels_mut() {
+        let (fade0, fade1) = (bg_h as f32 * 0.62, bg_h as f32 * 0.78);
+        for (_, y, pixel) in img.enumerate_pixels_mut() {
             if pixel[0] < 20 && pixel[1] < 20 && pixel[2] < 25 {
                 pixel[3] = 0;
             }
+            let k = 1.0 - ((y as f32 - fade0) / (fade1 - fade0)).clamp(0.0, 1.0);
+            pixel[3] = (pixel[3] as f32 * k) as u8;
         }
         Arc::new(img)
     };
 
-    let vivid_flip = flip_image_vertical(&vivid);
+    let vivid_flip = Arc::new(flip_image_vertical(&vivid));
+    let vivid = Arc::new(vivid);
 
     BgImages { vivid, vivid_flip, palettes, palettes_flip, space, transparent_stars }
+}
+
+/// Earth's daytime sky picture for a background (Earth's night is built
+/// from it, so the two always match).
+pub fn earth_day_sky(bg_sel: usize) -> Arc<image::RgbaImage> {
+    let imgs = BG_IMAGES.get_or_init(compute_bg_images);
+    imgs.palettes[bg_sel.min(imgs.palettes.len() - 1)].clone()
+}
+
+/// Where the photo's ground begins (a share of the sky picture's height).
+const EARTH_HORIZON: f32 = 0.825;
+
+/// Earth's ground for the sky picture (rows above the horizon are left
+/// black, unused): the photo's own clouds, white and lit, over a deep blue
+/// ocean with continents on it, laid out in perspective (a camera above a
+/// plane, as the horizon photo was taken), dimming with distance into haze.
+fn earth_surface(photo: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = photo.dimensions();
+    let hz = h as f32 * EARTH_HORIZON;
+    // The photo is an upscaled GIF: blur away its palette steps before
+    // reading cloud from it, or every cloud edge is a staircase.
+    let photo = image::imageops::blur(photo, 5.0);
+    let y0 = (hz as u32).saturating_sub(10);
+    // Rows are independent: split them across the cores.
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()) as u32;
+    let per = ((h - y0) + threads - 1) / threads;
+    let rows: Vec<(u32, Vec<[u8; 4]>)> = std::thread::scope(|scope| {
+        let photo = &photo;
+        let handles: Vec<_> = (0..threads).map(|t| scope.spawn(move || {
+            ((y0 + t * per)..(y0 + (t + 1) * per).min(h))
+                .map(|y| (y, earth_surface_row(photo, y, hz)))
+                .collect::<Vec<_>>()
+        })).collect();
+        handles.into_iter().flat_map(|h| h.join().expect("earth rows")).collect()
+    });
+    let mut out = image::RgbaImage::new(w, h);
+    for (y, row) in rows {
+        for (x, p) in row.into_iter().enumerate() { out.put_pixel(x as u32, y, image::Rgba(p)); }
+    }
+    out
+}
+
+/// One row of Earth's ground (see `earth_surface`).
+fn earth_surface_row(photo: &image::RgbaImage, y: u32, hz: f32) -> Vec<[u8; 4]> {
+    let (w, h) = photo.dimensions();
+    let hash = |x: i32, y: i32, s: u32| -> f32 {
+        let mut v = (x as u32).wrapping_mul(0x8DA6_B343) ^ (y as u32).wrapping_mul(0xD816_3841) ^ s.wrapping_mul(0xCB1A_B31F);
+        v ^= v >> 13; v = v.wrapping_mul(0x5bd1_e995); v ^= v >> 15;
+        (v & 0xFFFF) as f32 / 65535.0
+    };
+    let noise = |x: f32, y: f32, s: u32| -> f32 {
+        let (xi, yi) = (x.floor() as i32, y.floor() as i32);
+        let (fx, fy) = (x - x.floor(), y - y.floor());
+        let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+        let a = hash(xi, yi, s) + (hash(xi + 1, yi, s) - hash(xi, yi, s)) * sx;
+        let b = hash(xi, yi + 1, s) + (hash(xi + 1, yi + 1, s) - hash(xi, yi + 1, s)) * sx;
+        a + (b - a) * sy
+    };
+    // Octaves finer than a pixel of ground there are left out (no shimmer).
+    let fbm = |x: f32, y: f32, s: u32, fp: f32| -> f32 {
+        let (mut sum, mut amp, mut f, mut norm) = (0.0, 0.5, 1.0, 0.0);
+        for o in 0..6 {
+            if 1.0 / f < fp * 2.0 { break; }
+            sum += noise(x * f, y * f, s + o) * amp; norm += amp; amp *= 0.5; f *= 2.03;
+        }
+        if norm > 0.0 { sum / norm } else { 0.5 }
+    };
+    let below = (y as f32 + 0.5 - hz).max(0.35);
+    let z = h as f32 / below;
+    let fp = (z * z / h as f32).max(z / h as f32);
+    let haze = 1.0 - (-z * 0.004).exp();
+    (0..w).map(|x| {
+        let gx = (x as f32 + 0.5 - w as f32 * 0.5) * z / h as f32;
+        // Continents: low-frequency shapes, coasts broken up.
+        let land = fbm(gx * 0.03 + 11.0, z * 0.03, 7, fp * 0.03);
+        // Not out at the horizon: there a coast is thinner than a pixel and
+        // came out as stray streaks.
+        let far = ((z - 25.0) / 40.0).clamp(0.0, 1.0);
+        let is_land = ((land - 0.50) / 0.03).clamp(0.0, 1.0) * (1.0 - far);
+        let veg = fbm(gx * 0.3, z * 0.3, 8, fp * 0.3);
+        let ocean = [10.0 + 14.0 * veg, 38.0 + 22.0 * veg, 84.0 + 34.0 * veg];
+        let terrain = [52.0 + 70.0 * veg, 74.0 + 50.0 * veg, 44.0 + 22.0 * veg];
+        let mut c = [0.0f32; 3];
+        for i in 0..3 { c[i] = ocean[i] + (terrain[i] - ocean[i]) * is_land; }
+        // The photo's clouds over it: its bright parts are cloud tops.
+        let p = photo.get_pixel(x, y);
+        let l = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0;
+        let cloud = ((l - 0.68) / 0.24).clamp(0.0, 1.0);
+        let cloud = cloud * cloud * (3.0 - 2.0 * cloud);
+        let white = [235.0 * l + 20.0, 240.0 * l + 18.0, 250.0 * l + 12.0];
+        for i in 0..3 { c[i] += (white[i] - c[i]) * cloud; }
+        // Far off, the air thickens over it.
+        let hz_col = [150.0, 175.0, 215.0];
+        for i in 0..3 { c[i] += (hz_col[i] - c[i]) * haze * 0.85; }
+        [c[0].min(255.0) as u8, c[1].min(255.0) as u8, c[2].min(255.0) as u8, 255]
+    }).collect()
+}
+
+/// The sky with a SKY planet other than Earth (and its flip): the planet's
+/// picture laid in where the original photo is, pulled only lightly towards
+/// the background's colour. Only the current one is kept (each is a
+/// full-size sky).
+type SkyPair = Arc<(Arc<image::RgbaImage>, Arc<image::RgbaImage>)>;
+fn planet_sky(planet: usize, bg_sel: usize) -> SkyPair {
+    static CURRENT: OnceLock<std::sync::Mutex<Option<((usize, usize), SkyPair)>>> = OnceLock::new();
+    let cur = CURRENT.get_or_init(|| std::sync::Mutex::new(None));
+    if let Some((k, p)) = cur.lock().unwrap().as_ref() {
+        if *k == (planet, bg_sel) { return p.clone(); }
+    }
+    let imgs = BG_IMAGES.get_or_init(compute_bg_images);
+    let (bg_w, bg_h) = (VW as u32, VH as u32);
+    let photo = crate::sky::planet_photo(planet);
+    // The new worlds are made at the sky's own size: no resample.
+    let mut grad = if photo.dimensions() == (bg_w, bg_h) { photo }
+        else { image::imageops::resize(&photo, bg_w, bg_h, image::imageops::FilterType::Triangle) };
+    let (pr, pg, pb) = SHOP_BG_COLORS[bg_sel.min(SHOP_BG_COLORS.len() - 1)];
+    let k = crate::sky::planet_tint(planet);
+    for px in grad.pixels_mut() {
+        px[0] = (px[0] as f32 * (1.0 - k) + pr as f32 * k).min(255.0) as u8;
+        px[1] = (px[1] as f32 * (1.0 - k) + pg as f32 * k).min(255.0) as u8;
+        px[2] = (px[2] as f32 * (1.0 - k) + pb as f32 * k).min(255.0) as u8;
+    }
+    // Its air dimmed away from the horizon: the original photo is pulled
+    // hard to the dark sky colour, and a world at full glow beside it
+    // floods half the screen. Bright at the limb, fading as it rises.
+    let (h0, h1) = (bg_h as f32 * 0.55, bg_h as f32 * 0.82);
+    for y in 0..bg_h {
+        let t = ((y as f32 - h0) / (h1 - h0)).clamp(0.0, 1.0);
+        let k = 0.45 + 0.55 * t * t * (3.0 - 2.0 * t);
+        if k >= 1.0 { continue; }
+        for x in 0..bg_w {
+            let p = grad.get_pixel_mut(x, y);
+            for i in 0..3 { p[i] = (p[i] as f32 * k) as u8; }
+        }
+    }
+    let sky = composite_starfield_gradient(&imgs.space, &grad, bg_w, bg_h, bg_h / 8);
+    let flip = Arc::new(flip_image_vertical(&sky));
+    let pair: SkyPair = Arc::new((Arc::new(sky), flip));
+    *cur.lock().unwrap() = Some(((planet, bg_sel), pair.clone()));
+    pair
+}
+
+/// The planet's sky if it is built, else start building it (off the main
+/// thread) and say not yet. Building one takes ~150 ms: done on the frame a
+/// run began, it froze the dive into the cat.
+fn planet_sky_ready(planet: usize, bg_sel: usize) -> Option<SkyPair> {
+    static BUILDING: std::sync::Mutex<Option<(usize, usize)>> = std::sync::Mutex::new(None);
+    static CURRENT_PEEK: OnceLock<std::sync::Mutex<Option<((usize, usize), SkyPair)>>> = OnceLock::new();
+    let peek = CURRENT_PEEK.get_or_init(|| std::sync::Mutex::new(None));
+    if let Some((k, p)) = peek.lock().unwrap().as_ref() {
+        if *k == (planet, bg_sel) { return Some(p.clone()); }
+    }
+    let mut b = BUILDING.lock().unwrap();
+    if *b != Some((planet, bg_sel)) {
+        *b = Some((planet, bg_sel));
+        std::thread::spawn(move || {
+            let p = planet_sky(planet, bg_sel);
+            *CURRENT_PEEK.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap() = Some(((planet, bg_sel), p));
+        });
+    }
+    None
+}
+
+/// The sky picture (and its flip) for the picked planet and background, and
+/// which planet it shows: Earth's sky stands in until another is ready.
+fn sky_for(planet: usize, bg_sel: usize) -> (Arc<image::RgbaImage>, Arc<image::RgbaImage>, usize) {
+    let imgs = BG_IMAGES.get_or_init(compute_bg_images);
+    if planet != 0 {
+        if let Some(p) = planet_sky_ready(planet, bg_sel) { return (p.0.clone(), p.1.clone(), planet); }
+    }
+    let b = bg_sel.min(imgs.palettes.len() - 1);
+    (imgs.palettes[b].clone(), imgs.palettes_flip[b].clone(), 0)
+}
+
+/// Build the picked planet's sky ahead of the run, off the main thread.
+pub fn prewarm_sky(planet: usize, bg_sel: usize) {
+    if planet == 0 { return; }
+    let _ = planet_sky_ready(planet, bg_sel);
 }
 
 fn cached_coin_icon_anim() -> Option<AnimatedSprite> {
@@ -125,6 +337,7 @@ use super::helpers::*;
 const PAUSE_MENU_ANIM_FRAMES: i32 = 14;
 const PLAYER_TRAIL_EMITTER_NAME: &str = "player_trail";
 const PLAYER_TRAIL_MID_NAME:  &str = "player_trail_b";
+const PLAYER_TRAIL_ACCENT_NAME: &str = "player_trail_c";
 
 fn mid_trail_color(near: (u8, u8, u8)) -> (u8, u8, u8) {
     const ANCHOR: (f32, f32, f32) = (100.0, 120.0, 255.0);
@@ -132,33 +345,79 @@ fn mid_trail_color(near: (u8, u8, u8)) -> (u8, u8, u8) {
     (b(near.0, ANCHOR.0), b(near.1, ANCHOR.1), b(near.2, ANCHOR.2))
 }
 
-/// Remove existing trail emitters, build fresh ones from `trail_color`, and attach to "player".
-fn rebuild_player_trail(c: &mut Canvas, trail_color: (u8, u8, u8)) {
-    let mid_color = mid_trail_color(trail_color);
-    c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
-    c.remove_emitter(PLAYER_TRAIL_MID_NAME);
-    let trail_near = EmitterBuilder::new(PLAYER_TRAIL_EMITTER_NAME)
+/// The trail's three emitters (streak, glow, its own particles) under the given
+/// names. Shared with the shop's preview so it shows the very trail you get.
+pub(crate) fn trail_emitters(trail_color: (u8, u8, u8), names: [&str; 3]) -> [Emitter; 3] {
+    // Each trail in the style of its shop card: the streak runs from a bright
+    // head colour to a deep tail colour, and a third emitter adds the trail's
+    // own particles (speed glints, embers, ice shards, glitter, mystic stars).
+    let idx = SHOP_TRAIL_COLORS.iter().position(|c| *c == trail_color);
+    let (near, mid) = match idx {
+        Some(1) => ((255, 225, 120), (230, 60, 15)),
+        Some(2) => ((235, 250, 255), (60, 150, 255)),
+        Some(3) => ((255, 240, 160), (215, 145, 20)),
+        Some(4) => ((255, 165, 240), (125, 55, 235)),
+        Some(_) => ((255, 255, 255), (150, 180, 240)),
+        None => (trail_color, mid_trail_color(trail_color)),
+    };
+    let trail_near = EmitterBuilder::new(names[0])
         .rate(350.0).lifetime(0.18).velocity(0.0, 0.0)
         .spread(10.0, 10.0).size(45.0)
-        .color(trail_color.0, trail_color.1, trail_color.2, 240)
-        .color_end(trail_color.0, trail_color.1, trail_color.2, 0)
+        .color(near.0, near.1, near.2, 240)
+        .color_end(mid.0, mid.1, mid.2, 0)
         .size_end(12.0).shape(ParticleShape::Circle)
         .interpolate_position(true)
         .render_layer(3).gravity_scale(0.0)
         .collision(CollisionResponse::None).build();
-    let trail_mid = EmitterBuilder::new(PLAYER_TRAIL_MID_NAME)
+    let trail_mid = EmitterBuilder::new(names[1])
         .rate(280.0).lifetime(0.40).velocity(0.0, 0.0)
         .spread(20.0, 20.0).size(32.0)
-        .color(mid_color.0, mid_color.1, mid_color.2, 200)
-        .color_end(mid_color.0, mid_color.1, mid_color.2, 0)
+        .color(mid.0, mid.1, mid.2, 200)
+        .color_end(mid.0, mid.1, mid.2, 0)
         .size_end(10.0).shape(ParticleShape::Circle)
         .interpolate_position(true)
         .render_layer(2).gravity_scale(0.0)
         .collision(CollisionResponse::None).build();
-    c.add_emitter(trail_near);
-    c.add_emitter(trail_mid);
-    c.attach_emitter_to(PLAYER_TRAIL_EMITTER_NAME, "player");
-    c.attach_emitter_to(PLAYER_TRAIL_MID_NAME, "player");
+    let accent = match idx {
+        // Fire: embers rising off the tail.
+        Some(1) => EmitterBuilder::new(names[2])
+            .rate(90.0).lifetime(0.6).velocity(0.0, -150.0).spread(140.0, 90.0)
+            .size(11.0).size_end(2.0).shape(ParticleShape::Circle)
+            .color(255, 200, 70, 255).color_end(230, 50, 10, 0).gravity_scale(-0.2),
+        // Ice: little shards tumbling off and falling.
+        Some(2) => EmitterBuilder::new(names[2])
+            .rate(60.0).lifetime(0.55).velocity(0.0, 0.0).spread(120.0, 90.0)
+            .size(12.0).size_end(3.0).shape(ParticleShape::Square)
+            .color(210, 245, 255, 255).color_end(80, 160, 255, 0).gravity_scale(0.3),
+        // Gold: glitter twinkling out.
+        Some(3) => EmitterBuilder::new(names[2])
+            .rate(120.0).lifetime(0.5).velocity(0.0, 0.0).spread(160.0, 160.0)
+            .size(8.0).size_end(0.5).shape(ParticleShape::Circle)
+            .color(255, 245, 170, 255).color_end(255, 200, 60, 0).gravity_scale(0.0),
+        // Mystic: soft stars drifting round it.
+        Some(4) => EmitterBuilder::new(names[2])
+            .rate(80.0).lifetime(0.75).velocity(0.0, 0.0).spread(190.0, 190.0)
+            .size(10.0).size_end(1.0).shape(ParticleShape::Soft { roundness: 0.3 })
+            .color(255, 225, 255, 255).color_end(140, 80, 255, 0).gravity_scale(-0.05),
+        // White: quick bright glints.
+        _ => EmitterBuilder::new(names[2])
+            .rate(45.0).lifetime(0.3).velocity(0.0, 0.0).spread(90.0, 90.0)
+            .size(8.0).size_end(0.5).shape(ParticleShape::Circle)
+            .color(255, 255, 255, 255).color_end(170, 200, 255, 0).gravity_scale(0.0),
+    }
+    .interpolate_position(true).render_layer(3).collision(CollisionResponse::None).build();
+    [trail_near, trail_mid, accent]
+}
+
+/// Remove existing trail emitters, build fresh ones from `trail_color`, and attach to "player".
+fn rebuild_player_trail(c: &mut Canvas, trail_color: (u8, u8, u8)) {
+    let idx = SHOP_TRAIL_COLORS.iter().position(|c| *c == trail_color);
+    let names = [PLAYER_TRAIL_EMITTER_NAME, PLAYER_TRAIL_MID_NAME, PLAYER_TRAIL_ACCENT_NAME];
+    for n in names { c.remove_emitter(n); }
+    for e in trail_emitters(trail_color, names) { c.add_emitter(e); }
+    for n in names { c.attach_emitter_to(n, "player"); }
+    // MYSTIC: its twin twisting strands too.
+    super::mystic_trail::set(c, idx == Some(4));
 }
 
 fn selected_trail_color(c: &Canvas) -> (u8, u8, u8) {
@@ -196,7 +455,7 @@ fn update_settings_text(c: &mut Canvas) {
 
 fn hide_pause_ui(c: &mut Canvas) {
     c.set_var("pause_menu_open", false);
-    for name in ["pause_overlay", "pause_panel", "pause_title",
+    for name in ["pause_overlay", "pause_panel", "pause_title", "pause_divider", "pause_stats_text",
                  "pause_resume_btn", "pause_restart_btn",
                  "pause_settings_btn", "pause_menu_btn",
                  "start_prompt_text",
@@ -399,6 +658,8 @@ pub(crate) fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
     c.set_var("settings_dragging", -1i32);
     c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
     c.remove_emitter(PLAYER_TRAIL_MID_NAME);
+    c.remove_emitter(PLAYER_TRAIL_ACCENT_NAME);
+    super::mystic_trail::set(c, false);
     if let Some(obj) = c.get_game_object_mut("player") {
         obj.visible = false;
     }
@@ -433,6 +694,19 @@ pub(crate) fn open_pause_menu(c: &mut Canvas, from_stasis: bool) {
     for name in ["start_prompt_text", "pause_touch_btn"] {
         if let Some(obj) = c.get_game_object_mut(name) {
             obj.visible = false;
+        }
+    }
+    // The run so far, under the title.
+    if let Some(st) = run_state().lock().unwrap().as_ref().cloned() {
+        let (dist, coins, score) = { let s = st.lock().unwrap(); (s.distance, s.coin_count, s.score) };
+        let group = |n: u64| { let d = n.to_string(); let mut o = String::new();
+            for (i, ch) in d.chars().enumerate() { if i > 0 && (d.len() - i) % 3 == 0 { o.push(','); } o.push(ch); } o };
+        let line = format!("DISTANCE  {}     \u{2022}     COINS  {}     \u{2022}     SCORE  {}", group(dist.max(0.0) as u64), group(coins as u64), group(score as u64));
+        if let Some(font) = ui_font() {
+            let s = c.virtual_scale();
+            if let Some(o) = c.get_game_object_mut("pause_stats_text") {
+                o.set_drawable(Box::new(ui_text_spec(&line, &font, 34.0 * s, Color(196, 184, 245, 230), (super::bootstrap::PAUSE_PANEL_SIZE.0 - 160.0) * s)));
+            }
         }
     }
     c.set_var("pause_anim_total", PAUSE_MENU_ANIM_FRAMES);
@@ -477,8 +751,10 @@ fn launch_from_orbit(c: &mut Canvas, st: &Arc<Mutex<State>>, ticks: f32) {
     }
 }
 
-const PAUSE_BTN_LAYOUT: [(&str, f32, f32); 5] = [
+const PAUSE_BTN_LAYOUT: [(&str, f32, f32); 7] = [
     ("pause_title",        (VW - 650.0) / 2.0, super::bootstrap::PAUSE_TITLE_Y),
+    ("pause_divider",      (VW - super::bootstrap::PAUSE_DIVIDER.0) / 2.0, super::bootstrap::PAUSE_DIVIDER_Y),
+    ("pause_stats_text",   (VW - (super::bootstrap::PAUSE_PANEL_SIZE.0 - 160.0)) / 2.0, super::bootstrap::PAUSE_STATS_Y),
     ("pause_resume_btn",   (VW - 700.0) / 2.0, 780.0),
     ("pause_restart_btn",  (VW - 700.0) / 2.0, 1000.0),
     ("pause_settings_btn", (VW - 700.0) / 2.0, 1220.0),
@@ -868,6 +1144,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     // renders without delay. By the time the player navigates to the game scene
     // the images are ready. The OnceLock guarantees exactly-once computation.
     std::thread::spawn(|| { BG_IMAGES.get_or_init(compute_bg_images); });
+    super::sky_extras::prewarm();
     // Everything else the FIRST run builds on first touch, warmed now, at
     // app start. Warmed in the game's own `on_enter` (below) it was too late:
     // the opening level generation needs it in that same call, so the first
@@ -908,6 +1185,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
     let persistent_state: Arc<Mutex<Option<Arc<Mutex<State>>>>> = Arc::clone(run_state());
     scene
         .on_enter(move |canvas| {
+            let __t0 = std::time::Instant::now();
+            let __prof = |what: &str| if std::env::var("START_PROFILE").is_ok() { eprintln!("START {what}: {:?}", __t0.elapsed()); };
             // ── Crystalline renderer ─────────────────────────────────────
             // Re-create the physics world on every game entry so there is no
             // stale solver state or leftover particles from a previous run.
@@ -1420,7 +1699,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 // Temporarily disable spinner collisions/behavior.
                 spinners_enabled: true, spinner_spin_enabled: true,
                 spinner_hit_cooldown: 0, coin_live: Vec::new(),
-                coin_free: coin_free.clone(), coin_rightmost: SPAWN_X,
+                coin_free: coin_free.clone(), coin_rightmost: SPAWN_X, reward_arcs: Default::default(), run_stats: Default::default(), run_air_ticks: 0,
                 coin_magnet_locked: Vec::new(), magnet_debug: false,
                 flip_live: Vec::new(), flip_free: flip_free.clone(),
                 flip_rightmost: SPAWN_X + VW * 1.1, flip_timer: 0,
@@ -1635,6 +1914,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 space_visited: false,
                 boss_killed: false,
                 boss_index: 0,
+                bosses_beaten: 0,
                 boss_return_x: SPAWN_X,
                 boss_return_y: SPAWN_Y,
                 space_coins_collected: 0,
@@ -1674,15 +1954,26 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             if let Some(ch) = daily {
                 use crate::daily::Modifier::*;
                 let s = &mut fresh_state;
+                // Each one makes the run harder (they used to be half perks).
                 match ch.modifier {
-                    LongRope => s.perm_reach_mult *= 1.3,
-                    ShortRope => s.perm_reach_mult *= 0.85,
+                    HeavyGravity => s.perk_gravity_mult *= 1.35,
+                    ShortRope => s.perm_reach_mult *= 0.7,
                     GlassCat => { s.hearts = 1; s.max_hearts = 1; s.free_respawns_left = 0; }
-                    SpeedDemon => s.perm_momentum_mult *= 1.25,
-                    MagnetPaws => s.perm_magnet_mult *= 2.0,
-                    ThickSkin => { s.hearts += 2; s.max_hearts += 2; }
+                    SpeedLimit => s.perm_momentum_mult *= 0.75,
+                    SolarStorm => { s.perm_flare_wards = 0; s.flare_wards_left = 0; }
+                    LongHaul => { s.max_hearts = (s.max_hearts - 1).max(1); s.hearts = s.hearts.min(s.max_hearts); }
                 }
                 log::info!("daily challenge: {} to {} px", ch.modifier.name(), ch.goal);
+            }
+            // SOLAR STORM drives the flare clock through the flare system's
+            // interval override; any other run clears it if a storm set it.
+            let storm = daily.is_some_and(|ch| ch.modifier == crate::daily::Modifier::SolarStorm);
+            if storm {
+                canvas.set_var("debug_flare_interval", 25 * 60i32);
+                canvas.set_var("daily_set_flares", true);
+            } else if matches!(canvas.get_var("daily_set_flares"), Some(Value::Bool(true))) {
+                canvas.set_var("debug_flare_interval", 0i32);
+                canvas.set_var("daily_set_flares", false);
             }
 
             // Reuse persistent Arc across respawns.
@@ -1721,11 +2012,15 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     let mut seed = s.seed;
                     let mut ghx = at;
                     let mut ghy = s.gen_head_y;
+                    let anchor_y = ghy;
                     let batch = gen_hook_batch(&mut seed, at, &mut ghx, &mut ghy, seeded_distance);
                     s.seed = seed;
                     s.gen_head_x = ghx;
                     s.gen_head_y = ghy;
-                    s.pending = batch;
+                    // A node where the seeded player orbits: the chain's first
+                    // hop is over a rope length, so without it the player
+                    // started with nothing in reach.
+                    s.pending = std::iter::once(HookSpec { x: at, y: anchor_y, launch: false }).chain(batch).collect();
                     s.pad_rightmost = at;
                     s.spinner_rightmost = at;
                     s.coin_rightmost = at;
@@ -1823,11 +2118,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let s = canvas.virtual_scale();
                 if let Some(obj) = canvas.get_game_object_mut("start_prompt_text") {
                     obj.set_drawable(Box::new(ui_text_spec(
-                        "HOLD SPACE TO BEGIN",
+                        if crate::constants::mobile_controls_enabled() { "HOLD SPACE TO BEGIN" } else { "HOLD SPACE OR CLICK TO BEGIN" },
                         &font,
                         52.0 * s,
                         Color(235, 245, 255, 255),
-                        1300.0 * s,
+                        2000.0 * s,
                     )));
                     obj.visible = true;
                 }
@@ -1900,16 +2195,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             boss::intro::reset(canvas);
             boss::intro::prewarm();
 
+            __prof("resets+intro");
             // Set background image AND apply the proper overscan/raise size so
             // the background fills the screen correctly from the first frame.
             {
-                let bg_imgs = BG_IMAGES.get_or_init(compute_bg_images);
                 let bg_sel = match canvas.get_var("player_bg_selected") {
                     Some(Value::I32(v)) => v.max(0) as usize,
                     _ => 0,
-                }.min(bg_imgs.palettes.len().saturating_sub(1));
+                }.min(SHOP_BG_COLORS.len() - 1);
+                let (sky, _, shown) = sky_for(crate::sky::planet_of(canvas), bg_sel);
+                canvas.set_var("sky_planet_shown", shown as i32);
                 if let Some(obj) = canvas.get_game_object_mut("bg") {
-                    obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: bg_imgs.palettes[bg_sel].clone().into(), color: None });
+                    obj.set_image(Image { shape: ShapeType::Rectangle(0.0, (VW, VH), 0.0), image: sky.into(), color: None });
                     const OVERSCAN: f32 = 200.0;
                     const BG_RAISE: f32 = 150.0;
                     let w = VW + OVERSCAN * 2.0;
@@ -1926,6 +2223,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
 
+            __prof("sky image");
             // Pre-populate world objects so startup pause shows the full scene,
             // not just initial grab nodes.
             spawning::tick_spawning(
@@ -1940,6 +2238,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 pad_thruster_anim_template_flipped.as_ref(),
             );
 
+            __prof("spawning");
             // Set up all live hooks for asteroid mode.
             {
                 let hooks = state.lock().unwrap().live_hooks.clone();
@@ -1992,6 +2291,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             // `game_paused`/`start_prompt_active` instead.
             canvas.resume();
 
+            __prof("start setup");
             // ── Pre-warm rope texture cache (background thread) ──────────
             {
                 let color = match canvas.get_var("player_rope_selected") {
@@ -2035,6 +2335,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 }
             }
 
+            __prof("prewarms");
             // ── Register grab/release events + mouse handlers ────────────
             events::register_events(canvas, &state);
 
@@ -2063,6 +2364,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                 let mut star_auto_scroll = true;
                 let mut n_was_down = false;
                 let mut nebula_tick = super::nebula::NebulaTick::default();
+                let mut planet_tick = super::planet::PlanetTick::default();
                 let mut aurora_tick = super::aurora::AuroraTick::default();
                 let mut scroll_init = false;
                 let mut prev_scroll_in_space: Option<bool> = None;
@@ -2304,6 +2606,11 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                                     c.set_var("pause_anim_frames", 0);
                                     c.set_var("game_paused", false);
                                     c.set_var("start_prompt_active", false);
+                                    // A mouse hold that started the run is not a
+                                    // swing on a computer (see `events.rs`).
+                                    if !crate::constants::mobile_controls_enabled() {
+                                        c.set_var("mouse_left_held", false);
+                                    }
                                     hide_pause_ui(c);
                                     rebuild_player_trail(c, selected_trail_color(c));
                                     if let Some(obj) = c.get_game_object_mut("player") {
@@ -2401,6 +2708,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // which slid it off one side of the screen.)
                         // The sky stays alive behind the start prompt and pause.
                         super::aurora::tick_aurora(c, &st, &mut aurora_tick);
+                        super::sky_extras::tick(c, &st);
                         return;
                     }
 
@@ -2778,6 +3086,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         prev_nearest_hook.clear();
                         scroll_init = false; // re-apply star panel images after respawn
                         nebula_tick.refresh(); // and the sky's (a re-entered scene has blank objects)
+                        planet_tick.refresh();
                         c.set_var("bg_force_refresh", false);
                     }
                     {
@@ -2786,11 +3095,21 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                             Some(Value::I32(v)) => v.max(0) as usize,
                             _ => 0,
                         }.min(imgs.palettes.len().saturating_sub(1));
+                        // A SKY planet's own sky (an Arc: nothing copied per frame).
+                        let planet = crate::sky::planet_of(c);
+                        let pair = if planet != 0 { planet_sky_ready(planet, bg_sel) } else { None };
+                        c.set_var("sky_planet_shown", if pair.is_some() { planet as i32 } else { 0 });
+                        let (sky, sky_flip) = match &pair {
+                            Some(p) => (&p.0, &p.1),
+                            None => (&imgs.palettes[bg_sel], &imgs.palettes_flip[bg_sel]),
+                        };
                         background::tick_background(
                             c, &st, &mut prev_bg_theme, &mut bg_scale_smooth,
-                            &imgs.palettes[bg_sel], &imgs.vivid,
-                            &imgs.palettes_flip[bg_sel], &imgs.vivid_flip,
+                            sky, &imgs.vivid,
+                            sky_flip, &imgs.vivid_flip,
                         );
+                        super::water::tick(c, &st);
+                        super::planet::tick(c, &st, &mut planet_tick);
                     }
 
                     // ── Background star parallax ──────────────────────────
@@ -2876,10 +3195,12 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     // ── Nebula backdrop (F cycles the set) ──────────────
                     super::nebula::tick_nebula(c, &st, &mut nebula_tick);
                     super::aurora::tick_aurora(c, &st, &mut aurora_tick);
+                    super::sky_extras::tick(c, &st);
 
                     // ── Distant decor (planets, wrecks, the odd whale) ──
                     super::decor::tick_decor(c, &st);
                     super::hangar::tick(c, &st);
+                    super::mystic_trail::tick(c, &st);
                     super::space_zone::tick_vortex_fx(c, &st);
 
                     // ── Death check ──────────────────────────────────────
@@ -2894,9 +3215,14 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                     if dead_now {
                         // ── Falls can be survived with hearts remaining ──
                         let is_fall = !died_to_sun && !died_to_oxygen;
+                        // Headless filming only (`HEADLESS_FREE_FALLS`): a fall
+                        // with hearts left costs none, so the clip's hit is
+                        // the boss's. Never set by the game.
+                        let free_fall = s.hearts > 0
+                            && matches!(c.get_var("debug_free_falls"), Some(Value::Bool(true)));
                         if is_fall {
                             drop(s);
-                            let over = super::hearts::lose_heart(c, &st);
+                            let over = if free_fall { false } else { super::hearts::lose_heart(c, &st) };
                             if !over {
                                 // In the boss arena, reset into the stasis orbit
                                 // (boss progress preserved) instead of respawning
@@ -2919,7 +3245,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // The run summary's numbers (see `death_screen`).
                         c.set_var("sum_secs", (s.ticks / 60) as i32);
                         c.set_var("sum_perks", s.perks_taken as i32);
-                        c.set_var("sum_bosses", s.boss_index as i32);
+                        c.set_var("sum_bosses", s.bosses_beaten as i32);
                         c.set_var("sum_chain", super::juice::best_chain() as i32);
                         {
                             let best = crate::profile::profile().lock().unwrap().best_distance as f32;
@@ -2929,7 +3255,7 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // based on distance travelled (normal-zone only — space
                         // X distance does NOT count) plus flat bonuses for
                         // visiting space and defeating the boss.
-                        let distance_meta = (s.distance as u64 / 5000); // 1 per 5000px
+                        let distance_meta = s.distance as u64 / 5000; // 1 per 5000px
                         let space_bonus = if s.space_visited { 20 } else { 0 };
                         // Boss meta is awarded (and shown) at the moment of the
                         // victory stasis — don't double it at run end.
@@ -2948,11 +3274,18 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         let run_distance = s.distance;
                         let run_coins = s.coin_count as u64;
                         let run_seconds = (s.ticks / 60) as u64;
+                        let run_extras = s.run_stats;
+                        let (run_score, run_bosses) = (s.score, s.bosses_beaten);
                         s.dead = true;
                         drop(s);
                         crate::profile::record_death();
                         let mode_idx = crate::mode::current_mode(c).index();
-                        crate::profile::record_run(mode_idx, run_distance, run_coins, run_seconds);
+                        let place = crate::profile::record_run(mode_idx, run_distance, run_coins, run_seconds, run_extras, run_score, run_bosses);
+                        if std::env::var("RUN_RECORD_LOG").is_ok() {
+                            eprintln!("RUN_RECORD mode {mode_idx} dist {run_distance:.0} score {run_score} bosses {run_bosses} secs {run_seconds} place {place:?}");
+                        }
+                        // The summary says so when a run makes the leaderboard.
+                        c.set_var("sum_board_place", place.map_or(0, |p| p as i32));
                         crate::daily::end_run(c, run_distance);
                         // Run is already recorded, so no extra run coins/distance.
                         crate::achievements::check_achievements(c, 0, 0.0);
@@ -2963,6 +3296,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
                         // washed the whole frame out white.
                         c.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
                         c.remove_emitter(PLAYER_TRAIL_MID_NAME);
+                        c.remove_emitter(PLAYER_TRAIL_ACCENT_NAME);
+                        super::mystic_trail::set(c, false);
                         if let Some(obj) =
                             c.get_game_object_mut("player")
                         {
@@ -3022,6 +3357,8 @@ pub fn build_game_scene(ctx: &mut Context) -> Scene {
             });
             canvas.remove_emitter(PLAYER_TRAIL_EMITTER_NAME);
             canvas.remove_emitter(PLAYER_TRAIL_MID_NAME);
+            canvas.remove_emitter(PLAYER_TRAIL_ACCENT_NAME);
+            super::mystic_trail::set(canvas, false);
 
             // Put the frame back, whatever the reason for leaving.
             //
